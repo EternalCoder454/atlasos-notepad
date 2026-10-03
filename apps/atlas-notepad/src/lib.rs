@@ -2,7 +2,12 @@
 //! calls in here once per line through the plain C functions below.
 
 use std::cell::RefCell;
+use std::ffi::{CStr, OsStr, c_char};
+use std::os::unix::ffi::OsStrExt;
+use std::panic::catch_unwind;
+use std::path::PathBuf;
 
+use notepad_core::file;
 use notepad_core::markdown::{self, Line, Run};
 
 thread_local! {
@@ -73,6 +78,202 @@ pub unsafe extern "C" fn np_md_link_at(
     }
 }
 
+/// A file's stamp (cpp/notepad_core.h).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct NpStamp {
+    pub mtime_ns: i64,
+    pub size: u64,
+    pub dev: u64,
+    pub ino: u64,
+}
+
+impl From<file::Stamp> for NpStamp {
+    fn from(s: file::Stamp) -> Self {
+        Self {
+            mtime_ns: s.mtime_ns,
+            size: s.size,
+            dev: s.dev,
+            ino: s.ino,
+        }
+    }
+}
+
+/// A file read by `np_file_read`: its text in UTF-16 with `\n` line breaks,
+/// and how it was stored. `error` is 0 or an errno, and then `text` is null.
+#[repr(C)]
+pub struct NpFile {
+    pub text: *mut u16,
+    pub len: usize,
+    pub encoding: u8,
+    pub line_ending: u8,
+    pub mixed: u8,
+    pub binary: u8,
+    pub lossy: u8,
+    pub stamp: NpStamp,
+    pub error: i32,
+}
+
+const EIO: i32 = 5;
+const EINVAL: i32 = 22;
+
+/// What the C side sees of an I/O error: its errno, or EIO.
+fn errno(e: &std::io::Error) -> i32 {
+    e.raw_os_error().unwrap_or(EIO)
+}
+
+fn failed(error: i32) -> *mut NpFile {
+    Box::into_raw(Box::new(NpFile {
+        text: std::ptr::null_mut(),
+        len: 0,
+        encoding: 0,
+        line_ending: 0,
+        mixed: 0,
+        binary: 0,
+        lossy: 0,
+        stamp: NpStamp::default(),
+        error,
+    }))
+}
+
+/// # Safety
+///
+/// `path` is a NUL-terminated string.
+unsafe fn path_arg(path: *const c_char) -> Option<PathBuf> {
+    if path.is_null() {
+        return None;
+    }
+    // SAFETY: as documented.
+    let bytes = unsafe { CStr::from_ptr(path) }.to_bytes();
+    Some(PathBuf::from(OsStr::from_bytes(bytes)))
+}
+
+/// Reads and decodes a file. Never returns null: on failure `error` is the
+/// errno. Free the result with `np_file_free`.
+///
+/// # Safety
+///
+/// `path` is a NUL-terminated string (UTF-8, or any bytes the file system
+/// takes).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_file_read(path: *const c_char) -> *mut NpFile {
+    // SAFETY: as documented.
+    let Some(path) = (unsafe { path_arg(path) }) else {
+        return failed(EINVAL);
+    };
+    let read = catch_unwind(|| file::read(&path));
+    match read {
+        Ok(Ok((d, stamp))) => {
+            let len = d.text.len();
+            let text = Box::into_raw(d.text.into_boxed_slice()).cast::<u16>();
+            Box::into_raw(Box::new(NpFile {
+                text,
+                len,
+                encoding: d.encoding as u8,
+                line_ending: d.line_ending as u8,
+                mixed: d.mixed.into(),
+                binary: d.binary.into(),
+                lossy: d.lossy.into(),
+                stamp: stamp.into(),
+                error: 0,
+            }))
+        }
+        Ok(Err(e)) => failed(errno(&e)),
+        Err(_) => failed(EIO),
+    }
+}
+
+/// Frees what `np_file_read` returned. Null is fine.
+///
+/// # Safety
+///
+/// `file` came from `np_file_read` and isn't used afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_file_free(file: *mut NpFile) {
+    if file.is_null() {
+        return;
+    }
+    // SAFETY: as documented.
+    let file = unsafe { Box::from_raw(file) };
+    if !file.text.is_null() {
+        // SAFETY: `text` and `len` came from a boxed slice in np_file_read.
+        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(file.text, file.len)) });
+    }
+}
+
+/// Saves text as a file, in the given encoding and line ending, without
+/// losing the old file on failure. Returns 0 and sets `*stamp`; or an errno;
+/// or -1 when the text can't be written in that encoding, with `*bad_offset`
+/// set to the first such position in UTF-16 units.
+///
+/// # Safety
+///
+/// `path` is a NUL-terminated string, `text` points to `len` UTF-16 units (or
+/// `len` is 0), and `stamp` and `bad_offset` are writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_file_save(
+    path: *const c_char,
+    text: *const u16,
+    len: usize,
+    encoding: u8,
+    line_ending: u8,
+    stamp: *mut NpStamp,
+    bad_offset: *mut usize,
+) -> i32 {
+    // SAFETY: as documented.
+    let Some(path) = (unsafe { path_arg(path) }) else {
+        return EINVAL;
+    };
+    // SAFETY: as documented.
+    let text = unsafe { slice(text, len) };
+    let (Some(encoding), Some(line_ending)) = (
+        file::Encoding::from_u8(encoding),
+        file::LineEnding::from_u8(line_ending),
+    ) else {
+        return EINVAL;
+    };
+    let saved = catch_unwind(|| match file::encode(text, encoding, line_ending) {
+        Err(bad) => Err(Err(bad.utf16_offset)),
+        Ok(bytes) => file::save(&path, &bytes).map_err(Ok),
+    });
+    match saved {
+        Ok(Ok(s)) => {
+            // SAFETY: the caller passes a writable stamp.
+            unsafe { stamp.write(s.into()) };
+            0
+        }
+        Ok(Err(Ok(e))) => errno(&e),
+        Ok(Err(Err(offset))) => {
+            // SAFETY: the caller passes a writable offset.
+            unsafe { bad_offset.write(offset) };
+            -1
+        }
+        Err(_) => EIO,
+    }
+}
+
+/// The stamp of a file: 0 and `*stamp` set, or an errno.
+///
+/// # Safety
+///
+/// `path` is a NUL-terminated string and `stamp` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_file_stamp(path: *const c_char, stamp: *mut NpStamp) -> i32 {
+    // SAFETY: as documented.
+    let Some(path) = (unsafe { path_arg(path) }) else {
+        return EINVAL;
+    };
+    match catch_unwind(|| file::stamp(&path)) {
+        Ok(Ok(s)) => {
+            // SAFETY: the caller passes a writable stamp.
+            unsafe { stamp.write(s.into()) };
+            0
+        }
+        Ok(Err(e)) => errno(&e),
+        Err(_) => EIO,
+    }
+}
+
 /// # Safety
 ///
 /// `p` points to `len` readable units, or `len` is 0.
@@ -119,5 +320,71 @@ mod tests {
         };
         assert_eq!(again, n);
         assert!(runs.iter().all(|r| r.len > 0));
+    }
+
+    #[test]
+    fn file_round_trip() {
+        let dir = std::env::temp_dir().join(format!("np-abi-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.txt");
+        let cpath = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        let text: Vec<u16> = "h\u{e9}llo\n\u{1F600}\n".encode_utf16().collect();
+        let mut stamp = NpStamp::default();
+        let mut bad = 0usize;
+        // SAFETY: valid C string, text and out pointers.
+        let r = unsafe {
+            np_file_save(
+                cpath.as_ptr(),
+                text.as_ptr(),
+                text.len(),
+                2,
+                1,
+                &mut stamp,
+                &mut bad,
+            )
+        };
+        assert_eq!(r, 0);
+        assert_eq!(std::fs::read(&path).unwrap()[..2], [0xFF, 0xFE]);
+
+        let mut again = NpStamp::default();
+        // SAFETY: valid C string and out pointer.
+        assert_eq!(unsafe { np_file_stamp(cpath.as_ptr(), &mut again) }, 0);
+        assert_eq!((again.size, again.ino), (stamp.size, stamp.ino));
+
+        // SAFETY: valid C string; the result is freed once.
+        unsafe {
+            let f = np_file_read(cpath.as_ptr());
+            assert_eq!((*f).error, 0);
+            assert_eq!(std::slice::from_raw_parts((*f).text, (*f).len), &text[..]);
+            assert_eq!(((*f).encoding, (*f).line_ending, (*f).mixed), (2, 1, 0));
+            assert_eq!((*f).stamp.size, stamp.size);
+            np_file_free(f);
+        }
+
+        // Windows-1252 can't hold the emoji: the offset is reported.
+        // SAFETY: as above.
+        let r = unsafe {
+            np_file_save(
+                cpath.as_ptr(),
+                text.as_ptr(),
+                text.len(),
+                4,
+                0,
+                &mut stamp,
+                &mut bad,
+            )
+        };
+        assert_eq!((r, bad), (-1, 6));
+
+        let missing = std::ffi::CString::new(dir.join("none").to_str().unwrap()).unwrap();
+        // SAFETY: valid C string; the result is freed once.
+        unsafe {
+            let f = np_file_read(missing.as_ptr());
+            assert_eq!((*f).error, 2);
+            assert!((*f).text.is_null());
+            np_file_free(f);
+            assert_eq!(np_file_stamp(missing.as_ptr(), &mut again), 2);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
