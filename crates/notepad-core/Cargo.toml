@@ -1,0 +1,10 @@
+[package]
+name = "notepad-core"
+description = "Notepad's logic without Qt: files, encodings, session, Markdown"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]

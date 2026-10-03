@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Notepad
+GenericName=Text Editor
+Comment=Write and edit text and Markdown files
+Exec=atlas-notepad %F
+Icon=accessories-text-editor
+Terminal=false
+Categories=Qt;KDE;Utility;TextEditor;
+Keywords=text;editor;notepad;markdown;notes;txt;md;
+MimeType=text/plain;text/markdown;
+StartupNotify=true
+X-KDE-StartupNotify=true

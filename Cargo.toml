@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/notepad-core", "apps/atlas-notepad"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/EternalCoder454/atlasos-notepad"
+rust-version = "1.89"
+
+[workspace.dependencies]
+# atlas-core and the Atlas.Ui QML module come from the same atlasos-updater
+# commit. apps/atlas-notepad/CMakeLists.txt reads this `rev` to fetch Atlas.Ui,
+# so this line is the only place the pin lives. To move it, see CLAUDE.md.
+atlas-core = { git = "https://github.com/EternalCoder454/atlasos-updater", rev = "bd4bbaa0413dd1ca14b1bacb11d97797f5240013" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true
+# The highlighter runs on every keystroke: keep the core fast in dev builds too.
+[profile.dev.package.notepad-core]
+opt-level = 3
