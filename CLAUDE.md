@@ -22,6 +22,7 @@ scripts/dev.sh cargo fmt --all
 scripts/dev.sh cargo clippy --workspace --all-targets -- -D warnings
 scripts/dev.sh cargo test --workspace
 scripts/dev.sh bash -c 'cmake -S apps/atlas-notepad -B build/s1 -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/s1'
+scripts/dev.sh ctest --test-dir build/s1 --output-on-failure
 scripts/dev.sh scripts/bench-s1.sh build/s1
 ```
 

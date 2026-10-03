@@ -60,6 +60,15 @@ The Syntax view uses the same code with the markers visible and dimmed.
 - Indented code blocks aren't supported, so any indent nests a list instead.
 - Fence lines (```` ``` ````) are shown small, dim and monospace, not hidden.
 
+### Reading the text back
+
+`TextEdit.text` (`QTextDocument::toPlainText`) turns no-break spaces into
+plain spaces. Saving must read the document's raw text and turn its paragraph
+separators back into the file's line endings, or a round trip changes the file.
+
+The editing rules are tested in `apps/atlas-notepad/tests/editor_test.cpp`
+(a real `TextEdit`, offscreen).
+
 ## S1 figures
 
 `atlas-notepad --bench FILE` sends key events to the `TextEdit` and times each

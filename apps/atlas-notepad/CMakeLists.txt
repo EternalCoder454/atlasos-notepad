@@ -51,6 +51,20 @@ target_link_libraries(atlas-notepad-app PRIVATE
     atlas_notepad
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Widgets)
 
+# Tests: the editing logic on a real TextEdit, offscreen.
+#   ctest --test-dir <build> --output-on-failure
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    # Plain add_executable: Qt's finalizer would scan for QML imports it doesn't need.
+    add_executable(editor_test tests/editor_test.cpp
+        cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp)
+    target_include_directories(editor_test PRIVATE cpp)
+    target_link_libraries(editor_test PRIVATE atlas_notepad Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
+    add_test(NAME editor_test COMMAND editor_test)
+    set_tests_properties(editor_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 install(TARGETS atlas-notepad-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/net.eterneon.atlas.notepad.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)

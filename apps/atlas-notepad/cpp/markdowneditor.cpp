@@ -144,6 +144,11 @@ void MarkdownEditor::select(int anchor, int position)
     m_snapping = was;
 }
 
+bool MarkdownEditor::editable() const
+{
+    return m_doc && m_edit && !m_edit->property("readOnly").toBool();
+}
+
 bool MarkdownEditor::hiddenEndingAt(int pos, int *start) const
 {
     const QTextBlock block = m_doc->findBlock(pos);
@@ -194,6 +199,43 @@ bool MarkdownEditor::hiddenAround(int pos, int *start, int *end) const
         }
     }
     return false;
+}
+
+// [from, to) is one character with hidden syntax on both sides. When that is
+// the markers of one span (`**a**`, `~~a~~`, `` `a` ``), sets [*start, *end)
+// to the span with its markers. Hidden ranges run together across neighbouring
+// spans (`**a**[b](u)`), so only the delimiters next to the character count,
+// and a link's `[` and `](url)` never do: its URL isn't lost with its last letter.
+bool MarkdownEditor::loneSpan(int from, int to, int *start, int *end) const
+{
+    int hs;
+    int he;
+    if (!hiddenEndingAt(from, &hs) || !hiddenStartingAt(to, &he)) {
+        return false;
+    }
+    auto delimiter = [](QChar c) {
+        return c == u'*' || c == u'_' || c == u'~' || c == u'`';
+    };
+    int left = 0;
+    while (from - left - 1 >= hs && delimiter(m_doc->characterAt(from - left - 1))) {
+        ++left;
+    }
+    int right = 0;
+    while (to + right < he && delimiter(m_doc->characterAt(to + right))) {
+        ++right;
+    }
+    const int k = qMin(left, right);
+    if (k == 0) {
+        return false;
+    }
+    for (int i = 0; i < k; ++i) {
+        if (m_doc->characterAt(from - 1 - i) != m_doc->characterAt(to + i)) {
+            return false;
+        }
+    }
+    *start = from - k;
+    *end = to + k;
+    return true;
 }
 
 // Hidden syntax has no width, so both its edges are one place on screen. A
@@ -317,11 +359,7 @@ bool MarkdownEditor::backspace()
     int from = c.position();
     int to = p;
     // The last character of a span: the span's syntax goes with it.
-    int e;
-    if (hiddenEndingAt(from, &s) && hiddenStartingAt(to, &e)) {
-        from = s;
-        to = e;
-    }
+    loneSpan(from, to, &from, &to);
     c.setPosition(from);
     c.setPosition(to, QTextCursor::KeepAnchor);
     c.removeSelectedText();
@@ -346,11 +384,7 @@ bool MarkdownEditor::deleteForward()
     c.movePosition(QTextCursor::NextCharacter);
     int from = p;
     int to = c.position();
-    int s;
-    if (hiddenEndingAt(from, &s) && hiddenStartingAt(to, &e)) {
-        from = s;
-        to = e;
-    }
+    loneSpan(from, to, &from, &to);
     c.setPosition(from);
     c.setPosition(to, QTextCursor::KeepAnchor);
     c.removeSelectedText();
@@ -378,8 +412,18 @@ bool MarkdownEditor::newline()
     if (pos - block.position() < int(l.contentStart)) {
         return false;
     }
+    // Only an item or quoted text can be empty: a quoted heading, rule or
+    // code line ends where its content starts and is continued instead.
+    const bool canBeEmpty = list || l.kind == Md::Blank || l.kind == Md::Paragraph;
+    bool empty = true;
+    for (const QChar ch : QStringView(text).mid(l.contentStart)) {
+        if (ch != u' ' && ch != u'\t') { // the spaces markdown.rs skips
+            empty = false;
+            break;
+        }
+    }
     QTextCursor c(m_doc);
-    if (QStringView(text).mid(l.contentStart).trimmed().isEmpty()) {
+    if (canBeEmpty && empty) {
         c.setPosition(block.position() + (list ? info->listStart() : 0));
         c.setPosition(block.position() + text.size(), QTextCursor::KeepAnchor);
         c.removeSelectedText();
@@ -509,27 +553,27 @@ bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
             }
             break;
         case Qt::Key_Backspace:
-            handled = fm && plain && !hasSelection() && backspace();
+            handled = editable() && fm && plain && !hasSelection() && backspace();
             break;
         case Qt::Key_Delete:
-            handled = fm && plain && !hasSelection() && deleteForward();
+            handled = editable() && fm && plain && !hasSelection() && deleteForward();
             break;
         case Qt::Key_Return:
         case Qt::Key_Enter:
-            handled = plain && newline();
+            handled = editable() && plain && newline();
             break;
         case Qt::Key_Tab:
-            handled = plain && indent(false);
+            handled = editable() && plain && indent(false);
             break;
         case Qt::Key_Backtab:
-            handled = indent(true);
+            handled = editable() && indent(true);
             break;
         default:
             break;
         }
     } else if (event->type() == QEvent::MouseButtonPress) {
         auto *mouse = static_cast<QMouseEvent *>(event);
-        handled = m_style.formatted && mouse->button() == Qt::LeftButton && mouse->modifiers() == Qt::NoModifier
+        handled = editable() && m_style.formatted && mouse->button() == Qt::LeftButton && mouse->modifiers() == Qt::NoModifier
             && pressTaskBox(mouse->position());
     }
     if (handled) {
@@ -539,15 +583,6 @@ bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
 }
 
 // Toolbar ---------------------------------------------------------------------
-
-static QString textAt(QTextDocument *doc, int from, int count)
-{
-    QString s;
-    for (int i = from; i < from + count && i >= 0 && i < doc->characterCount(); ++i) {
-        s += doc->characterAt(i);
-    }
-    return s;
-}
 
 static int runBefore(QTextDocument *doc, int pos, QChar ch)
 {
@@ -569,7 +604,7 @@ static int runAfter(QTextDocument *doc, int pos, QChar ch)
 
 void MarkdownEditor::toggleInline(const QString &marker)
 {
-    if (!m_doc || !m_edit || marker.isEmpty()) {
+    if (!editable() || marker.isEmpty()) {
         return;
     }
     int s = m_edit->property("selectionStart").toInt();
@@ -623,6 +658,19 @@ static const QRegularExpression &headingPrefix()
     return re;
 }
 
+// The last line a selection takes in. One that ends at the start of a line
+// (whole lines selected, newline and all) leaves that line out.
+static int lastBlock(QTextDocument *doc, int s, int e)
+{
+    const QTextBlock b = doc->findBlock(e);
+    return (e > s && e == b.position() ? b.previous() : b).blockNumber();
+}
+
+static bool isListKind(uint8_t kind)
+{
+    return kind == Md::Bullet || kind == Md::Numbered || kind == Md::Task;
+}
+
 // Where a line's own text starts, after any quote marks.
 static int afterQuotes(const QTextBlock &block)
 {
@@ -636,30 +684,46 @@ static int afterQuotes(const QTextBlock &block)
 
 void MarkdownEditor::setHeading(int level)
 {
-    if (!m_doc || !m_edit) {
+    if (!editable()) {
         return;
     }
     level = qBound(0, level, 6);
     const int s = m_edit->property("selectionStart").toInt();
     const int e = m_edit->property("selectionEnd").toInt();
-    const int last = m_doc->findBlock(e).blockNumber();
+    const int last = lastBlock(m_doc, s, e);
+    const QString prefix = level > 0 ? QString(level, u'#') + u' ' : QString();
     QTextCursor c(m_doc);
     c.beginEditBlock();
     for (QTextBlock b = m_doc->findBlock(s); b.isValid() && b.blockNumber() <= last; b = b.next()) {
+        const BlockInfo *info = BlockInfo::of(b);
+        const uint8_t kind = info ? info->line.kind : Md::Blank;
+        if (kind == Md::FenceLine || kind == Md::CodeLine || kind == Md::RuleLine) {
+            continue;
+        }
+        if (isListKind(kind)) {
+            if (level == 0) {
+                continue; // Normal text undoes headings, not lists.
+            }
+            // The heading takes the list marker's place.
+            c.setPosition(b.position() + info->listStart());
+            c.setPosition(b.position() + int(info->line.contentStart), QTextCursor::KeepAnchor);
+            c.insertText(prefix);
+            continue;
+        }
         const int at = afterQuotes(b);
         const auto match = headingPrefix().matchView(QStringView(b.text()).mid(at));
         c.setPosition(b.position() + at);
         if (match.hasMatch()) {
             c.setPosition(b.position() + at + int(match.capturedLength()), QTextCursor::KeepAnchor);
         }
-        c.insertText(level > 0 ? QString(level, u'#') + u' ' : QString());
+        c.insertText(prefix);
     }
     c.endEditBlock();
 }
 
 void MarkdownEditor::toggleBlock(const QString &kind)
 {
-    if (!m_doc || !m_edit) {
+    if (!editable()) {
         return;
     }
     const bool quote = kind == u"quote";
@@ -667,15 +731,18 @@ void MarkdownEditor::toggleBlock(const QString &kind)
     const int s = m_edit->property("selectionStart").toInt();
     const int e = m_edit->property("selectionEnd").toInt();
     const QTextBlock first = m_doc->findBlock(s);
-    const int last = m_doc->findBlock(e).blockNumber();
+    const int last = lastBlock(m_doc, s, e);
     const bool many = first.blockNumber() != last;
 
     auto has = [&](const QTextBlock &b) {
         const BlockInfo *info = BlockInfo::of(b);
         return info && (quote ? !info->quoteMarks.isEmpty() : info->line.kind == want);
     };
+    // Code is left alone (a marker would break a fence), and so are rules.
     auto skip = [&](const QTextBlock &b) {
-        return many && b.text().trimmed().isEmpty();
+        const BlockInfo *info = BlockInfo::of(b);
+        const uint8_t k = info ? info->line.kind : Md::Blank;
+        return (many && b.text().trimmed().isEmpty()) || k == Md::FenceLine || k == Md::CodeLine || (!quote && k == Md::RuleLine);
     };
     bool all = true;
     for (QTextBlock b = first; b.isValid() && b.blockNumber() <= last; b = b.next()) {
@@ -694,7 +761,7 @@ void MarkdownEditor::toggleBlock(const QString &kind)
         }
         const BlockInfo *info = BlockInfo::of(b);
         const NpLine l = info ? info->line : NpLine{};
-        const bool isList = l.kind == Md::Bullet || l.kind == Md::Numbered || l.kind == Md::Task;
+        const bool isList = isListKind(l.kind);
         if (quote) {
             if (all) {
                 const int q = info->quoteMarks.first();
@@ -717,6 +784,14 @@ void MarkdownEditor::toggleBlock(const QString &kind)
         if (isList && info) {
             c.setPosition(b.position() + info->listStart());
             c.setPosition(b.position() + int(l.contentStart), QTextCursor::KeepAnchor);
+        } else if (l.kind == Md::HeadingLine) {
+            // The list marker takes the heading's place.
+            const int at = afterQuotes(b);
+            const auto match = headingPrefix().matchView(QStringView(b.text()).mid(at));
+            c.setPosition(b.position() + at);
+            if (match.hasMatch()) {
+                c.setPosition(b.position() + at + int(match.capturedLength()), QTextCursor::KeepAnchor);
+            }
         } else {
             c.setPosition(b.position() + (l.kind == Md::Paragraph ? int(l.contentStart) : afterQuotes(b)));
         }

@@ -230,11 +230,13 @@ private:
     int cursor() const;
     int anchor() const;
     bool hasSelection() const;
+    bool editable() const;
     void select(int anchor, int position);
 
     bool hiddenEndingAt(int pos, int *start) const;
     bool hiddenStartingAt(int pos, int *end) const;
     bool hiddenAround(int pos, int *start, int *end) const;
+    bool loneSpan(int from, int to, int *start, int *end) const;
     int stepRight(int pos) const;
     int stepLeft(int pos) const;
 
