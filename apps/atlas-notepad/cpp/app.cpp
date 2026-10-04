@@ -18,6 +18,7 @@
 #include <QLocale>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QProcess>
 #include <QScreen>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
@@ -632,6 +633,12 @@ QString App::displayPath(const QString &path) const
         return u'~' + path.mid(home.size());
     }
     return path;
+}
+
+bool App::openUpdater() const
+{
+    // A running Updater answers the new one, which then exits.
+    return QProcess::startDetached(QStringLiteral("atlas-updater"), {});
 }
 
 QString App::shortcutText(const QVariant &shortcut) const

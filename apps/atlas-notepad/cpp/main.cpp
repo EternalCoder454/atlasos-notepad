@@ -60,8 +60,32 @@ static void quitOnSignals(App *notepad)
     }
 }
 
+// Crash reports (src/crash.rs): saved only if the user turned them on in
+// Atlas Updater.
+extern "C" void atlas_crash_install();
+extern "C" void atlas_crash_fatal(const char *msg);
+
+static QtMessageHandler s_previousHandler = nullptr;
+
+static void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+{
+    if (type == QtFatalMsg) {
+        atlas_crash_fatal(msg.toUtf8().constData());
+    }
+    if (s_previousHandler) {
+        s_previousHandler(type, context, msg);
+    } else {
+        // Qt's default handler isn't returned by qInstallMessageHandler: print
+        // the message ourselves so warnings and fatal errors aren't lost.
+        fprintf(stderr, "%s\n", qPrintable(qFormatLogMessage(type, context, msg)));
+        fflush(stderr);
+    }
+}
+
 int main(int argc, char *argv[])
 {
+    atlas_crash_install(); // Rust panic hook, before anything can panic.
+    s_previousHandler = qInstallMessageHandler(messageHandler);
     // As Atlas Monitor (see its main.cpp): no thread hand-off for the raster
     // engine's fills, and partial repaints at fractional scales, which
     // otherwise repaint the whole window on every keystroke.

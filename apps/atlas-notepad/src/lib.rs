@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use notepad_core::file;
 use notepad_core::markdown::{self, Line, Run};
 
+mod crash;
+
 thread_local! {
     static BUFFERS: RefCell<(Vec<u32>, Vec<Run>)> = const { RefCell::new((Vec::new(), Vec::new())) };
 }

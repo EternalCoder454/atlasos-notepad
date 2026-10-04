@@ -174,8 +174,27 @@ AtlasPage {
     }
 
     Section {
+        title: qsTr("Crash Reports")
+        footer: qsTr("Crash reports for every Atlas app are turned on or off in Atlas Updater. They're off unless you turn them on, and each one is shown to you before it's sent.")
+
+        SectionRow {
+            title: qsTr("Open Atlas Updater")
+            chevron: true
+            onClicked: updaterMissing.visible = !App.openUpdater()
+        }
+    }
+
+    Kirigami.InlineMessage {
+        id: updaterMissing
+        Layout.fillWidth: true
+        type: Kirigami.MessageType.Warning
+        showCloseButton: true
+        text: qsTr("Atlas Updater isn't installed.")
+    }
+
+    Section {
         title: qsTr("About")
-        footer: qsTr("Notepad collects nothing and needs no account.")
+        footer: qsTr("Notepad collects nothing and needs no account. Crash reports are off unless you turn them on in Atlas Updater.")
 
         SectionRow {
             title: qsTr("Notepad")

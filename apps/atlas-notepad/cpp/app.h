@@ -471,6 +471,8 @@ public:
     Q_INVOKABLE QString shortcutText(const QVariant &shortcut) const;
     // A path for menus: the home folder shown as ~.
     Q_INVOKABLE QString displayPath(const QString &path) const;
+    // Starts Atlas Updater (crash report settings); false if it isn't installed.
+    Q_INVOKABLE bool openUpdater() const;
     // Saves the session now (also done a second after any edit stops and at
     // quit).
     Q_INVOKABLE void saveSession();

@@ -84,6 +84,9 @@ qt_add_qml_module(atlas-notepad-app
 )
 
 target_link_libraries(atlas-notepad-app PRIVATE ${APP_LIBS} atlas-ui atlas-uiplugin)
+# Drops the parts of atlas-core Notepad doesn't call (its D-Bus client and
+# tokio, about 1.5 MB): only the crash reports are used.
+target_link_options(atlas-notepad-app PRIVATE -Wl,--gc-sections)
 
 # Tests: the editing logic on a real TextEdit, offscreen.
 #   ctest --test-dir <build> --output-on-failure
