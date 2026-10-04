@@ -190,6 +190,8 @@ private Q_SLOTS:
         QTest::newRow("braille blank") << QStringLiteral("```\u2800") << QString();
         QTest::newRow("hangul filler") << QStringLiteral("```\u3164\u115F\u1160\uFFA0") << QString();
         QTest::newRow("blank inside") << QStringLiteral("```Saved\u2800successfully") << QStringLiteral("Saved");
+        QTest::newRow("rmarkdown") << QStringLiteral("```{r}") << QStringLiteral("r");
+        QTest::newRow("rmarkdown options") << QStringLiteral("```{python, echo=FALSE}") << QStringLiteral("python");
         QTest::newRow("exactly 64") << (QStringLiteral("```") + QString(64, u'x')) << QString(64, u'x');
         QTest::newRow("long") << (QStringLiteral("```") + QString(70, u'x')) << (QString(64, u'x') + QChar(0x2026));
         QTest::newRow("very long") << (QStringLiteral("```") + QString(5000, u'x')) << (QString(64, u'x') + QChar(0x2026));
@@ -242,6 +244,7 @@ private Q_SLOTS:
         QCOMPARE(QGuiApplication::clipboard()->text(), md);
         // The caret end (the closing fence) shows its markers.
         select(2, 17);
+        QVERIFY(lineShown(2));
         QMetaObject::invokeMethod(m_edit.get(), "copy");
         QCOMPARE(QGuiApplication::clipboard()->text(), md.mid(2, 15));
         QCOMPARE(text(), md);
@@ -301,13 +304,13 @@ private Q_SLOTS:
     void fenceAfterWholeTextReplace()
     {
         open(QStringLiteral("x"));
-        place(1);
+        place(0);
         m_edit->setProperty("text", QStringLiteral("```a\nx\n```"));
         QCoreApplication::processEvents();
         m_editor->rehighlightNow();
-        const int block = m_edit->property("text").toString().left(caret()).count(u'\n');
-        QCOMPARE(lineShown(0), block == 0);
-        QCOMPARE(lineShown(2), block == 2);
+        QCOMPARE(caret(), 0);
+        QVERIFY(lineShown(0));
+        QVERIFY(lineHidden(2));
         place(0);
         QVERIFY(lineShown(0));
         QVERIFY(lineHidden(2));

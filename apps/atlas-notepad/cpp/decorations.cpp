@@ -7,6 +7,7 @@
 #include <QAbstractTextDocumentLayout>
 #include <QFontMetricsF>
 #include <QPainter>
+#include <QQuickWindow>
 #include <QPainterPath>
 #include <QTextLayout>
 
@@ -41,6 +42,10 @@ QString MarkdownDecorations::fenceLabel(const QString &fenceLine)
         ++i;
     }
     while (i < line.size() && line.at(i).isSpace()) {
+        ++i;
+    }
+    // RMarkdown and Pandoc: ```{r} or ```{python, echo=FALSE}.
+    if (i < line.size() && line.at(i) == u'{') {
         ++i;
     }
     // Only letters, digits and + # . _ - / (c++, objective-c, f#, text/x-foo):
@@ -103,15 +108,26 @@ QStringList MarkdownDecorations::labelsForTest() const
 const MarkdownDecorations::Elided &MarkdownDecorations::elide(const QString &label, qreal width) const
 {
     const QFont font = labelFont(m_editor->font());
-    if (font != m_labelFont || m_elided.size() > 64) {
+    const QQuickWindow *window = m_editor->textEdit() ? m_editor->textEdit()->window() : nullptr;
+    const qreal dpr = window ? window->devicePixelRatio() : 1;
+    if (font != m_labelFont || dpr != m_labelDpr || m_elided.size() > 64) {
         m_labelFont = font;
+        m_labelDpr = dpr;
         m_labelMetrics = QFontMetricsF(font);
         m_elided.clear();
     }
     Elided &e = m_elided[label];
     if (e.width != qRound(width)) {
         e.width = qRound(width);
-        e.text = m_labelMetrics.elidedText(label, Qt::ElideRight, width);
+        // A label already cut at 64 characters ends with "…": elide the rest
+        // so a second one isn't added.
+        const bool capped = label.endsWith(QChar(0x2026));
+        const QString base = capped ? label.chopped(1) : label;
+        const qreal mark = capped ? m_labelMetrics.horizontalAdvance(QChar(0x2026)) : 0;
+        e.text = m_labelMetrics.elidedText(base, Qt::ElideRight, qMax<qreal>(0, width - mark));
+        if (capped && e.text == base) {
+            e.text += QChar(0x2026);
+        }
         e.advance = m_labelMetrics.horizontalAdvance(e.text);
     }
     return e;

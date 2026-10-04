@@ -353,10 +353,12 @@ public:
     void paint(QPainter *painter) override;
 
     // The language shown on an opening fence line ("```rust title=x" gives
-    // "rust"): its first word without control, format (bidi), separator and
-    // other invisible characters, at most 64 characters. "" for none.
+    // "rust"): its first word, after an optional "{" (```{r}), cut at the first
+    // character that isn't a letter, digit or one of + # . _ - /, and at 64
+    // characters, then "…". "" for none.
     static QString fenceLabel(const QString &fenceLine);
-    // Test hook: the labels the visible part would show, top to bottom.
+    // Test-only (editor_test): the labels the visible part would show, top to
+    // bottom. Nothing in the app calls it.
     QStringList labelsForTest() const;
 
 Q_SIGNALS:
@@ -394,6 +396,7 @@ private:
     std::vector<Shape> m_shapes;
     std::vector<Shape> m_scratch;
     mutable QFont m_labelFont;
+    mutable qreal m_labelDpr = 1;
     mutable QFontMetricsF m_labelMetrics{QFont()};
     mutable QHash<QString, Elided> m_elided;
 };
