@@ -2319,18 +2319,32 @@ namespace
 // make a path read as another), elided in the middle to about 80 characters.
 QString safeShown(const QString &text)
 {
+    // No controls, no invisible format characters (bidi overrides and marks,
+    // zero-width ones, U+061C) and no line or paragraph separators.
     QString out;
     for (const QChar c : text) {
-        const char16_t u = c.unicode();
-        const bool bidi = (u >= 0x202A && u <= 0x202E) || (u >= 0x2066 && u <= 0x2069) || u == 0x200E || u == 0x200F;
-        if (!bidi && c.category() != QChar::Other_Control) {
+        switch (c.category()) {
+        case QChar::Other_Control:
+        case QChar::Other_Format:
+        case QChar::Separator_Line:
+        case QChar::Separator_Paragraph:
+            break;
+        default:
             out += c;
         }
     }
-    constexpr int maxChars = 80;
+    constexpr qsizetype maxChars = 80;
     if (out.size() > maxChars) {
-        const int keep = (maxChars - 1) / 2;
-        out = out.left(keep) + QChar(0x2026) + out.right(maxChars - 1 - keep);
+        // Cut between code points, never inside a surrogate pair.
+        qsizetype head = (maxChars - 1) / 2;
+        if (out.at(head).isLowSurrogate()) {
+            --head;
+        }
+        qsizetype tail = out.size() - (maxChars - 1 - head);
+        if (out.at(tail).isLowSurrogate()) {
+            ++tail;
+        }
+        out = out.left(head) + QChar(0x2026) + out.mid(tail);
     }
     return out;
 }

@@ -915,6 +915,11 @@ private Q_SLOTS:
         OrgKdeKDirNotifyInterface::emitFileRenamed(b, c);
         QTRY_VERIFY_WITH_TIMEOUT(doc->d->hasPendingMove, 5000);
         QCOMPARE(doc->d->pendingTo, c);
+        // A later batch carries on from the notice already waiting.
+        const QUrl d = QUrl::fromLocalFile(m_dir + QStringLiteral("/yd.txt"));
+        QVERIFY(QFile::rename(c.toLocalFile(), d.toLocalFile()));
+        OrgKdeKDirNotifyInterface::emitFileRenamed(c, d);
+        QTRY_COMPARE_WITH_TIMEOUT(doc->d->pendingTo, d, 5000);
     }
 
     void movedBannerClearsOnReload()
@@ -929,6 +934,21 @@ private Q_SLOTS:
         doc->d->offerMove(QUrl::fromLocalFile(a), QUrl::fromLocalFile(QStringLiteral("/tmp/") + QString(200, QLatin1Char('x')) + QChar(0x202E) + QStringLiteral(".txt")));
         QVERIFY(!doc->bannerText().contains(QChar(0x202E)));
         QVERIFY(doc->bannerText().size() < 200);
+        // Nor other invisible ones, and the cut keeps surrogate pairs whole.
+        const QString emoji = QString::fromUtf8("\xF0\x9F\x98\x80");
+        QString odd = QStringLiteral("/tmp/a") + QChar(0x061C) + QChar(0x200B) + QChar(0x2028) + QChar(0x2029) + QStringLiteral("b/");
+        for (int i = 0; i < 60; ++i) {
+            odd += emoji;
+        }
+        doc->d->offerMove(QUrl::fromLocalFile(a), QUrl::fromLocalFile(odd + QStringLiteral(".txt")));
+        const QString text = doc->bannerText();
+        for (const char16_t u : {u'\u061C', u'\u200B', u'\u2028', u'\u2029'}) {
+            QVERIFY(!text.contains(QChar(u)));
+        }
+        for (qsizetype i = 0; i < text.size(); ++i) {
+            QVERIFY(!text.at(i).isHighSurrogate() || (i + 1 < text.size() && text.at(i + 1).isLowSurrogate()));
+            QVERIFY(!text.at(i).isLowSurrogate() || (i > 0 && text.at(i - 1).isHighSurrogate()));
+        }
         doc->reload();
         QTRY_VERIFY(doc->banner() != Document::Moved);
     }

@@ -280,7 +280,14 @@ void DirNotifyListener::flush()
         if (!start.isValid()) {
             continue;
         }
-        QUrl at = doc->d->validating && doc->d->validateTarget.isValid() ? doc->d->validateTarget : start;
+        // From the newest place known: a notice already waiting, else the
+        // place the running check is about.
+        QUrl at = start;
+        if (doc->d->validating && doc->d->hasPendingMove) {
+            at = doc->d->pendingTo;
+        } else if (doc->d->validating && doc->d->validateTarget.isValid()) {
+            at = doc->d->validateTarget;
+        }
         const QUrl from = at;
         for (const auto &move : moves) {
             const QString rest = below(at, move.first);

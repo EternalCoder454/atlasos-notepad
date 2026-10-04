@@ -32,7 +32,7 @@ ssh_dir=/nonexistent-never-removed
 cleanup() {
     [ -n "$sshd_pid" ] && kill "$sshd_pid" 2>/dev/null
     pkill -f "sshd.*$work" 2>/dev/null
-    pkill -u np-sftp 2>/dev/null
+    [ -n "$made_user" ] && pkill -u np-sftp 2>/dev/null
     # What the runs left behind (a KIO worker, kiod, a bus): only processes
     # started with this run's XDG_RUNTIME_DIR, never this shell.
     local p
