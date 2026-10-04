@@ -24,6 +24,8 @@
 #include <memory>
 #include <vector>
 
+#include <sys/stat.h>
+
 namespace
 {
 QTemporaryDir *s_tmp = nullptr;
@@ -211,6 +213,31 @@ private Q_SLOTS:
         QCOMPARE(list->rowCount(), before);
     }
 
+    void specialFilesRefused()
+    {
+        const QString fifo = m_dir + QStringLiteral("/fifo.txt");
+        QCOMPARE(mkfifo(QFile::encodeName(fifo).constData(), 0600), 0);
+        const QString zero = m_dir + QStringLiteral("/zero.txt");
+        QVERIFY(QFile::link(QStringLiteral("/dev/zero"), zero));
+        DocumentList *list = newList();
+        QSignalSpy failed(list, &DocumentList::openFailed);
+        const int before = list->rowCount();
+        list->open({QUrl::fromLocalFile(fifo), QUrl::fromLocalFile(zero)});
+        QCOMPARE(failed.size(), 2);
+        QVERIFY(failed.at(0).at(0).toString().contains(QStringLiteral("regular file")));
+        QCOMPARE(list->rowCount(), before);
+        // A file that turns into one after it was opened: reload refuses too.
+        const QString path = write(QStringLiteral("swap.txt"), "text\n");
+        Document *doc = openFile(list, path);
+        QVERIFY(doc);
+        attach(doc);
+        QVERIFY(QFile::remove(path));
+        QVERIFY(QFile::link(QStringLiteral("/dev/zero"), path));
+        doc->reload();
+        QTRY_COMPARE(doc->banner(), Document::SaveFailed);
+        QVERIFY(doc->bannerText().contains(QStringLiteral("regular file")));
+    }
+
     void longLinesReadOnly()
     {
         const QString path = write(QStringLiteral("long.txt"), QByteArray(Limits::lineLength + 1, 'a') + "\nshort\n");
@@ -351,6 +378,88 @@ private Q_SLOTS:
         doc->saveAs(QUrl::fromLocalFile(m_dir + QStringLiteral("/new.txt")));
         QVERIFY(again.wait(5000));
         QVERIFY(!doc->isMarkdown());
+    }
+
+    void saveAsRefusesRemoteAndOpenFiles()
+    {
+        const QString p = write(QStringLiteral("taken.txt"), "theirs\n");
+        DocumentList *list = newList();
+        QVERIFY(openFile(list, p));
+        Document *doc = list->newTab();
+        attach(doc);
+        insert(doc, 0, QStringLiteral("mine"));
+        QSignalSpy failed(doc, &Document::saveFailed);
+        // sftp://host/<dir>/remote.txt is not the local <dir>/remote.txt.
+        QUrl remote;
+        remote.setScheme(QStringLiteral("sftp"));
+        remote.setHost(QStringLiteral("host"));
+        remote.setPath(m_dir + QStringLiteral("/remote.txt"));
+        doc->saveAs(remote);
+        QCOMPARE(failed.size(), 1);
+        QVERIFY(!QFileInfo::exists(m_dir + QStringLiteral("/remote.txt")));
+        // Another tab has it open: refused, the file untouched.
+        doc->saveAs(QUrl::fromLocalFile(p));
+        QCOMPARE(failed.size(), 2);
+        QVERIFY(failed.at(1).at(0).toString().contains(QStringLiteral("another tab")));
+        QCOMPARE(read(p), QByteArray("theirs\n"));
+        QVERIFY(doc->path().isEmpty());
+        // Or in another window.
+        m_app->newWindow();
+        QCOMPARE(m_app->windows().size(), 2);
+        DocumentList *second = m_app->windows().first() == list ? m_app->windows().last() : m_app->windows().first();
+        Document *elsewhere = second->current();
+        QVERIFY(elsewhere && elsewhere != doc);
+        attach(elsewhere);
+        insert(elsewhere, 0, QStringLiteral("mine too"));
+        QSignalSpy failedThere(elsewhere, &Document::saveFailed);
+        elsewhere->saveAs(QUrl::fromLocalFile(p));
+        QCOMPARE(failedThere.size(), 1);
+        QCOMPARE(read(p), QByteArray("theirs\n"));
+    }
+
+    void namesShownSafely()
+    {
+        // U+202E would show "a<RLO>txt.exe" as "aexe.txt".
+        const QString p = write(QStringLiteral("a\u202Etxt.exe"), "x\n");
+        Document *doc = openFile(newList(), p);
+        QVERIFY(doc);
+        QCOMPARE(doc->title(), QStringLiteral("atxt.exe"));
+        QVERIFY(QDir(m_dir).mkdir(QStringLiteral("<b>tag")));
+        const QString q = write(QStringLiteral("<b>tag/f\nl.txt"), "y\n");
+        Document *other = openFile(newList(), q);
+        QVERIFY(other);
+        QCOMPARE(other->title(), QStringLiteral("f\uFFFDl.txt"));
+        // Zero-width spaces go, line separators show.
+        const QString r = write(QStringLiteral("z\u200Bw\u2028x.txt"), "z\n");
+        Document *third = openFile(newList(), r);
+        QVERIFY(third);
+        QCOMPARE(third->title(), QStringLiteral("zw\uFFFDx.txt"));
+        QVERIFY(!other->toolTip().contains(QStringLiteral("<b>")));
+        QVERIFY(other->toolTip().contains(QStringLiteral("<\u2060b>tag")));
+    }
+
+    void linksThatOpen()
+    {
+        QCOMPARE(m_app->linkUrl(QStringLiteral("https://example.com/a?b=1&c=2")), QStringLiteral("https://example.com/a?b=1&c=2"));
+        QCOMPARE(m_app->linkUrl(QStringLiteral("HTTP://Example.com")), QStringLiteral("http://example.com"));
+        QCOMPARE(m_app->linkUrl(QStringLiteral("www.example.com")), QStringLiteral("https://www.example.com"));
+        QCOMPARE(m_app->linkTarget(QStringLiteral("https://evil.example/login")), QStringLiteral("evil.example"));
+        for (const char *refused : {"file:///etc/passwd", "javascript:alert(1)", "data:text/html,hi", "smb://srv/share", "https://", "relative/path",
+                                    " https://example.com", "mailto:"}) {
+            QVERIFY2(m_app->linkUrl(QString::fromUtf8(refused)).isEmpty(), refused);
+            QVERIFY(!m_app->openLink(QString::fromUtf8(refused)));
+        }
+        // A mailto keeps its address, subject and body, not its attachments.
+        const QString mail = m_app->linkUrl(QStringLiteral("mailto:a@b.example?subject=Hi&attach=/home/u/.ssh/id_rsa&Attachment=x&body=yo"));
+        QCOMPARE(mail, QStringLiteral("mailto:a@b.example?subject=Hi&body=yo"));
+        QCOMPARE(m_app->linkUrl(QStringLiteral("mailto:a@b.example?attach=%2Fetc%2Fpasswd")), QStringLiteral("mailto:a@b.example"));
+        QCOMPARE(m_app->linkTarget(QStringLiteral("mailto:a@b.example?subject=Hi")), QStringLiteral("a@b.example"));
+        // Encoded keys don't slip past; the other fields stay byte for byte.
+        QCOMPARE(m_app->linkUrl(QStringLiteral("mailto:a@b.example?%61ttach=x&subject=a+b&body=x%20y%2Bz")),
+                 QStringLiteral("mailto:a@b.example?subject=a+b&body=x%20y%2Bz"));
+        QCOMPARE(m_app->linkUrl(QStringLiteral("mailto:a@b.example?subject=a+b&body=x%20y%2Bz")), QStringLiteral("mailto:a@b.example?subject=a+b&body=x%20y%2Bz"));
+        // A lookalike host shows as punycode, as the tooltip does.
+        QCOMPARE(m_app->linkTarget(QStringLiteral("https://\u0430pple.com/")), QStringLiteral("xn--pple-43d.com"));
     }
 
     void proseIsWhatSpellCheckReads()
@@ -787,6 +896,15 @@ private Q_SLOTS:
         QCOMPARE(m_app->windows().size(), 1);
         QCOMPARE(list->rowCount(), 2);
         QCOMPARE(list->current()->path(), m_dir + QStringLiteral("/rel.txt"));
+        // After "--", a name starting with '-' is a file.
+        write(QStringLiteral("-dash.txt"), "dash\n");
+        m_app->activate({QStringLiteral("atlas-notepad"), QStringLiteral("--"), QStringLiteral("-dash.txt")}, m_dir);
+        QCOMPARE(list->rowCount(), 3);
+        QCOMPARE(list->current()->path(), m_dir + QStringLiteral("/-dash.txt"));
+        // A relative path needs an absolute working directory.
+        m_app->activate({QStringLiteral("atlas-notepad"), QStringLiteral("rel2.txt")}, QString());
+        m_app->activate({QStringLiteral("atlas-notepad"), QStringLiteral("rel2.txt")}, QStringLiteral("relative/dir"));
+        QCOMPARE(list->rowCount(), 3);
         m_app->settings()->setOpenInNewWindow(true);
         m_app->activate({QStringLiteral("atlas-notepad"), p}, m_dir);
         QCOMPARE(m_app->windows().size(), 2);
@@ -922,6 +1040,52 @@ private Q_SLOTS:
             | QFileDevice::ExeOther;
         QVERIFY(!(QFileInfo(sessionDir()).permissions() & mask));
         QVERIFY(!(QFileInfo(sessionDir() + QStringLiteral("/texts")).permissions() & mask));
+        // The files too, whatever the umask: 0600.
+        QVERIFY(!(QFileInfo(sessionDir() + QStringLiteral("/session.json")).permissions() & mask));
+        const QDir texts(sessionDir() + QStringLiteral("/texts"));
+        const QStringList names = texts.entryList(QDir::Files);
+        QVERIFY(!names.isEmpty());
+        for (const QString &name : names) {
+            QVERIFY(!(QFileInfo(texts.filePath(name)).permissions() & mask));
+        }
+    }
+
+    void linkedSessionDirIsMadePrivate()
+    {
+        // A session folder linked elsewhere (dotfiles) works, and what it
+        // points at is made 0700.
+        const QString elsewhere = m_dir + QStringLiteral("/elsewhere");
+        QVERIFY(QDir().mkpath(elsewhere));
+        QVERIFY(QFile::setPermissions(elsewhere, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner | QFileDevice::ReadOther | QFileDevice::ExeOther));
+        QVERIFY(QDir().mkpath(QFileInfo(sessionDir()).path()));
+        QVERIFY(QFile::link(elsewhere, sessionDir()));
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        insert(doc, 0, QStringLiteral("secret"));
+        m_app->saveSession();
+        QCOMPARE(QDir(elsewhere + QStringLiteral("/texts")).entryList(QDir::Files).size(), 1);
+        QVERIFY(!(QFileInfo(elsewhere).permissions() & (QFileDevice::ReadOther | QFileDevice::ExeOther)));
+        QVERIFY(QFile::remove(sessionDir()));
+    }
+
+    void plantedSessionIsBounded()
+    {
+        QVERIFY(QDir().mkpath(sessionDir() + QStringLiteral("/texts")));
+        QJsonArray tabs;
+        for (int i = 0; i < 1500; ++i) { // a planted 20,000+ would be cut
+            tabs.append(QJsonObject{{QStringLiteral("textFile"), QStringLiteral("none")}, {QStringLiteral("modified"), true}});
+        }
+        const QJsonObject window{{QStringLiteral("geometry"), QJsonArray{2147483647, 2147483647, 2147483647, 2147483647}}, {QStringLiteral("tabs"), tabs}};
+        const QJsonObject root{{QStringLiteral("version"), 1}, {QStringLiteral("windows"), QJsonArray{window}}};
+        write(QStringLiteral("planted.json"), QJsonDocument(root).toJson());
+        QVERIFY(QFile::copy(m_dir + QStringLiteral("/planted.json"), sessionDir() + QStringLiteral("/session.json")));
+        Session session;
+        const QList<WindowState> windows = session.read();
+        QCOMPARE(windows.size(), 1);
+        QCOMPARE(windows.first().tabs.size(), 1500); // under the cap
+        QVERIFY(windows.first().geometry.right() > 0); // no int overflow
+        QVERIFY(windows.first().geometry.width() <= (1 << 20));
     }
 
     void unloadedTabStoresNoText()

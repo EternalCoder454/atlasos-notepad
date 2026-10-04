@@ -20,6 +20,8 @@
 
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -134,16 +136,34 @@ QString decodeWindows1252(const QByteArray &bytes)
 // Reading as an encoding the user chose (np_file_read detects its own).
 LoadResult readAs(const QByteArray &path, int encoding, LoadResult r)
 {
-    QFile file(QString::fromUtf8(path));
-    if (!file.open(QIODevice::ReadOnly)) {
-        const QFileInfo info(file.fileName());
-        r.error = file.error() == QFileDevice::PermissionsError ? EACCES
-            : !info.exists()                                    ? ENOENT // gone since np_file_stamp
-            : info.isDir()                                      ? EISDIR
-                                                                : EIO;
+    // Non-blocking, and checked on the open file: a FIFO swapped in since
+    // readFile looked mustn't hang this worker.
+    const int fd = ::open(path.constData(), O_RDONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) {
+        r.error = errno;
         return r;
     }
-    QByteArray bytes = file.readAll();
+    struct stat st = {};
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ::close(fd);
+        r.error = EINVAL;
+        return r;
+    }
+    QFile file;
+    if (!file.open(fd, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle)) {
+        ::close(fd);
+        r.error = EIO;
+        return r;
+    }
+    if (st.st_size > Limits::fileBytes) {
+        r.tooLarge = true;
+        return r;
+    }
+    QByteArray bytes = file.read(Limits::fileBytes + 1);
+    if (bytes.size() > Limits::fileBytes) {
+        r.tooLarge = true;
+        return r;
+    }
     r.encoding = encoding;
     switch (encoding) {
     case NP_UTF8_BOM:
@@ -209,6 +229,11 @@ LoadResult readFile(const QByteArray &path, int forcedEncoding)
         return r;
     }
     r.stamp = stamp;
+    // Regular files only: a FIFO would hang the read, /dev/zero never end.
+    if (!QFileInfo(QFile::decodeName(path)).isFile()) {
+        r.error = EINVAL;
+        return r;
+    }
     if (qint64(stamp.size) > Limits::fileBytes) {
         r.tooLarge = true;
         return r;
@@ -216,7 +241,13 @@ LoadResult readFile(const QByteArray &path, int forcedEncoding)
     if (forcedEncoding >= 0) {
         return readAs(path, forcedEncoding, r);
     }
-    NpFile *file = np_file_read(path.constData());
+    // np_file_read checks both again on the open file.
+    NpFile *file = np_file_read(path.constData(), quint64(Limits::fileBytes));
+    if (file->error == EFBIG) {
+        r.tooLarge = true;
+        np_file_free(file);
+        return r;
+    }
     if (file->error || !file->text) {
         r.error = file->error ? file->error : EIO;
         np_file_free(file);
@@ -742,7 +773,8 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
             setBanner(Deleted);
             setModified(true);
         } else {
-            setBanner(SaveFailed, QObject::tr("Couldn't read this file: %1").arg(QString::fromLocal8Bit(strerror(r.error))));
+            const QString why = r.error == EINVAL ? QObject::tr("it isn't a regular file") : QString::fromLocal8Bit(strerror(r.error));
+            setBanner(SaveFailed, QObject::tr("Couldn't read this file: %1").arg(why));
         }
         return;
     }
@@ -922,10 +954,34 @@ Document::~Document()
     d->unwatch();
 }
 
+namespace
+{
+// A file name as shown: invisible format characters dropped (with U+202E,
+// "evil\u202Etxt.exe" reads "evilexe.txt") and line breaks and other control
+// characters as U+FFFD.
+QString shown(const QString &name)
+{
+    QString out;
+    out.reserve(name.size());
+    for (const QChar c : name) {
+        const char16_t u = c.unicode();
+        const QChar::Category cat = c.category();
+        // Invisible format characters (bidi controls, zero-width spaces, BOM,
+        // soft hyphen) go; joiners stay for emoji and scripts that need them.
+        if (cat == QChar::Other_Format && u != 0x200C && u != 0x200D) {
+            continue;
+        }
+        const bool breaks = cat == QChar::Other_Control || cat == QChar::Separator_Line || cat == QChar::Separator_Paragraph;
+        out.append(breaks ? QChar(QChar::ReplacementCharacter) : c);
+    }
+    return out.isEmpty() && !name.isEmpty() ? QString(QChar::ReplacementCharacter) : out;
+}
+}
+
 QString Document::title() const
 {
     if (!d->path.isEmpty()) {
-        return QFileInfo(d->path).fileName();
+        return shown(QFileInfo(d->path).fileName());
     }
     return d->untitledNumber > 1 ? tr("Untitled %1").arg(d->untitledNumber) : tr("Untitled");
 }
@@ -945,7 +1001,10 @@ QUrl Document::folder() const
 
 QString Document::toolTip() const
 {
-    return d->path.isEmpty() ? title() : d->path;
+    // The desktop style's ToolTip takes text with a tag in it as rich text
+    // (a folder named <img src=...> would load an image): a word joiner
+    // after each '<' keeps it plain and looks the same.
+    return d->path.isEmpty() ? title() : shown(d->path).replace(u'<', QStringLiteral("<\u2060"));
 }
 
 bool Document::isModified() const
@@ -1206,10 +1265,33 @@ void Document::save()
 
 void Document::saveAs(const QUrl &url)
 {
-    const QString newPath = url.isLocalFile() ? url.toLocalFile() : url.path();
+    // A remote URL's path (sftp://host/etc/x) isn't the local /etc/x.
+    const QString newPath = url.isLocalFile() ? url.toLocalFile() : QString();
     if (newPath.isEmpty() || d->saving) {
         Q_EMIT saveFailed(newPath.isEmpty() ? tr("That isn't a file on this computer.") : tr("A save is already running."));
         return;
+    }
+    QList<Document *> others;
+    if (App *app = App::instance()) {
+        for (DocumentList *list : app->windows()) {
+            others += list->documents();
+        }
+    } else if (d->list) {
+        others = d->list->documents();
+    }
+    {
+        // Two tabs (in any window) on one file would overwrite each other's saves.
+        const QString canonical = QFileInfo(newPath).canonicalFilePath();
+        const QString absolute = QFileInfo(newPath).absoluteFilePath();
+        for (Document *other : std::as_const(others)) {
+            if (other == this || other->d->path.isEmpty()) {
+                continue;
+            }
+            if (other->d->path == absolute || (!canonical.isEmpty() && QFileInfo(other->d->path).canonicalFilePath() == canonical)) {
+                Q_EMIT saveFailed(tr("%1 is open in another tab. Close it first, or save there.").arg(other->title()));
+                return;
+            }
+        }
     }
     if (d->loading || !d->loaded) {
         // Writing now would put an empty or partial text under the new name.

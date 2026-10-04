@@ -168,6 +168,59 @@ first word; with the C locale it falls back to the UI languages, then en_US.
   `MarkdownEditor` tell each other to highlight again (queued) when one goes.
 - Typing bench: no change beyond noise against the plain TextEdit baseline.
 
+## Security
+
+Threat model: Notepad runs as the user and opens files from anywhere
+(downloads, archives, shared folders, other users' files in `/tmp`). Their
+contents, names and the folders they sit in may be hostile. Another process
+on the session bus can send it files to open.
+
+- **Reading.** Regular files only: a FIFO would hang the read, a link to
+  `/dev/zero` never end. `np_file_read` opens with `O_NONBLOCK`, checks
+  the open file and reads at most the 10 MiB limit plus one byte, so a file
+  that grows mid-read stops there too.
+- **Saving.**
+  - Symlinks are followed, as in other editors.
+  - A file with several hard links, or one whose owner Notepad can't give
+    back (another user's file, writable through its group), is written in
+    place. Replacing it would hand it to us, setuid bits included. The old
+    bytes are kept and written back if the write fails part way.
+- **Session.**
+  - Unsaved text lives in `$XDG_STATE_HOME/atlas-notepad/session`. Nothing
+    is written unless that folder (or what a link there points to, for a
+    state folder kept elsewhere) is a folder owned by the user; it is set to
+    0700 first.
+  - Its files are 0600 and are replaced by rename. A link planted in place
+    of a file is replaced, not followed.
+  - Reading a corrupt or planted session is bounded: 64 MiB of JSON, 1 GiB
+    per text, 1000 windows, 20,000 tabs, clamped geometry. The caps sit well
+    above what Notepad writes, so they never drop the user's own tabs. An
+    unreadable session is kept as `session.json.bak`.
+- **Markdown.** The line reader is linear: hostile 100,000-character lines
+  (`[` × 100k, `*_` × 50k, `http://a` + `)` × 100k) take about 1 ms, not
+  seconds. A test keeps each of them under a budget, and a differential
+  test checks the result against the old, simple implementation.
+- **Links.**
+  - Only `http(s)` with a host, `mailto` and `www.` open. A mailto loses
+    its `attach` parameters, which some mail clients honour.
+  - The Formatted view hides a link's target, so hovering shows it and the
+    context menu names the host.
+- **Printing.** Markdown is printed without HTML and loads no resources:
+  `![](/home/you/private.png)` mustn't put a local file into a PDF, and
+  `![](/dev/zero)` mustn't hang.
+- **Names.** Titles drop bidi controls (a U+202E between `evil` and
+  `txt.exe` makes it read `evilexe.txt`) and show control characters as
+  U+FFFD. The desktop style's tooltip reads a tag as rich text, so a word
+  joiner follows each `<` in a path.
+- **Second launches.** `--` ends the options. At most 100 files are taken,
+  and a relative path is used only with an absolute working directory.
+- **Other.**
+  - Atlas Updater is started from `/usr/bin` rather than found on `$PATH`.
+  - The C ABI refuses null pointers, and no panic crosses into C++.
+  - The locked crates have no known advisories (OSV, October 2026).
+  - The RPM's binary is PIE, full RELRO, NX, FORTIFY, stack protector and
+    CET shadow stack.
+
 ## Building and testing
 
 Everything builds in the `localhost/atlas-notepad-dev:44` container

@@ -483,6 +483,14 @@ public:
     Q_INVOKABLE QString displayPath(const QString &path) const;
     // Starts Atlas Updater (crash report settings); false if it isn't installed.
     Q_INVOKABLE bool openUpdater() const;
+    // A link from a document as it would open: web and mail only (a file://
+    // or smb:// link shouldn't open or run things), "www." as https, a mailto
+    // without attach parameters. Empty when it won't open.
+    Q_INVOKABLE QString linkUrl(const QString &link) const;
+    // Where the link goes, for the menu: its host, or a mailto's address.
+    Q_INVOKABLE QString linkTarget(const QString &link) const;
+    // Opens linkUrl(link); false if it won't open.
+    Q_INVOKABLE bool openLink(const QString &link) const;
     // Saves the session now (also done a second after any edit stops and at
     // quit).
     Q_INVOKABLE void saveSession();

@@ -11,6 +11,7 @@
 #include <QDBusConnectionInterface>
 #include <QDBusServiceWatcher>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -31,6 +32,17 @@
 
 namespace
 {
+// Loads nothing: ![](/home/you/private.png) or ![](/dev/zero) in a printed
+// file mustn't read local files into the PDF (or never finish).
+class PrintDocument : public QTextDocument
+{
+protected:
+    QVariant loadResource(int, const QUrl &) override
+    {
+        return {};
+    }
+};
+
 constexpr int recentLimit = 10;
 constexpr auto menuService = "com.canonical.AppMenu.Registrar";
 App *s_instance = nullptr;
@@ -440,18 +452,30 @@ void App::start(const QStringList &files)
 
 void App::activate(const QStringList &arguments, const QString &workingDirectory)
 {
-    // The first argument is the program name.
+    // The first argument is the program name. Another process on the bus
+    // sends these: at most a hundred files, and relative paths only against
+    // an absolute working directory.
+    constexpr int maxFiles = 100;
     QList<QUrl> urls;
     bool newWindow = false;
+    bool options = true;
+    const bool absoluteDir = QDir::isAbsolutePath(workingDirectory);
     for (const QString &arg : arguments.mid(1)) {
-        if (arg == QLatin1String("--new-window")) {
+        if (options && arg == QLatin1String("--")) {
+            options = false;
+            continue;
+        }
+        if (options && arg == QLatin1String("--new-window")) {
             newWindow = true;
         }
-        if (arg.startsWith(QLatin1Char('-'))) {
+        if ((options && arg.startsWith(QLatin1Char('-'))) || arg.isEmpty() || urls.size() >= maxFiles) {
             continue;
         }
         const QUrl url(arg);
         const QString path = url.isLocalFile() ? url.toLocalFile() : arg;
+        if (!QDir::isAbsolutePath(path) && !absoluteDir) {
+            continue;
+        }
         urls.append(QUrl::fromLocalFile(QDir(workingDirectory).absoluteFilePath(path)));
     }
     // A closed last window stays (the session keeps its tabs) but is hidden:
@@ -534,9 +558,10 @@ void App::print(Document *document, QQuickWindow *parent)
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
-    QTextDocument doc;
+    PrintDocument doc;
     if (document->isMarkdown() && document->isFormatted()) {
-        doc.setMarkdown(document->text());
+        // As the editor shows it: HTML as text, images as their alt text.
+        doc.setMarkdown(document->text(), QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub | QTextDocument::MarkdownNoHTML));
     } else {
         doc.setDefaultFont(d->settings->font());
         doc.setPlainText(document->text());
@@ -652,7 +677,68 @@ QString App::displayPath(const QString &path) const
 bool App::openUpdater() const
 {
     // A running Updater answers the new one, which then exits.
-    return QProcess::startDetached(QStringLiteral("atlas-updater"), {});
+    // By its installed path, not whatever "atlas-updater" is first on $PATH.
+    const QString updater = QStandardPaths::findExecutable(QStringLiteral("atlas-updater"), {QStringLiteral("/usr/bin")});
+    return !updater.isEmpty() && QProcess::startDetached(updater, {});
+}
+
+namespace
+{
+QUrl documentLink(const QString &link)
+{
+    QString text = link;
+    if (text.startsWith(QLatin1String("www."), Qt::CaseInsensitive)) {
+        text.prepend(QLatin1String("https://"));
+    }
+    QUrl url(text);
+    const QString scheme = url.scheme().toLower();
+    if (!url.isValid()) {
+        return {};
+    }
+    if (scheme == QLatin1String("http") || scheme == QLatin1String("https")) {
+        return url.host().isEmpty() ? QUrl() : url;
+    }
+    if (scheme == QLatin1String("mailto")) {
+        // Some mail clients attach the file an attach= names (~/.ssh/id_rsa).
+        // The other fields stay byte for byte (a "+" is a plus in mailto).
+        if (url.hasQuery()) {
+            QStringList kept;
+            bool dropped = false;
+            const QString query = url.query(QUrl::FullyEncoded);
+            for (const QString &field : query.split(QLatin1Char('&'))) {
+                const QString key = QUrl::fromPercentEncoding(field.section(QLatin1Char('='), 0, 0).toUtf8()).trimmed().toLower();
+                if (key.startsWith(QLatin1String("attach"))) {
+                    dropped = true;
+                } else {
+                    kept.append(field);
+                }
+            }
+            if (dropped) {
+                url.setQuery(kept.isEmpty() ? QString() : kept.join(QLatin1Char('&')), QUrl::StrictMode);
+            }
+        }
+        return url.path().isEmpty() && !url.hasQuery() ? QUrl() : url;
+    }
+    return {};
+}
+}
+
+QString App::linkUrl(const QString &link) const
+{
+    return documentLink(link).toString(QUrl::FullyEncoded);
+}
+
+QString App::linkTarget(const QString &link) const
+{
+    const QUrl url = documentLink(link);
+    // Punycode, as linkUrl: a lookalike host (аpple.com in Cyrillic) shows.
+    return url.scheme() == QLatin1String("mailto") ? url.path(QUrl::FullyEncoded) : url.host(QUrl::EncodeUnicode);
+}
+
+bool App::openLink(const QString &link) const
+{
+    const QUrl url = documentLink(link);
+    return url.isValid() && !url.isEmpty() && QDesktopServices::openUrl(url);
 }
 
 QString App::shortcutText(const QVariant &shortcut) const

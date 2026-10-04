@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::ffi::{CStr, OsStr, c_char};
 use std::os::unix::ffi::OsStrExt;
-use std::panic::catch_unwind;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
 use notepad_core::file;
@@ -34,20 +34,40 @@ pub unsafe extern "C" fn np_md_line(
     cap: usize,
     line: *mut Line,
 ) -> usize {
+    if line.is_null() {
+        return 0;
+    }
+    let cap = if runs.is_null() { 0 } else { cap };
     // SAFETY: the caller passes `len` readable units.
-    let text = unsafe { slice(text, len) };
-    BUFFERS.with_borrow_mut(|(flags, found)| {
-        let summary = markdown::parse_line(text, state, flags);
-        markdown::runs(flags, found);
-        let n = found.len().min(cap);
-        if n > 0 {
-            // SAFETY: the caller gives room for `cap` runs; n <= cap.
-            unsafe { std::ptr::copy_nonoverlapping(found.as_ptr(), runs, n) };
-        }
+    let Some(text) = (unsafe { slice(text, len) }) else {
         // SAFETY: the caller passes a writable Line.
-        unsafe { line.write(summary) };
-        found.len()
-    })
+        unsafe { line.write(Line::default()) };
+        return 0;
+    };
+    // A panic must not cross into C++ (it would abort with the unsaved tabs).
+    let parsed = catch_unwind(AssertUnwindSafe(|| {
+        BUFFERS.with(|buffers| {
+            let Ok(mut buffers) = buffers.try_borrow_mut() else {
+                return None;
+            };
+            let (flags, found) = &mut *buffers;
+            let summary = markdown::parse_line(text, state, flags);
+            markdown::runs(flags, found);
+            let n = found.len().min(cap);
+            if n > 0 {
+                // SAFETY: the caller gives room for `cap` runs; n <= cap.
+                unsafe { std::ptr::copy_nonoverlapping(found.as_ptr(), runs, n) };
+            }
+            Some((summary, found.len()))
+        })
+    }));
+    let (summary, n) = match parsed {
+        Ok(Some(found)) => found,
+        _ => (Line::default(), 0),
+    };
+    // SAFETY: the caller passes a writable Line.
+    unsafe { line.write(summary) };
+    n
 }
 
 /// The link at UTF-16 position `pos` of a line: writes where its URL is and
@@ -65,9 +85,14 @@ pub unsafe extern "C" fn np_md_link_at(
     start: *mut usize,
     end: *mut usize,
 ) -> bool {
+    if start.is_null() || end.is_null() {
+        return false;
+    }
     // SAFETY: as documented.
-    let text = unsafe { slice(text, len) };
-    match markdown::link_at(text, pos) {
+    let Some(text) = (unsafe { slice(text, len) }) else {
+        return false;
+    };
+    match catch_unwind(|| markdown::link_at(text, pos)).ok().flatten() {
         Some((a, b)) => {
             // SAFETY: the caller passes writable pointers.
             unsafe {
@@ -150,20 +175,21 @@ unsafe fn path_arg(path: *const c_char) -> Option<PathBuf> {
     Some(PathBuf::from(OsStr::from_bytes(bytes)))
 }
 
-/// Reads and decodes a file. Never returns null: on failure `error` is the
-/// errno. Free the result with `np_file_free`.
+/// Reads and decodes a regular file of at most `max_bytes`. Never returns
+/// null: on failure `error` is the errno (`EFBIG` past the limit, `EINVAL`
+/// for a FIFO, device or directory). Free the result with `np_file_free`.
 ///
 /// # Safety
 ///
 /// `path` is a NUL-terminated string (UTF-8, or any bytes the file system
 /// takes).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn np_file_read(path: *const c_char) -> *mut NpFile {
+pub unsafe extern "C" fn np_file_read(path: *const c_char, max_bytes: u64) -> *mut NpFile {
     // SAFETY: as documented.
     let Some(path) = (unsafe { path_arg(path) }) else {
         return failed(EINVAL);
     };
-    let read = catch_unwind(|| file::read(&path));
+    let read = catch_unwind(|| file::read(&path, max_bytes));
     match read {
         Ok(Ok((d, stamp))) => {
             let len = d.text.len();
@@ -226,8 +252,13 @@ pub unsafe extern "C" fn np_file_save(
     let Some(path) = (unsafe { path_arg(path) }) else {
         return EINVAL;
     };
-    // SAFETY: as documented.
-    let text = unsafe { slice(text, len) };
+    if stamp.is_null() || bad_offset.is_null() {
+        return EINVAL;
+    }
+    // SAFETY: as documented. Null text with a length would save an empty file.
+    let Some(text) = (unsafe { slice(text, len) }) else {
+        return EINVAL;
+    };
     let (Some(encoding), Some(line_ending)) = (
         file::Encoding::from_u8(encoding),
         file::LineEnding::from_u8(line_ending),
@@ -254,6 +285,38 @@ pub unsafe extern "C" fn np_file_save(
     }
 }
 
+/// Saves `len` bytes as a file only we may read (the session's): 0 or an
+/// errno. See `file::save_private`.
+///
+/// # Safety
+///
+/// `path` is a NUL-terminated string and `bytes` points to `len` bytes (or
+/// `len` is 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_file_save_private(
+    path: *const c_char,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    // SAFETY: as documented.
+    let Some(path) = (unsafe { path_arg(path) }) else {
+        return EINVAL;
+    };
+    let bytes = if len == 0 {
+        &[][..]
+    } else if bytes.is_null() {
+        return EINVAL;
+    } else {
+        // SAFETY: as documented.
+        unsafe { std::slice::from_raw_parts(bytes, len) }
+    };
+    match catch_unwind(|| file::save_private(&path, bytes)) {
+        Ok(Ok(())) => 0,
+        Ok(Err(e)) => errno(&e),
+        Err(_) => EIO,
+    }
+}
+
 /// The stamp of a file: 0 and `*stamp` set, or an errno.
 ///
 /// # Safety
@@ -265,6 +328,9 @@ pub unsafe extern "C" fn np_file_stamp(path: *const c_char, stamp: *mut NpStamp)
     let Some(path) = (unsafe { path_arg(path) }) else {
         return EINVAL;
     };
+    if stamp.is_null() {
+        return EINVAL;
+    }
     match catch_unwind(|| file::stamp(&path)) {
         Ok(Ok(s)) => {
             // SAFETY: the caller passes a writable stamp.
@@ -278,13 +344,16 @@ pub unsafe extern "C" fn np_file_stamp(path: *const c_char, stamp: *mut NpStamp)
 
 /// # Safety
 ///
-/// `p` points to `len` readable units, or `len` is 0.
-unsafe fn slice<'a>(p: *const u16, len: usize) -> &'a [u16] {
-    if len == 0 || p.is_null() {
-        &[]
+/// `p` points to `len` readable units, or `len` is 0. None for a null `p`
+/// with a length.
+unsafe fn slice<'a>(p: *const u16, len: usize) -> Option<&'a [u16]> {
+    if len == 0 {
+        Some(&[])
+    } else if p.is_null() {
+        None
     } else {
         // SAFETY: as documented.
-        unsafe { std::slice::from_raw_parts(p, len) }
+        Some(unsafe { std::slice::from_raw_parts(p, len) })
     }
 }
 
@@ -355,7 +424,7 @@ mod tests {
 
         // SAFETY: valid C string; the result is freed once.
         unsafe {
-            let f = np_file_read(cpath.as_ptr());
+            let f = np_file_read(cpath.as_ptr(), u64::MAX);
             assert_eq!((*f).error, 0);
             assert_eq!(std::slice::from_raw_parts((*f).text, (*f).len), &text[..]);
             assert_eq!(((*f).encoding, (*f).line_ending, (*f).mixed), (2, 1, 0));
@@ -381,7 +450,7 @@ mod tests {
         let missing = std::ffi::CString::new(dir.join("none").to_str().unwrap()).unwrap();
         // SAFETY: valid C string; the result is freed once.
         unsafe {
-            let f = np_file_read(missing.as_ptr());
+            let f = np_file_read(missing.as_ptr(), u64::MAX);
             assert_eq!((*f).error, 2);
             assert!((*f).text.is_null());
             np_file_free(f);

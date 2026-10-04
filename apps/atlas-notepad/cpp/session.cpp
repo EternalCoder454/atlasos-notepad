@@ -13,12 +13,22 @@
 #include <QUuid>
 
 #include <cstdio>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace
 {
 constexpr int formatVersion = 1;
+// What a session may hold, against a corrupt or planted file. Far past
+// what Notepad writes (files open up to 10 MiB), so nothing of ours is cut.
+constexpr qint64 maxJsonBytes = 64 << 20;
+constexpr qint64 maxTextBytes = qint64(1) << 30;
+constexpr int maxWindows = 1000;
+constexpr int maxTabs = 20000;
+constexpr int maxCoordinate = 1 << 20;
 
-// Atomically, UTF-8 with LF (np_file_save: temp file, fsync, rename).
+// Atomically and readable only by us, UTF-8 (np_file_save_private: temp
+// file 0600, fsync, rename, never through a symlink).
 // A lone surrogate (from a lossy UTF-16 file or a paste) has no UTF-8 form
 // and would fail the write every time, so it is stored as U+FFFD.
 bool saveUtf8(const QString &path, QString text)
@@ -30,9 +40,38 @@ bool saveUtf8(const QString &path, QString text)
             text[i] = QChar::ReplacementCharacter;
         }
     }
-    NpStamp stamp = {};
-    size_t bad = 0;
-    return np_file_save(path.toUtf8().constData(), reinterpret_cast<const uint16_t *>(text.utf16()), size_t(text.size()), NP_UTF8, NP_LF, &stamp, &bad) == 0;
+    const QByteArray bytes = text.toUtf8();
+    return np_file_save_private(QFile::encodeName(path).constData(), reinterpret_cast<const uint8_t *>(bytes.constData()), size_t(bytes.size())) == 0;
+}
+
+// The unsaved text goes here: a directory of ours, 0700. (A link to one,
+// as dotfile setups make, is fine: only we can put a link in our state dir.)
+bool makePrivate(const QString &dir)
+{
+    const QByteArray path = QFile::encodeName(dir);
+    struct stat st = {};
+    if (stat(path.constData(), &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != geteuid()) {
+        return false;
+    }
+    return (st.st_mode & 07777) == 0700 || chmod(path.constData(), 0700) == 0;
+}
+
+// A regular file only (a FIFO would block the open), at most `max` bytes;
+// nothing when it isn't one or is larger.
+std::optional<QByteArray> readCapped(const QString &path, qint64 max)
+{
+    if (!QFileInfo(path).isFile()) {
+        return std::nullopt;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > max) {
+        return std::nullopt;
+    }
+    QByteArray bytes = file.read(qMin(max, file.size()) + 1);
+    if (bytes.size() > max) {
+        return std::nullopt;
+    }
+    return bytes;
 }
 
 void removeTemps(const QString &path)
@@ -103,35 +142,49 @@ QList<WindowState> Session::read()
     removeTemps(directory());
     removeTemps(directory() + QStringLiteral("/texts"));
     const QString jsonPath = directory() + QStringLiteral("/session.json");
-    QFile file(jsonPath);
     if (!QFileInfo::exists(jsonPath)) {
         return {};
     }
-    const bool opened = file.open(QIODevice::ReadOnly);
-    const QJsonDocument doc = opened ? QJsonDocument::fromJson(file.readAll()) : QJsonDocument();
-    if (!opened || !doc.isObject() || doc.object().value(QStringLiteral("version")).toInt() != formatVersion) {
+    const std::optional<QByteArray> bytes = readCapped(jsonPath, maxJsonBytes);
+    const QJsonDocument doc = bytes ? QJsonDocument::fromJson(*bytes) : QJsonDocument();
+    if (!doc.isObject() || doc.object().value(QStringLiteral("version")).toInt() != formatVersion) {
         qWarning("atlas-notepad: can't use the session file, keeping a copy as session.json.bak");
         m_readFailed = true;
-        file.close();
         // Copied aside first, so a failed copy keeps an older backup.
         const QString bak = jsonPath + QStringLiteral(".bak");
         QFile::remove(bak + QStringLiteral(".new"));
-        if (QFile::copy(jsonPath, bak + QStringLiteral(".new"))) {
-            std::rename(QFile::encodeName(bak + QStringLiteral(".new")).constData(), QFile::encodeName(bak).constData());
+        const QByteArray to = QFile::encodeName(bak);
+        if (QFileInfo(jsonPath).isFile() && QFile::copy(jsonPath, bak + QStringLiteral(".new"))) {
+            std::rename(QFile::encodeName(bak + QStringLiteral(".new")).constData(), to.constData());
+        } else {
+            // A full disk (or not a file at all): moving it aside needs no
+            // room. It replaces an older backup, so this run's session can
+            // be written without losing the newest unusable one.
+            std::rename(QFile::encodeName(jsonPath).constData(), to.constData());
         }
         return {};
     }
     QList<WindowState> windows;
+    int tabs = 0;
     for (const QJsonValue &wv : doc.object().value(QStringLiteral("windows")).toArray()) {
+        if (windows.size() >= maxWindows || tabs >= maxTabs) {
+            break;
+        }
         const QJsonObject w = wv.toObject();
         WindowState state;
         const QJsonArray g = w.value(QStringLiteral("geometry")).toArray();
         if (g.size() == 4) {
-            state.geometry = QRect(g[0].toInt(), g[1].toInt(), g[2].toInt(), g[3].toInt());
+            auto at = [&g](int i, int low) {
+                return qBound(low, g[i].toInt(), maxCoordinate);
+            };
+            state.geometry = QRect(at(0, -maxCoordinate), at(1, -maxCoordinate), at(2, 0), at(3, 0));
         }
         state.maximized = w.value(QStringLiteral("maximized")).toBool();
         state.currentIndex = w.value(QStringLiteral("currentIndex")).toInt();
         for (const QJsonValue &tv : w.value(QStringLiteral("tabs")).toArray()) {
+            if (tabs >= maxTabs) {
+                break;
+            }
             const QJsonObject t = tv.toObject();
             TabState tab;
             tab.path = t.value(QStringLiteral("path")).toString();
@@ -151,6 +204,7 @@ QList<WindowState> Session::read()
                 continue;
             }
             state.tabs.append(tab);
+            ++tabs;
         }
         if (!state.tabs.isEmpty()) {
             state.currentIndex = qBound(0, state.currentIndex, int(state.tabs.size()) - 1);
@@ -166,11 +220,11 @@ std::optional<QString> Session::readText(const QString &textFile) const
     if (textFile.isEmpty() || textFile != QFileInfo(textFile).fileName()) {
         return std::nullopt;
     }
-    QFile file(textPath(textFile));
-    if (!file.open(QIODevice::ReadOnly)) {
+    const std::optional<QByteArray> bytes = readCapped(textPath(textFile), maxTextBytes);
+    if (!bytes) {
         return std::nullopt;
     }
-    return QString::fromUtf8(file.readAll());
+    return QString::fromUtf8(*bytes);
 }
 
 Document *Session::restoreTab(DocumentList *list, const TabState &tab)
@@ -280,16 +334,13 @@ void Session::write(const QList<Live> &windows, bool wait)
             QMutexLocker lock(&m_mutex);
             m_failed.insert(file);
         };
-        if (!QDir().mkpath(dir + QStringLiteral("/texts"))) {
-            qWarning("atlas-notepad: can't create %s", qPrintable(dir));
+        if (!QDir().mkpath(dir + QStringLiteral("/texts")) || !makePrivate(dir) || !makePrivate(dir + QStringLiteral("/texts"))) {
+            qWarning("atlas-notepad: can't keep the session private in %s (not a folder of ours, or chmod failed)", qPrintable(dir));
             for (const TextWrite &w : writes) {
                 fail(w.file);
             }
             return;
         }
-        const auto ownerOnly = QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
-        QFile::setPermissions(dir, ownerOnly);
-        QFile::setPermissions(dir + QStringLiteral("/texts"), ownerOnly);
         bool allWritten = true;
         for (const TextWrite &w : writes) {
             if (!saveUtf8(textPath(w.file), w.text)) {
@@ -310,9 +361,13 @@ void Session::write(const QList<Live> &windows, bool wait)
         }
         // Texts the backup names stay, for whoever recovers it.
         QSet<QString> keep = referenced;
-        QFile bak(dir + QStringLiteral("/session.json.bak"));
-        if (bak.open(QIODevice::ReadOnly)) {
-            const QJsonDocument doc = QJsonDocument::fromJson(bak.readAll());
+        const QString bakPath = dir + QStringLiteral("/session.json.bak");
+        if (QFileInfo::exists(bakPath)) {
+            const std::optional<QByteArray> bak = readCapped(bakPath, maxJsonBytes);
+            if (!bak) {
+                return; // can't tell which texts it names
+            }
+            const QJsonDocument doc = QJsonDocument::fromJson(*bak);
             if (doc.object().value(QStringLiteral("version")).toInt() > formatVersion) {
                 return; // a newer Notepad's; its texts can't be told apart here
             }

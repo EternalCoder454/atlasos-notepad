@@ -10,7 +10,7 @@
 use std::ffi::{CString, OsStr};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -347,13 +347,35 @@ pub fn stamp(path: &Path) -> io::Result<Stamp> {
     fs::metadata(path).map(|m| stamp_of(&m))
 }
 
-/// Reads and decodes a file. The stamp is taken from the open file, so it
-/// belongs to the bytes that were read.
-pub fn read(path: &Path) -> io::Result<(Decoded, Stamp)> {
-    let mut file = File::open(path)?;
+/// Reads and decodes a regular file of at most `max` bytes: `EFBIG` past
+/// that, `EINVAL` for anything else (a FIFO, a device, a directory). The stamp is
+/// taken from the open file before the read, so if the file changes while
+/// it's read, it shows as changed on disk afterwards.
+pub fn read(path: &Path, max: u64) -> io::Result<(Decoded, Stamp)> {
+    // Non-blocking, so a FIFO with no writer doesn't hang the open (no
+    // effect on regular files).
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)?;
     let meta = file.metadata()?;
-    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
-    file.read_to_end(&mut bytes)?;
+    if !meta.is_file() {
+        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    if meta.len() > max {
+        return Err(io::Error::from_raw_os_error(libc::EFBIG));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(usize::try_from(meta.len()).unwrap_or(usize::MAX))
+        .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+    // A file growing while it's read stops at the limit too.
+    (&mut file)
+        .take(max.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(io::Error::from_raw_os_error(libc::EFBIG));
+    }
     Ok((decode(&bytes), stamp_of(&meta)))
 }
 
@@ -478,9 +500,11 @@ fn copy_xattrs(from: &Path, to: &File) {
 /// anything goes wrong, and returns the new stamp.
 ///
 /// - Symlinks are followed: the link stays a link and its target is written.
-/// - A file we can't write to is refused (`PermissionDenied`), even though
+/// - A file we can't write to is refused (`EACCES`, `EROFS`), even though
 ///   replacing it through rename would work in a writable directory.
-/// - A file with other hard links is written in place, so the links see it.
+/// - A file with other hard links, or one we can't give its owner back
+///   (another user's, writable through its group), is written in place, so
+///   the links see it and its owner keeps it.
 /// - Otherwise the bytes go to a temp file next to the target, which keeps
 ///   the original's mode, owner and extended attributes and then replaces it
 ///   with one rename.
@@ -503,43 +527,14 @@ pub fn save(path: &Path, bytes: &[u8]) -> io::Result<Stamp> {
         let c = cstring(&target)?;
         // SAFETY: `c` is a valid C string.
         if unsafe { libc::access(c.as_ptr(), libc::W_OK) } != 0 {
-            return Err(io::Error::from_raw_os_error(libc::EACCES));
+            return Err(io::Error::last_os_error());
         }
         if meta.nlink() > 1 {
-            let mut f = OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(&target)?;
-            f.write_all(bytes)?;
-            f.sync_all()?;
-            return stamp(&target);
+            return write_in_place(&target, bytes);
         }
     }
 
-    let dir = match target.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    let name = target
-        .file_name()
-        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-    let mut attempt = 0;
-    let (mut file, temp) = loop {
-        let mut tmp_name = b".".to_vec();
-        tmp_name.extend_from_slice(name.as_bytes());
-        tmp_name.extend_from_slice(format!(".{:016x}.tmp", random_name()).as_bytes());
-        let temp = dir.join(OsStr::from_bytes(&tmp_name));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp)
-        {
-            Ok(f) => break (f, temp),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && attempt < 8 => attempt += 1,
-            Err(e) => return Err(e),
-        }
-    };
+    let (dir, file, temp) = create_temp(&target)?;
     let mut guard = TempGuard {
         path: &temp,
         keep: false,
@@ -555,6 +550,16 @@ pub fn save(path: &Path, bytes: &[u8]) -> io::Result<Stamp> {
                 if e.raw_os_error() != Some(libc::EPERM) {
                     return Err(e);
                 }
+                // Another user's file: replacing it would hand it (and any
+                // setuid bit) to us. Ours on a file system without owners
+                // (vfat), or in a group we left: replaced as usual.
+                // SAFETY: no arguments.
+                let ours = meta.uid() == unsafe { libc::geteuid() };
+                if !ours || meta.mode() & 0o6000 != 0 {
+                    drop(file);
+                    drop(guard);
+                    return write_in_place(&target, bytes);
+                }
             }
             file.set_permissions(fs::Permissions::from_mode(meta.mode() & 0o7777))?;
             copy_xattrs(&target, &file);
@@ -563,15 +568,108 @@ pub fn save(path: &Path, bytes: &[u8]) -> io::Result<Stamp> {
             file.set_permissions(fs::Permissions::from_mode(0o666 & !umask()))?;
         }
     }
+    let stamp = finish(file, &temp, &target, &dir, bytes)?;
+    guard.keep = true;
+    Ok(stamp)
+}
+
+/// Saves a file only we may read (the session's): mode 0600 whatever the
+/// umask, by temp file and rename. A symlink at `path` is replaced, not
+/// followed.
+pub fn save_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let (dir, file, temp) = create_temp(path)?;
+    let mut guard = TempGuard {
+        path: &temp,
+        keep: false,
+    };
+    // create_temp made it 0600 less the umask; make sure it's readable to us.
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    finish(file, &temp, path, &dir, bytes)?;
+    guard.keep = true;
+    Ok(())
+}
+
+/// A new temp file (mode 0600) in the directory of `target`:
+/// `.<name>.<16 hex>.tmp`, the name cut to fit NAME_MAX.
+fn create_temp(target: &Path) -> io::Result<(PathBuf, File, PathBuf)> {
+    let dir = match target.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let name = target
+        .file_name()
+        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?
+        .as_bytes();
+    // "." + name + "." + 16 hex + ".tmp" in 255 bytes.
+    let name = &name[..name.len().min(255 - 22)];
+    let mut attempt = 0;
+    loop {
+        let mut tmp_name = b".".to_vec();
+        tmp_name.extend_from_slice(name);
+        tmp_name.extend_from_slice(format!(".{:016x}.tmp", random_name()).as_bytes());
+        let temp = dir.join(OsStr::from_bytes(&tmp_name));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp)
+        {
+            Ok(f) => return Ok((dir, f, temp)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && attempt < 8 => attempt += 1,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Writes and syncs the temp file, renames it over `target` and syncs the
+/// directory. The stamp comes from the temp file itself (a rename keeps its
+/// inode and mtime), not from whatever is at `target` by then.
+fn finish(
+    mut file: File,
+    temp: &Path,
+    target: &Path,
+    dir: &Path,
+    bytes: &[u8],
+) -> io::Result<Stamp> {
     file.write_all(bytes)?;
     file.sync_all()?;
+    let stamp = stamp_of(&file.metadata()?);
     drop(file);
-    fs::rename(&temp, &target)?;
-    guard.keep = true;
-    if let Ok(d) = File::open(&dir) {
+    fs::rename(temp, target)?;
+    if let Ok(d) = File::open(dir) {
         let _ = d.sync_all();
     }
-    stamp(&target)
+    Ok(stamp)
+}
+
+/// Overwrites the file itself (same inode, owner, mode and links). Its old
+/// bytes are kept in memory and written back if the write fails part way,
+/// so a full disk doesn't leave it cut short.
+fn write_in_place(target: &Path, bytes: &[u8]) -> io::Result<Stamp> {
+    let mut f = match OpenOptions::new().read(true).write(true).open(target) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            // Writable but not readable: no copy to put back.
+            let mut f = OpenOptions::new().write(true).truncate(true).open(target)?;
+            f.write_all(bytes)?;
+            f.sync_all()?;
+            return Ok(stamp_of(&f.metadata()?));
+        }
+        Err(e) => return Err(e),
+    };
+    let mut old = Vec::new();
+    f.read_to_end(&mut old)?;
+    let put = |f: &mut File, data: &[u8]| -> io::Result<()> {
+        f.seek(SeekFrom::Start(0))?;
+        f.write_all(data)?;
+        f.set_len(data.len() as u64)?;
+        f.sync_all()
+    };
+    if let Err(e) = put(&mut f, bytes) {
+        let _ = put(&mut f, &old);
+        return Err(e);
+    }
+    Ok(stamp_of(&f.metadata()?))
 }
 
 #[cfg(test)]
@@ -842,7 +940,7 @@ mod tests {
         let mode = fs::metadata(&p).unwrap().mode() & 0o777;
         assert_eq!(mode, 0o666 & !umask());
         assert_eq!(fs::read_dir(d.path()).unwrap().count(), 1, "temp left");
-        let (dec, st) = read(&p).unwrap();
+        let (dec, st) = read(&p, u64::MAX).unwrap();
         assert_eq!(dec.text, u("hello"));
         assert_eq!(st, s);
     }
@@ -954,6 +1052,78 @@ mod tests {
         // SAFETY: valid C strings; `buf` has 16 bytes.
         let n = unsafe { libc::getxattr(c.as_ptr(), name.as_ptr(), buf.as_mut_ptr().cast(), 16) };
         assert_eq!(&buf[..n.max(0) as usize], b"val");
+    }
+
+    #[test]
+    fn read_only_regular_files() {
+        let d = dir();
+        let fifo = d.path().join("fifo");
+        let c = cstring(&fifo).unwrap();
+        // SAFETY: a valid C string.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        // No writer: a blocking open would hang here.
+        assert_eq!(
+            read(&fifo, 1 << 20).unwrap_err().raw_os_error(),
+            Some(libc::EINVAL)
+        );
+        let zero = d.path().join("zero.txt");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        assert_eq!(
+            read(&zero, 1 << 20).unwrap_err().raw_os_error(),
+            Some(libc::EINVAL)
+        );
+        assert_eq!(
+            read(d.path(), 1 << 20).unwrap_err().raw_os_error(),
+            Some(libc::EINVAL)
+        );
+    }
+
+    #[test]
+    fn read_limit() {
+        let d = dir();
+        let p = d.path().join("f");
+        fs::write(&p, b"12345").unwrap();
+        assert_eq!(read(&p, 5).unwrap().0.text.len(), 5);
+        assert_eq!(read(&p, 4).unwrap_err().raw_os_error(), Some(libc::EFBIG));
+    }
+
+    #[test]
+    fn save_private_is_0600_and_replaces_links() {
+        let d = dir();
+        let p = d.path().join("session.json");
+        save_private(&p, b"one").unwrap();
+        assert_eq!(fs::metadata(&p).unwrap().mode() & 0o777, 0o600);
+        // A link planted at the name is replaced, its target untouched.
+        let other = d.path().join("other");
+        fs::write(&other, b"theirs").unwrap();
+        fs::remove_file(&p).unwrap();
+        std::os::unix::fs::symlink(&other, &p).unwrap();
+        save_private(&p, b"two").unwrap();
+        assert!(!fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(&p).unwrap(), b"two");
+        assert_eq!(fs::read(&other).unwrap(), b"theirs");
+    }
+
+    #[test]
+    fn save_long_name() {
+        let d = dir();
+        let p = d.path().join("n".repeat(255));
+        save(&p, b"x").unwrap();
+        save(&p, b"y").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"y");
+    }
+
+    #[test]
+    fn save_in_place_shrinks_and_grows() {
+        let d = dir();
+        let a = d.path().join("a");
+        let b = d.path().join("b");
+        fs::write(&a, b"a longer original").unwrap();
+        fs::hard_link(&a, &b).unwrap();
+        save(&a, b"short").unwrap();
+        assert_eq!(fs::read(&b).unwrap(), b"short");
+        save(&a, b"and longer than before").unwrap();
+        assert_eq!(fs::read(&b).unwrap(), b"and longer than before");
     }
 
     #[test]

@@ -44,14 +44,9 @@ FocusScope {
     function insertText(text) {
         document.insertText(text);
     }
-    // Web and mail links only: a file:// or smb:// link in a document
-    // shouldn't open or run things on a click.
+    // Web and mail links only (App.linkUrl says which).
     function openLink(url) {
-        if (/^(https?|mailto):/i.test(url)) {
-            Qt.openUrlExternally(url);
-        } else if (/^www\./i.test(url)) {
-            Qt.openUrlExternally("https://" + url);
-        }
+        App.openLink(url);
     }
     function select(start, end) {
         edit.select(start, end);
@@ -230,6 +225,57 @@ FocusScope {
                     view.openLink(url);
                 }
             }
+            // Over a link, where it really goes: the Formatted view hides the
+            // target, and the text can name another site.
+            HoverHandler {
+                id: linkHover
+                property string target
+                property int at: -1
+                function forget() {
+                    target = "";
+                    at = -1;
+                }
+                enabled: view.document.markdown
+                onPointChanged: {
+                    const position = edit.positionAt(point.position.x, point.position.y);
+                    if (position !== at) {
+                        at = position;
+                        target = App.linkUrl(md.linkAt(position));
+                    }
+                }
+                onHoveredChanged: {
+                    if (!hovered) {
+                        forget();
+                    }
+                }
+            }
+            // The text under the pointer changed: wait for it to move.
+            Connections {
+                target: edit
+                function onTextChanged() {
+                    linkHover.forget();
+                }
+            }
+            Connections {
+                target: flick
+                function onContentYChanged() {
+                    linkHover.forget();
+                }
+            }
+            QQC2.ToolTip {
+                x: linkHover.point.position.x
+                y: linkHover.point.position.y + Kirigami.Units.gridUnit
+                visible: linkHover.target.length > 0
+                width: Math.min(implicitWidth, Kirigami.Units.gridUnit * 24)
+                delay: Kirigami.Units.toolTipDelay
+                // Plain text: the style's label would take a tag or "&" in
+                // the URL as markup.
+                contentItem: QQC2.Label {
+                    text: qsTr("%1\nCtrl+click to open").arg(linkHover.target)
+                    textFormat: Text.PlainText
+                    wrapMode: Text.WrapAnywhere
+                }
+            }
             // The context menu.
             TapHandler {
                 acceptedButtons: Qt.RightButton
@@ -336,7 +382,8 @@ FocusScope {
 
         ContextMenuItem {
             visible: contextMenu.link.length > 0
-            text: qsTr("Open Link")
+            enabled: App.linkUrl(contextMenu.link).length > 0
+            text: App.linkTarget(contextMenu.link).length > 0 ? qsTr("Open Link (%1)").arg(App.linkTarget(contextMenu.link)) : qsTr("Open Link")
             icon.name: "internet-services"
             onTriggered: view.openLink(contextMenu.link)
         }

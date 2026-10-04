@@ -44,8 +44,9 @@ typedef struct NpFile {
     int32_t error;    // 0, or an errno
 } NpFile;
 
-// path: UTF-8, NUL-terminated. Never returns null: on failure error is set.
-NpFile *np_file_read(const char *path);
+// path: UTF-8, NUL-terminated. Never returns null: on failure error is set
+// (EFBIG past maxBytes, EINVAL for anything but a regular file).
+NpFile *np_file_read(const char *path, uint64_t maxBytes);
 void np_file_free(NpFile *file);
 
 // 0 on success and *stamp is set; > 0 is an errno; -1 means the text can't be
@@ -53,6 +54,10 @@ void np_file_free(NpFile *file);
 int32_t np_file_save(const char *path, const uint16_t *text, size_t len,
                      uint8_t encoding, uint8_t lineEnding, NpStamp *stamp,
                      size_t *badOffset);
+
+// For files only we may read (the session's): mode 0600, temp file and
+// rename, a symlink at path replaced rather than followed. 0 or an errno.
+int32_t np_file_save_private(const char *path, const uint8_t *bytes, size_t len);
 
 // 0 and *stamp set, or an errno.
 int32_t np_file_stamp(const char *path, NpStamp *stamp);

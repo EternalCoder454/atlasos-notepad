@@ -220,6 +220,11 @@ void DocumentList::open(const QList<QUrl> &urls)
             Q_EMIT openFailed(tr("“%1” is a folder.").arg(QFileInfo(path).fileName()));
             continue;
         }
+        // A FIFO would hang the read, a device (/dev/zero) never end.
+        if (err == 0 && !QFileInfo(path).isFile()) {
+            Q_EMIT openFailed(tr("“%1” isn't a regular file.").arg(QFileInfo(path).fileName()));
+            continue;
+        }
         if (err == 0 && ::access(path.toUtf8().constData(), R_OK) != 0) {
             err = EACCES;
         }
