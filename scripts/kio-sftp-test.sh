@@ -7,8 +7,9 @@
 # failure.
 set -uo pipefail
 
-# It adds a user and writes root's ~/.ssh: never outside a container.
-if [ ! -e /run/.containerenv ] || [ "$(id -u)" != 0 ]; then
+# It adds a user and writes root's ~/.ssh: never outside a container, and
+# not in a toolbox (which shares the host's home and more).
+if [ ! -e /run/.containerenv ] || [ -e /run/.toolboxenv ] || [ "$(id -u)" != 0 ]; then
     echo "kio-sftp-test: run this through scripts/dev.sh (a throwaway container, as root)" >&2
     exit 2
 fi
@@ -25,6 +26,7 @@ fi
 
 work=$(mktemp -d /var/tmp/np-sftp.XXXXXX)
 sshd_pid=
+made_user=
 ssh_dir=/nonexistent-never-removed
 # shellcheck disable=SC2329 # called by the trap below
 cleanup() {
@@ -40,7 +42,7 @@ cleanup() {
             kill -KILL "${p#/proc/}" 2>/dev/null
     done
     sleep 1
-    userdel -r np-sftp >/dev/null 2>&1
+    [ -n "$made_user" ] && userdel -r np-sftp >/dev/null 2>&1
     local _
     for _ in 1 2 3; do
         rm -rf "$work" "$ssh_dir" 2>/dev/null && [ ! -e "$work" ] && break
@@ -66,6 +68,7 @@ export HOME="$home"
 # sshd (without PAM) won't let a locked account in, and root's is: the server
 # side runs as its own user, in the same file system as the tests.
 useradd -m -s /bin/bash -p '*' np-sftp || { echo "kio-sftp-test: can't add the np-sftp user" >&2; exit 2; }
+made_user=1
 chmod 755 "$work"; chmod 777 "$work/files"
 ssh-keygen -q -t ed25519 -N '' -f "$ssh_dir/id_ed25519"
 ssh-keygen -q -t ed25519 -N '' -f "$work/server/host_key"
