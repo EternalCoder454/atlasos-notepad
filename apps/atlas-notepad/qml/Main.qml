@@ -1022,8 +1022,11 @@ QQC2.ApplicationWindow {
     function openFiles() {
         root.documents.openDialog(root.document && root.document.path.length > 0 ? root.document.folder : "", [qsTr("Text documents (*.txt *.md *.markdown *.log)"), qsTr("All files (*)")]);
     }
+    // "All files" comes first: the KDE dialog's "automatically select
+    // filename extension" would add .txt after a typed "name.txt". The
+    // suggested name already has the right extension.
     function saveAs(doc) {
-        root.documents.saveAsDialog(doc, doc.path.length > 0 ? doc.folder : "", doc.suggestedFileName(), doc.markdown ? [qsTr("Markdown (*.md)"), qsTr("Text documents (*.txt)"), qsTr("All files (*)")] : [qsTr("Text documents (*.txt)"), qsTr("Markdown (*.md)"), qsTr("All files (*)")]);
+        root.documents.saveAsDialog(doc, doc.path.length > 0 ? doc.folder : "", doc.suggestedFileName(), [qsTr("All files (*)"), qsTr("Text documents (*.txt)"), qsTr("Markdown (*.md)")]);
     }
 
     // Saves `doc`, then runs `then` once it saved.

@@ -7,6 +7,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QPointer>
+#include <QStandardPaths>
 #include <QUrl>
 
 #include <cerrno>
@@ -307,6 +308,13 @@ static QFileDialog *newFileDialog(QWindow *parent, const QString &title, const Q
     dialog->setNameFilters(nameFilters);
     if (folder.isValid() && !folder.isEmpty()) {
         dialog->setDirectoryUrl(folder);
+    } else {
+        // No folder (an untitled tab): Documents, or home.
+        QString start = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        if (start.isEmpty() || !QFileInfo(start).isDir()) {
+            start = QDir::homePath();
+        }
+        dialog->setDirectoryUrl(QUrl::fromLocalFile(start));
     }
     dialog->winId();
     if (parent && dialog->windowHandle()) {
@@ -332,7 +340,10 @@ void DocumentList::saveAsDialog(Document *document, const QUrl &folder, const QS
     QFileDialog *dialog = newFileDialog(d->window, tr("Save As"), folder, nameFilters);
     dialog->setAcceptMode(QFileDialog::AcceptSave);
     dialog->setFileMode(QFileDialog::AnyFile);
-    dialog->selectFile(fileName);
+    // A full URL (folder and name), so a remote folder keeps its server.
+    QUrl full = folder.isValid() && !folder.isEmpty() ? folder : dialog->directoryUrl();
+    full.setPath(QDir::cleanPath(full.path() + QLatin1Char('/') + fileName));
+    dialog->selectUrl(full);
     const QPointer<Document> guard(document);
     auto chosen = std::make_shared<bool>(false);
     connect(dialog, &QFileDialog::urlSelected, this, [guard, chosen](const QUrl &url) {

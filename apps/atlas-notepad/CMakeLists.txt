@@ -120,7 +120,8 @@ if(BUILD_TESTING)
         set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     else()
         add_test(NAME app_test COMMAND app_test)
-        set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NP_TEST_NO_BUS=1")
+        set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NP_TEST_NO_BUS=1"
+            ENVIRONMENT_MODIFICATION "DBUS_SESSION_BUS_ADDRESS=unset:")
     endif()
 endif()
 
