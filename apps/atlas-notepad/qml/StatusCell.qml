@@ -19,6 +19,11 @@ T.AbstractButton {
     property QtObject menu: null
     // Set by StatusBar.refresh(); the slim line draws no separators.
     property bool leadingSeparator: false
+    // The theme's small font, and never bigger than 85% of the body text.
+    readonly property font smallFont: Qt.font({
+        family: Kirigami.Theme.defaultFont.family,
+        pointSize: Math.max(6, Math.min(Kirigami.Theme.smallFont.pointSize, Kirigami.Theme.defaultFont.pointSize * 0.85))
+    })
 
     implicitWidth: row.implicitWidth + leftPadding + rightPadding
     implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.2)
@@ -55,14 +60,14 @@ T.AbstractButton {
             Symbol {
                 visible: control.symbol.length > 0
                 name: control.symbol
-                size: Math.round(Kirigami.Theme.smallFont.pixelSize > 0 ? Kirigami.Theme.smallFont.pixelSize * 1.25 : Kirigami.Theme.smallFont.pointSize * 1.7)
+                size: Math.round(control.smallFont.pointSize * 1.7)
                 opacity: 0.8
                 anchors.verticalCenter: parent.verticalCenter
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: control.text
-                font: Kirigami.Theme.smallFont
+                font: control.smallFont
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
                 color: Kirigami.Theme.textColor

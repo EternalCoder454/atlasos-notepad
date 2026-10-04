@@ -25,7 +25,7 @@ Item {
     property real topInset: 0
 
     readonly property real edgeMargin: Math.round(Kirigami.Units.smallSpacing * 2)
-    readonly property real buttonSize: Math.round(Kirigami.Units.gridUnit * 1.5)
+    readonly property real buttonSize: Math.round(Kirigami.Units.gridUnit * 1.4)
     readonly property real inset: Math.round(Kirigami.Units.smallSpacing * 1.5)
     // Room the editor keeps free at its right edge.
     readonly property real reserve: width + edgeMargin * 2
@@ -37,7 +37,7 @@ Item {
 
     signal editorFocusRequested
 
-    width: Math.round(Kirigami.Units.gridUnit * 2)
+    width: Math.round(Kirigami.Units.gridUnit * 2.2)
     height: Math.min(column.implicitHeight + inset * 2, (parent ? parent.height : 0) - topInset - edgeMargin * 2)
     anchors.right: parent ? parent.right : undefined
     anchors.rightMargin: edgeMargin
@@ -61,9 +61,9 @@ Item {
         implicitWidth: capsule.buttonSize
         implicitHeight: capsule.buttonSize
         symbol: iconName
-        text: command.text.replace("&", "")
-        shortcutText: App.shortcutText(command.keys ?? command.shortcut)
-        enabled: command.enabled
+        text: command ? command.text.replace("&", "") : ""
+        shortcutText: command ? App.shortcutText(command.keys ?? command.shortcut) : ""
+        enabled: command ? command.enabled : false
         onClicked: command.trigger()
     }
     component Divider: Rectangle {
@@ -78,9 +78,9 @@ Item {
     // ours (the action's own is bound to the setting it toggles).
     component Entry: ContextMenuItem {
         property QQC2.Action command
-        text: command.text.replace("&", "")
-        shortcutText: App.shortcutText(command.keys ?? command.shortcut)
-        enabled: command.enabled
+        text: command ? command.text.replace("&", "") : ""
+        shortcutText: command ? App.shortcutText(command.keys ?? command.shortcut) : ""
+        enabled: command ? command.enabled : false
         onTriggered: command.trigger()
     }
     // Opens `menu` to the left of `button`, clear of the capsule.

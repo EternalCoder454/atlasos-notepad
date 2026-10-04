@@ -165,7 +165,7 @@ FocusScope {
         }
         QQC2.ScrollBar.horizontal: SlimScrollBar {
             parent: flick.parent
-            visible: !view.settings.wordWrap
+            policy: view.settings.wordWrap ? QQC2.ScrollBar.AlwaysOff : QQC2.ScrollBar.AsNeeded
             x: flick.x
             y: flick.y + flick.height - height
             width: flick.width

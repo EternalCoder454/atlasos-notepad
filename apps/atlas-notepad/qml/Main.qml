@@ -530,6 +530,7 @@ QQC2.ApplicationWindow {
         onActivated: root.settingsOpen = false
     }
 
+
     // --- Menus.
 
     GlobalMenu {
@@ -791,138 +792,145 @@ QQC2.ApplicationWindow {
         id: toast
     }
 
-    footer: StatusBar {
+    // Opaque: the window's last, partly covered pixel row at a fractional
+    // scale showed stale pixels over a see-through footer.
+    footer: Rectangle {
         visible: root.settings.statusBar && !root.settingsOpen && root.document !== null
         implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.2) + 1
+        color: Kirigami.Theme.backgroundColor
 
-        // Left: save state, position, size of the text.
-        StatusCell {
-            readonly property bool saving: root.document !== null && root.document.saving
-            readonly property bool modified: root.document !== null && root.document.modified
-            readonly property bool saved: root.document !== null && root.document.path.length > 0 && !modified && !saving
-            visible: text.length > 0
-            text: saving ? qsTr("Saving…") : modified ? qsTr("Edited") : saved ? qsTr("Saved") : ""
-            symbol: saved ? "check" : ""
-        }
-        StatusCell {
-            readonly property point lineColumn: {
-                const edit = root.view && root.document ? root.view.edit : null;
-                return edit ? root.document.lineColumn(edit.cursorPosition) : Qt.point(1, 1);
+        StatusBar {
+            anchors.fill: parent
+
+            // Left: save state, position, size of the text.
+            StatusCell {
+                readonly property bool saving: root.document !== null && root.document.saving
+                readonly property bool modified: root.document !== null && root.document.modified
+                readonly property bool saved: root.document !== null && root.document.path.length > 0 && !modified && !saving
+                visible: text.length > 0
+                text: saving ? qsTr("Saving…") : modified ? qsTr("Edited") : saved ? qsTr("Saved") : ""
+                symbol: saved ? "check" : ""
             }
-            text: qsTr("Ln %1, Col %2").arg(lineColumn.x).arg(lineColumn.y)
-            clickable: true
-            toolTip: goToAction.text
-            onClicked: goToAction.trigger()
-        }
-        StatusCell {
-            // Words for Markdown, characters for plain text; a selection
-            // shows its own count. A very large selection is counted in
-            // characters, to keep the cursor moving.
-            readonly property int selected: root.view ? root.view.edit.selectionEnd - root.view.edit.selectionStart : 0
-            readonly property int total: root.document ? root.document.characterCount : 0
-            readonly property int words: root.document ? root.document.wordCount : 0
-            readonly property bool byWords: root.markdown && selected <= 50000
-            readonly property int selectedWords: byWords && selected > 0 ? (root.view.edit.selectedText.match(/\S+/g) ?? []).length : 0
-            function num(n) {
-                return n.toLocaleString(Qt.locale(), "f", 0);
+            StatusCell {
+                readonly property point lineColumn: {
+                    const edit = root.view && root.document ? root.view.edit : null;
+                    return edit ? root.document.lineColumn(edit.cursorPosition) : Qt.point(1, 1);
+                }
+                text: qsTr("Ln %1, Col %2").arg(lineColumn.x).arg(lineColumn.y)
+                clickable: true
+                toolTip: goToAction.text
+                onClicked: goToAction.trigger()
             }
-            text: byWords ? (selected > 0 ? qsTr("%1 of %2 words").arg(num(selectedWords)).arg(num(words)) : words === 1 ? qsTr("1 word") : qsTr("%1 words").arg(num(words)))
-                : selected > 0 ? qsTr("%1 of %2 characters").arg(num(selected)).arg(num(total))
-                : total === 1 ? qsTr("1 character") : qsTr("%1 characters").arg(num(total))
-            toolTip: root.document ? (byWords ? qsTr("%1 characters, %2 line(s)") : qsTr("%1 words, %2 line(s)")).arg(num(byWords ? total : words)).arg(num(root.document.lineCount)) : ""
-        }
-        Item {
-            Layout.fillWidth: true
-        }
-        // Right: where a remote file is, zoom (only when changed), line
-        // endings, encoding.
-        StatusCell {
-            visible: root.document !== null && root.document.isRemote
-            symbol: "cloud"
-            text: root.document ? root.document.host : ""
-            toolTip: root.document ? root.document.toolTip : ""
-        }
-        StatusCell {
-            visible: root.settings.zoom !== 100
-            text: qsTr("%1%").arg(root.settings.zoom)
-            clickable: true
-            toolTip: qsTr("Zoom")
-            menu: ContextMenu {
-                ContextMenuItem {
-                    action: zoomInAction
-                    shortcutText: "Ctrl++"
+            StatusCell {
+                // Words for Markdown, characters for plain text; a selection
+                // shows its own count. A very large selection is counted in
+                // characters, to keep the cursor moving.
+                readonly property int selected: root.view ? root.view.edit.selectionEnd - root.view.edit.selectionStart : 0
+                readonly property int total: root.document ? root.document.characterCount : 0
+                readonly property int words: root.document ? root.document.wordCount : 0
+                readonly property bool byWords: root.markdown && selected <= 50000
+                readonly property int selectedWords: byWords && selected > 0 ? (root.view.edit.selectedText.match(/\S+/g) ?? []).length : 0
+                function num(n) {
+                    return n.toLocaleString(Qt.locale(), "f", 0);
                 }
-                ContextMenuItem {
-                    action: zoomOutAction
-                    shortcutText: "Ctrl+-"
-                }
-                ContextMenuItem {
-                    action: zoomResetAction
-                    shortcutText: "Ctrl+0"
+                text: byWords ? (selected > 0 ? qsTr("%1 of %2 words").arg(num(selectedWords)).arg(num(words)) : words === 1 ? qsTr("1 word") : qsTr("%1 words").arg(num(words)))
+                    : selected > 0 ? qsTr("%1 of %2 characters").arg(num(selected)).arg(num(total))
+                    : total === 1 ? qsTr("1 character") : qsTr("%1 characters").arg(num(total))
+                toolTip: root.document ? (byWords ? qsTr("%1 characters, %2 line(s)") : qsTr("%1 words, %2 line(s)")).arg(num(byWords ? total : words)).arg(num(root.document.lineCount)) : ""
+            }
+            Item {
+                Layout.fillWidth: true
+            }
+            // Right: where a remote file is, zoom (only when changed), line
+            // endings, encoding.
+            StatusCell {
+                visible: root.document !== null && root.document.isRemote
+                symbol: "cloud"
+                text: root.document ? root.document.host : ""
+                toolTip: root.document ? root.document.toolTip : ""
+            }
+            StatusCell {
+                visible: root.settings.zoom !== 100
+                text: qsTr("%1%").arg(root.settings.zoom)
+                clickable: true
+                toolTip: qsTr("Zoom")
+                menu: ContextMenu {
+                    ContextMenuItem {
+                        action: zoomInAction
+                        shortcutText: "Ctrl++"
+                    }
+                    ContextMenuItem {
+                        action: zoomOutAction
+                        shortcutText: "Ctrl+-"
+                    }
+                    ContextMenuItem {
+                        action: zoomResetAction
+                        shortcutText: "Ctrl+0"
+                    }
                 }
             }
-        }
-        StatusCell {
-            text: !root.document ? "" : root.document.lineEnding === Document.CrLf ? qsTr("CRLF") : root.document.lineEnding === Document.Cr ? qsTr("CR") : qsTr("LF")
-            clickable: root.editable
-            toolTip: qsTr("Line endings")
-            menu: ContextMenu {
-                Repeater {
-                    model: [
-                        [Document.Lf, qsTr("Unix (LF)")],
-                        [Document.CrLf, qsTr("Windows (CRLF)")],
-                        [Document.Cr, qsTr("Macintosh (CR)")]
+            StatusCell {
+                text: !root.document ? "" : root.document.lineEnding === Document.CrLf ? qsTr("CRLF") : root.document.lineEnding === Document.Cr ? qsTr("CR") : qsTr("LF")
+                clickable: root.editable
+                toolTip: qsTr("Line endings")
+                menu: ContextMenu {
+                    Repeater {
+                        model: [
+                            [Document.Lf, qsTr("Unix (LF)")],
+                            [Document.CrLf, qsTr("Windows (CRLF)")],
+                            [Document.Cr, qsTr("Macintosh (CR)")]
+                        ]
+                        delegate: ContextMenuItem {
+                            required property var modelData
+                            text: modelData[1]
+                            checkable: true
+                            checked: root.document !== null && root.document.lineEnding === modelData[0]
+                            onTriggered: root.document.lineEnding = modelData[0]
+                        }
+                    }
+                }
+            }
+            StatusCell {
+                text: root.document ? root.document.encodingName : ""
+                clickable: true
+                toolTip: qsTr("Encoding")
+                menu: ContextMenu {
+                    id: encodingMenu
+                    readonly property var encodings: [
+                        [Document.Utf8, "UTF-8"],
+                        [Document.Utf8Bom, qsTr("UTF-8 with BOM")],
+                        [Document.Utf16Le, "UTF-16 LE"],
+                        [Document.Utf16Be, "UTF-16 BE"],
+                        [Document.Windows1252, "Windows-1252"]
                     ]
-                    delegate: ContextMenuItem {
-                        required property var modelData
-                        text: modelData[1]
-                        checkable: true
-                        checked: root.document !== null && root.document.lineEnding === modelData[0]
-                        onTriggered: root.document.lineEnding = modelData[0]
+                    ContextMenuItem {
+                        text: qsTr("Save With")
+                        enabled: false
                     }
-                }
-            }
-        }
-        StatusCell {
-            text: root.document ? root.document.encodingName : ""
-            clickable: true
-            toolTip: qsTr("Encoding")
-            menu: ContextMenu {
-                id: encodingMenu
-                readonly property var encodings: [
-                    [Document.Utf8, "UTF-8"],
-                    [Document.Utf8Bom, qsTr("UTF-8 with BOM")],
-                    [Document.Utf16Le, "UTF-16 LE"],
-                    [Document.Utf16Be, "UTF-16 BE"],
-                    [Document.Windows1252, "Windows-1252"]
-                ]
-                ContextMenuItem {
-                    text: qsTr("Save With")
-                    enabled: false
-                }
-                Repeater {
-                    model: encodingMenu.encodings
-                    delegate: ContextMenuItem {
-                        required property var modelData
-                        text: modelData[1]
-                        checkable: true
-                        enabled: root.editable
-                        checked: root.document !== null && root.document.encoding === modelData[0]
-                        onTriggered: root.document.encoding = modelData[0]
+                    Repeater {
+                        model: encodingMenu.encodings
+                        delegate: ContextMenuItem {
+                            required property var modelData
+                            text: modelData[1]
+                            checkable: true
+                            enabled: root.editable
+                            checked: root.document !== null && root.document.encoding === modelData[0]
+                            onTriggered: root.document.encoding = modelData[0]
+                        }
                     }
-                }
-                ContextMenuSeparator {}
-                ContextMenuItem {
-                    text: qsTr("Reopen With")
-                    enabled: false
-                }
-                Repeater {
-                    model: encodingMenu.encodings
-                    delegate: ContextMenuItem {
-                        required property var modelData
-                        text: modelData[1]
-                        enabled: root.document !== null && root.document.path.length > 0 && !root.document.modified
-                        onTriggered: root.document.reopenWithEncoding(modelData[0])
+                    ContextMenuSeparator {}
+                    ContextMenuItem {
+                        text: qsTr("Reopen With")
+                        enabled: false
+                    }
+                    Repeater {
+                        model: encodingMenu.encodings
+                        delegate: ContextMenuItem {
+                            required property var modelData
+                            text: modelData[1]
+                            enabled: root.document !== null && root.document.path.length > 0 && !root.document.modified
+                            onTriggered: root.document.reopenWithEncoding(modelData[0])
+                        }
                     }
                 }
             }

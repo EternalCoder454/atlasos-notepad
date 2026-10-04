@@ -83,7 +83,11 @@ Item {
                 contentItem: Text {
                     id: label
                     text: side.text
-                    font: Kirigami.Theme.smallFont
+                    // The theme's small font, and never bigger than 85% of the body text.
+                    font: Qt.font({
+                        family: Kirigami.Theme.defaultFont.family,
+                        pointSize: Math.max(6, Math.min(Kirigami.Theme.smallFont.pointSize, Kirigami.Theme.defaultFont.pointSize * 0.85))
+                    })
                     textFormat: Text.PlainText
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
