@@ -133,6 +133,11 @@ class Document : public QObject
     Q_PROPERTY(bool modified READ isModified NOTIFY modifiedChanged)
     // Reading the file (or the session's copy) has not finished.
     Q_PROPERTY(bool loading READ isLoading NOTIFY loadingChanged)
+    // A remote file is being fetched: loadPercent is how far (-1: unknown),
+    // cancelLoad() stops it.
+    Q_PROPERTY(bool fetching READ isFetching NOTIFY loadingChanged)
+    Q_PROPERTY(int loadPercent READ loadPercent NOTIFY loadProgressChanged)
+    Q_PROPERTY(bool saving READ isSaving NOTIFY savingChanged)
     // A Markdown file (.md, .markdown, .mdown, .mkd), or an untitled tab.
     // False when Settings.formatting is off or the text is over the
     // Formatted view's size limit.
@@ -201,6 +206,11 @@ public:
     QString toolTip() const;
     bool isModified() const;
     bool isLoading() const;
+    bool isFetching() const;
+    int loadPercent() const;
+    bool isSaving() const;
+    // First open: closes the tab. A reload: keeps the text.
+    Q_INVOKABLE void cancelLoad();
     bool isMarkdown() const;
     bool isProse() const;
     bool isFormatted() const;
@@ -276,6 +286,8 @@ Q_SIGNALS:
     void pathChanged();
     void modifiedChanged();
     void loadingChanged();
+    void loadProgressChanged();
+    void savingChanged();
     void markdownChanged();
     void proseChanged();
     void formattedChanged();

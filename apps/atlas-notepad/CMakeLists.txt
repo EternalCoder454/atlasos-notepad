@@ -16,6 +16,7 @@ find_package(KF6DBusAddons REQUIRED)
 find_package(KF6WindowSystem REQUIRED)
 find_package(KF6Sonnet REQUIRED)
 find_package(KF6KIO REQUIRED)
+find_package(KF6GuiAddons REQUIRED)
 find_package(Corrosion REQUIRED)
 
 set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
@@ -49,7 +50,7 @@ set(APP_LIBS
     atlas_notepad
     Qt6::Core Qt6::Concurrent Qt6::DBus Qt6::Gui Qt6::PrintSupport Qt6::Qml Qt6::Quick
     Qt6::QuickControls2 Qt6::Widgets KF6::DBusAddons KF6::WindowSystem KF6::SonnetCore
-    KF6::KIOCore KF6::KIOGui)
+    KF6::KIOCore KF6::KIOGui KF6::GuiAddons)
 
 qt_add_executable(atlas-notepad-app cpp/main.cpp cpp/bench.h cpp/bench.cpp)
 set_target_properties(atlas-notepad-app PROPERTIES OUTPUT_NAME atlas-notepad)

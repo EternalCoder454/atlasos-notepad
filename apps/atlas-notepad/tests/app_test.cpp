@@ -411,7 +411,10 @@ private Q_SLOTS:
         if (!doc || !doc->isRemote()) {
             return nullptr;
         }
-        return QTest::qWaitFor([&] { return !doc->isLoading(); }, 20000) ? doc : nullptr;
+        // A refused open closes the tab: don't touch it once it's gone.
+        QPointer<Document> guard = doc;
+        const bool done = QTest::qWaitFor([&] { return !guard || !guard->isLoading(); }, 20000);
+        return done && guard ? doc : nullptr;
     }
 
     void kioRoundTrip()
@@ -468,6 +471,7 @@ private Q_SLOTS:
         list->open({QUrl(QStringLiteral("nosuchscheme://host/x.txt"))});
         QCOMPARE(failed.size(), 4);
         QTRY_COMPARE(list->rowCount(), tabs); // refused tabs are gone again
+        QVERIFY(!list->canReopenClosed()); // and aren't offered back
     }
 
     void kioConflictAndFailure()
@@ -501,6 +505,123 @@ private Q_SLOTS:
         QCOMPARE(doc->banner(), Document::SaveFailed);
         QVERIFY(doc->isModified());
         QCOMPARE(doc->text(), QStringLiteral("more mine one\n"));
+    }
+
+    void kioCancelFirstOpenLeavesNoClosedTab()
+    {
+        Remote::setForceKio(true);
+        DocumentList *list = newList();
+        const int tabs = list->rowCount();
+        const QString path = write(QStringLiteral("cancel.txt"), "x\n");
+        list->open({QUrl::fromLocalFile(path)});
+        Document *doc = list->current();
+        QVERIFY(doc);
+        QVERIFY(doc->isFetching()); // the stat hasn't come back yet
+        QPointer<Document> guard = doc;
+        doc->cancelLoad();
+        QCOMPARE(list->rowCount(), tabs);
+        QVERIFY(!list->canReopenClosed());
+        QTRY_VERIFY(!guard);
+    }
+
+    // ---- sftp, against a real sshd: scripts/kio-sftp-test.sh sets
+    // NP_KIO_TEST_BASE=sftp://user@127.0.0.1:2222/<folder the test may use>.
+    static QUrl sftpUrl(const QString &name)
+    {
+        QUrl url(qEnvironmentVariable("NP_KIO_TEST_BASE"));
+        url.setPath(url.path() + QLatin1Char('/') + name);
+        return url;
+    }
+    // The same folder as the server sees it, to set files up and check them.
+    static QString sftpLocal(const QString &name)
+    {
+        return QUrl(qEnvironmentVariable("NP_KIO_TEST_BASE")).path() + QLatin1Char('/') + name;
+    }
+    Document *openSftp(DocumentList *list, const QString &name)
+    {
+        list->open({sftpUrl(name)});
+        Document *doc = list->current();
+        if (!doc || !doc->isRemote()) {
+            return nullptr;
+        }
+        QPointer<Document> guard = doc;
+        const bool done = QTest::qWaitFor([&] { return !guard || !guard->isLoading(); }, 30000);
+        return done && guard ? doc : nullptr;
+    }
+    static void putFile(const QString &path, const QByteArray &bytes)
+    {
+        QDir().mkpath(QFileInfo(path).path());
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(bytes);
+    }
+
+    void sftpRoundTrip()
+    {
+        if (qEnvironmentVariableIsEmpty("NP_KIO_TEST_BASE")) {
+            QSKIP("needs a sftp server: scripts/kio-sftp-test.sh");
+        }
+        const QByteArray bytes = utf16(QStringLiteral("h\u00e9llo\r\nsftp\r\n"), true);
+        putFile(sftpLocal(QStringLiteral("rt.txt")), bytes);
+        Document *doc = openSftp(newList(), QStringLiteral("rt.txt"));
+        QVERIFY(doc);
+        QCOMPARE(doc->text(), QStringLiteral("h\u00e9llo\nsftp\n"));
+        QCOMPARE(int(doc->encoding()), int(NP_UTF16_BE));
+        attach(doc);
+        insert(doc, 0, QStringLiteral("X"));
+        QVERIFY(saveAndWait(doc));
+        QVERIFY(!doc->isModified());
+        QCOMPARE(read(sftpLocal(QStringLiteral("rt.txt"))), utf16(QStringLiteral("Xh\u00e9llo\r\nsftp\r\n"), true));
+        newList()->closeDocument(doc);
+        Document *again = openSftp(newList(), QStringLiteral("rt.txt"));
+        QVERIFY(again);
+        QCOMPARE(again->text(), QStringLiteral("Xh\u00e9llo\nsftp\n"));
+        QVERIFY(!again->isModified());
+        // No edit, a save: the bytes are the ones that were read.
+        attach(again);
+        insert(again, 0, QStringLiteral("Y"));
+        QVERIFY(saveAndWait(again));
+        QCOMPARE(read(sftpLocal(QStringLiteral("rt.txt"))), utf16(QStringLiteral("YXh\u00e9llo\r\nsftp\r\n"), true));
+    }
+
+    void sftpConflictMissingAndReadOnly()
+    {
+        if (qEnvironmentVariableIsEmpty("NP_KIO_TEST_BASE")) {
+            QSKIP("needs a sftp server: scripts/kio-sftp-test.sh");
+        }
+        DocumentList *list = newList();
+        // Changed on the server after it was read.
+        putFile(sftpLocal(QStringLiteral("cf.txt")), "one\n");
+        Document *doc = openSftp(list, QStringLiteral("cf.txt"));
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("mine "));
+        QFile other(sftpLocal(QStringLiteral("cf.txt")));
+        QVERIFY(other.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        other.write("theirs\n");
+        QVERIFY(other.setFileTime(QDateTime::currentDateTimeUtc().addSecs(60), QFileDevice::FileModificationTime));
+        other.close();
+        QSignalSpy failed(doc, &Document::saveFailed);
+        doc->save();
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 30000);
+        QCOMPARE(doc->banner(), Document::ChangedOnDisk);
+        QCOMPARE(read(sftpLocal(QStringLiteral("cf.txt"))), QByteArray("theirs\n"));
+        doc->keepMine();
+        QVERIFY(saveAndWait(doc));
+        QCOMPARE(read(sftpLocal(QStringLiteral("cf.txt"))), QByteArray("mine one\n"));
+
+        // A file that isn't there.
+        QSignalSpy openFailed(list, &DocumentList::openFailed);
+        list->open({sftpUrl(QStringLiteral("nothing-here.txt"))});
+        QTRY_COMPARE_WITH_TIMEOUT(openFailed.size(), 1, 30000);
+        QVERIFY(openFailed.last().at(0).toString().contains(QStringLiteral("doesn't exist")));
+
+        // A read-only file: the banner that offers Save As, and no write.
+        putFile(sftpLocal(QStringLiteral("ro.txt")), "fixed\n");
+        QVERIFY(QFile::setPermissions(sftpLocal(QStringLiteral("ro.txt")), QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther));
+        Document *ro = openSftp(list, QStringLiteral("ro.txt"));
+        QVERIFY(ro);
+        QCOMPARE(ro->banner(), Document::ReadOnlyFile);
     }
 
     void kioSessionStripsPassword()

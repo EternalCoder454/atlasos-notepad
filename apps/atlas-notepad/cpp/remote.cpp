@@ -3,11 +3,11 @@
 #include <KIO/Job>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/StatJob>
+#include <KJobWindows>
 #include <KProtocolInfo>
 #include <KProtocolManager>
 
 #include <QGuiApplication>
-#include <QWidget>
 #include <QWindow>
 
 #include <cerrno>
@@ -81,37 +81,13 @@ QString nameAndHost(const QUrl &url)
     return QObject::tr("%1 — %2").arg(name, url.host());
 }
 
-void setup(KJob *job)
+void setup(KJob *job, QWindow *window)
 {
-    // One invisible widget stands in for the Quick window, which KIO's
-    // dialogs can't take as a parent: it is transient for the active window,
-    // so a dialog opens over it.
-    static QWidget *proxy = nullptr;
-    if (!proxy) {
-        proxy = new QWidget;
-        proxy->setAttribute(Qt::WA_NativeWindow);
-        proxy->setAttribute(Qt::WA_DontShowOnScreen);
-    }
-    QWindow *active = QGuiApplication::focusWindow();
-    if (!active) {
-        const auto windows = QGuiApplication::topLevelWindows();
-        for (QWindow *w : windows) {
-            if (w->isVisible() && w != proxy->windowHandle()) {
-                active = w;
-                break;
-            }
-        }
-    }
-    if (active && proxy->windowHandle() != active) {
-        proxy->winId();
-        if (proxy->windowHandle()) {
-            proxy->windowHandle()->setTransientParent(active);
-        }
-    }
-    job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, proxy));
+    job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingDisabled, nullptr));
+    KJobWindows::setWindow(job, window ? window : QGuiApplication::focusWindow());
 }
 
-KJob *stat(const QUrl &url, QObject *ctx, std::function<void(const StatInfo &)> done)
+KJob *stat(const QUrl &url, QObject *ctx, QWindow *window, std::function<void(const StatInfo &)> done)
 {
     KIO::StatJob *job = KIO::stat(url, KIO::StatJob::SourceSide, KIO::StatDefaultDetails, KIO::HideProgressInfo);
     if (!job) {
@@ -121,7 +97,7 @@ KJob *stat(const QUrl &url, QObject *ctx, std::function<void(const StatInfo &)> 
         done(info);
         return nullptr;
     }
-    setup(job);
+    setup(job, window);
     QObject::connect(job, &KJob::result, ctx, [job, done = std::move(done)] {
         StatInfo info;
         if (job->error()) {

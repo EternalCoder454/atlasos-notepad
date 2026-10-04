@@ -10,6 +10,7 @@
 #include <QFileSystemWatcher>
 #include <QFutureWatcher>
 #include <QGuiApplication>
+#include <QQuickWindow>
 #include <QQuickTextDocument>
 #include <QRegularExpression>
 #include <QStandardPaths>
@@ -1220,7 +1221,7 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
 
 void Document::Private::startSave()
 {
-    saving = true;
+    setSaving(true);
     SaveSnapshot snapshot{q->text(), revision(), editGeneration, path, url};
     if (isRemote()) {
         startSaveRemote(snapshot);
@@ -1245,7 +1246,7 @@ void Document::Private::startSave()
 
 void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snapshot)
 {
-    saving = false;
+    setSaving(false);
     if (r.rc == 0) {
         stamp = r.stamp;
         hasStamp = !r.noStamp;
@@ -1368,6 +1369,61 @@ void Document::Private::setRemote(const QUrl &remote)
     }
 }
 
+QWindow *Document::Private::window() const
+{
+    return textEdit ? textEdit->window() : nullptr;
+}
+
+void Document::Private::setPercent(int value)
+{
+    if (value != percent) {
+        percent = value;
+        Q_EMIT q->loadProgressChanged();
+    }
+}
+
+void Document::Private::setSaving(bool on)
+{
+    if (saving != on) {
+        saving = on;
+        Q_EMIT q->savingChanged();
+    }
+}
+
+bool Document::isFetching() const
+{
+    return d->isRemote() && d->loading;
+}
+
+int Document::loadPercent() const
+{
+    return d->percent;
+}
+
+bool Document::isSaving() const
+{
+    return d->saving;
+}
+
+void Document::cancelLoad()
+{
+    if (!isFetching()) {
+        return;
+    }
+    ++d->loadGeneration; // what the jobs still say is ignored
+    d->cancelRemote();
+    d->setPercent(-1);
+    if (!d->loaded && d->announceOpen) {
+        // A first open: nothing was ever shown, so the tab goes (and isn't
+        // offered by Reopen Closed Tab).
+        d->list->closeDocument(this);
+        return;
+    }
+    // A reload (or a restored tab): the text stays, loading ends.
+    d->loading = false;
+    d->syncLoading();
+}
+
 void Document::Private::cancelRemote()
 {
     if (remoteJob) {
@@ -1402,10 +1458,12 @@ void Document::Private::startRemoteLoad(LoadMode mode, int forcedEncoding, int g
 {
     cancelRemote();
     const QString unsupportedReason = Remote::unsupported(url, false);
+    setPercent(-1);
     auto done = [this, mode, gen](const LoadResult &r) {
         if (gen != loadGeneration) {
             return;
         }
+        setPercent(-1);
         if (mode == Initial && announceOpen && (r.error || r.tooLarge || r.isDir)) {
             DocumentList *owner = list;
             Q_EMIT owner->openFailed(remoteOpenFailure(QFileInfo(path).fileName(), r));
@@ -1426,7 +1484,7 @@ void Document::Private::startRemoteLoad(LoadMode mode, int forcedEncoding, int g
         QTimer::singleShot(0, q, [done, r] { done(r); });
         return;
     }
-    remoteJob = Remote::stat(url, q, [this, gen, forcedEncoding, done](const Remote::StatInfo &st) {
+    remoteJob = Remote::stat(url, q, window(), [this, gen, forcedEncoding, done](const Remote::StatInfo &st) {
         if (gen != loadGeneration) {
             return;
         }
@@ -1451,12 +1509,16 @@ void Document::Private::startRemoteLoad(LoadMode mode, int forcedEncoding, int g
             return;
         }
         KIO::StoredTransferJob *job = KIO::storedGet(url, KIO::NoReload, KIO::HideProgressInfo);
-        Remote::setup(job);
+        Remote::setup(job, window());
         remoteJob = job;
         auto received = std::make_shared<qint64>(0);
-        QObject::connect(job, &KIO::TransferJob::data, q, [job, received, done, r](KIO::Job *, const QByteArray &chunk) mutable {
+        const qint64 expected = qint64(st.stamp.size);
+        QObject::connect(job, &KIO::TransferJob::data, q, [this, gen, job, received, expected, done, r](KIO::Job *, const QByteArray &chunk) mutable {
             const bool already = *received > Limits::fileBytes;
             *received += chunk.size();
+            if (gen == loadGeneration && expected > 0) {
+                setPercent(int(qMin<qint64>(99, *received * 100 / expected)));
+            }
             if (*received > Limits::fileBytes && !already) {
                 // The stat said less than this: stop the transfer.
                 job->kill(KJob::Quietly);
@@ -1499,7 +1561,7 @@ void Document::Private::checkRemote(bool force)
         return;
     }
     lastRemoteCheck.start();
-    checkJob = Remote::stat(url, q, [this](const Remote::StatInfo &st) {
+    checkJob = Remote::stat(url, q, window(), [this](const Remote::StatInfo &st) {
         checkJob = nullptr;
         if (saving || isLoading()) {
             recheck = true;
@@ -1538,10 +1600,10 @@ void Document::Private::saveRemote()
         return;
     }
     // The file as it is now against the one this text came from.
-    saving = true;
-    checkJob = Remote::stat(url, q, [this](const Remote::StatInfo &st) {
+    setSaving(true);
+    checkJob = Remote::stat(url, q, window(), [this](const Remote::StatInfo &st) {
         checkJob = nullptr;
-        saving = false;
+        setSaving(false);
         resave = false;
         if (!st.error && !sameStamp(st.stamp, stamp)) {
             setBanner(ChangedOnDisk);
@@ -1571,7 +1633,7 @@ void Document::Private::startSaveRemote(const SaveSnapshot &snapshot)
             return;
         }
         KIO::StoredTransferJob *job = KIO::storedPut(encoded.bytes, snapshot.url, -1, KIO::Overwrite | KIO::HideProgressInfo);
-        Remote::setup(job);
+        Remote::setup(job, window());
         remoteJob = job;
         QObject::connect(job, &KJob::result, q, [this, job, snapshot] {
             if (job->error()) {
@@ -1582,7 +1644,7 @@ void Document::Private::startSaveRemote(const SaveSnapshot &snapshot)
                 return;
             }
             // The new mtime, so the next save and check know it as ours.
-            checkJob = Remote::stat(snapshot.url, q, [this, snapshot](const Remote::StatInfo &st) {
+            checkJob = Remote::stat(snapshot.url, q, window(), [this, snapshot](const Remote::StatInfo &st) {
                 checkJob = nullptr;
                 SaveResult r;
                 r.stamp = st.stamp;
@@ -2071,7 +2133,7 @@ void Document::keepMine()
         // unless a save got there first.
         d->hasStamp = false;
         d->cancelRemote();
-        d->checkJob = Remote::stat(d->url, this, [this](const Remote::StatInfo &st) {
+        d->checkJob = Remote::stat(d->url, this, d->window(), [this](const Remote::StatInfo &st) {
             d->checkJob = nullptr;
             if (!st.error && !d->hasStamp && !d->saving) {
                 d->stamp = st.stamp;

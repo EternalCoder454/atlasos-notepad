@@ -40,6 +40,7 @@ BuildRequires:  cmake(KF6DBusAddons)
 BuildRequires:  cmake(KF6WindowSystem)
 BuildRequires:  cmake(KF6Sonnet)
 BuildRequires:  cmake(KF6KIO)
+BuildRequires:  cmake(KF6GuiAddons)
 # the spell check tests
 BuildRequires:  hunspell-en-US
 # QML modules qmlcachegen resolves at build time (not linked). atlas-ui comes

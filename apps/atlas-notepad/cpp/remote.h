@@ -11,6 +11,7 @@
 
 class KJob;
 class QObject;
+class QWindow;
 
 namespace Remote
 {
@@ -45,10 +46,10 @@ struct StatInfo {
 // KIO::stat in the background (no progress UI). done runs on the main
 // thread unless ctx is destroyed first. The job is returned so it can be
 // killed; null when nothing could be started (done is then called at once).
-KJob *stat(const QUrl &url, QObject *ctx, std::function<void(const StatInfo &)> done);
+KJob *stat(const QUrl &url, QObject *ctx, QWindow *window, std::function<void(const StatInfo &)> done);
 
-// A UI delegate for KIO's own password and certificate prompts, parented
-// to the active window. Errors never use KMessageBox: callers read
-// errorString().
-void setup(KJob *job);
+// A UI delegate that answers KIO's own password and certificate prompts
+// (auto-handling of errors is off: errors go to banners, never KMessageBox),
+// with window as their parent, else the focused window.
+void setup(KJob *job, QWindow *window);
 } // namespace Remote

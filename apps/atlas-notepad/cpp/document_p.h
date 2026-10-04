@@ -15,6 +15,7 @@
 #include <optional>
 
 class QQuickTextDocument;
+class QWindow;
 class KJob;
 
 struct LoadResult {
@@ -78,6 +79,7 @@ struct Document::Private {
     bool loaded = true; // false: the text isn't the file's (never saved over it)
     bool keepMine = false;
     bool saving = false;
+    int percent = -1; // of a remote read, -1 when unknown
     bool resave = false; // save() asked for during a save
     bool recheck = false; // the file changed during a save or load: look again after
     bool safeMode = false; // no Markdown or spell check: a launch died restoring it
@@ -134,6 +136,9 @@ struct Document::Private {
     void applyMarkdown(qint64 bytes);
     void checkWritable();
     bool isRemote() const { return !url.isEmpty(); }
+    QWindow *window() const; // the one showing this document, or null
+    void setPercent(int value);
+    void setSaving(bool on);
     // Makes this a remote document (registers it for the focus check).
     void setRemote(const QUrl &remote);
     void startRemoteLoad(LoadMode mode, int forcedEncoding, int generation);

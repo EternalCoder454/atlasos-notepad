@@ -86,7 +86,7 @@ QQC2.ApplicationWindow {
     height: Kirigami.Units.gridUnit * 36
     minimumWidth: Kirigami.Units.gridUnit * 20
     minimumHeight: Kirigami.Units.gridUnit * 12
-    title: document ? (document.isRemote && document.host.length > 0 ? qsTr("%1 — %2 — Notepad").arg(document.title, document.host) : qsTr("%1 — Notepad").arg(document.title)) : qsTr("Notepad")
+    title: document ? (document.isRemote && document.host.length > 0 ? qsTr("%1 — %2 — Notepad").arg(document.title).arg(document.host) : qsTr("%1 — Notepad").arg(document.title)) : qsTr("Notepad")
     color: Kirigami.Theme.backgroundColor
 
     // --- Actions. The menus, the toolbar and the shortcuts all use these.
@@ -584,6 +584,17 @@ QQC2.ApplicationWindow {
             }
         }
 
+        // A remote file on its way.
+        InfoBanner {
+            id: loadBanner
+            Layout.fillWidth: true
+            Layout.margins: shown ? Kirigami.Units.smallSpacing : 0
+            shown: root.document !== null && root.document.fetching
+            type: "info"
+            text: !root.document ? "" : root.document.loadPercent >= 0 ? qsTr("Loading %1… %2%").arg(root.document.title).arg(root.document.loadPercent) : qsTr("Loading %1…").arg(root.document.title)
+            actions: [bannerCancelLoad]
+        }
+
         InfoBanner {
             id: banner
             Layout.fillWidth: true
@@ -731,6 +742,10 @@ QQC2.ApplicationWindow {
         }
         Item {
             Layout.fillWidth: true
+        }
+        StatusBarItem {
+            visible: root.document !== null && root.document.saving
+            text: qsTr("Saving…")
         }
         StatusBarItem {
             text: qsTr("%1%").arg(root.settings.zoom)
@@ -1310,6 +1325,11 @@ QQC2.ApplicationWindow {
         default:
             return [];
         }
+    }
+    KeyedAction {
+        id: bannerCancelLoad
+        text: qsTr("Cancel")
+        onTriggered: root.document.cancelLoad()
     }
     KeyedAction {
         id: bannerSaveAs
