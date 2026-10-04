@@ -1,8 +1,8 @@
 // The window's menus for Plasma's global menu (Qt.labs.platform: native
 // only, nothing shows without a global menu). Each item mirrors one of the
-// window's actions. Shortcuts stay on the actions; `withShortcuts` also puts
-// them here, for the menu to show (only one of the two may hold a shortcut,
-// or neither fires).
+// window's actions. With `withShortcuts` the items hold the actions' keys
+// (KeyedAction in Main.qml then leaves its own shortcut empty: only one of
+// the two may hold it, or neither fires).
 pragma ComponentBehavior: Bound
 
 import QtQuick
@@ -24,7 +24,7 @@ Platform.MenuBar {
         enabled: action.enabled
         checkable: action.checkable
         checked: action.checked
-        shortcut: bar.withShortcuts ? action.shortcut : undefined
+        shortcut: bar.withShortcuts ? action.keys : undefined
         onTriggered: action.trigger()
     }
     component Separator: Platform.MenuSeparator {}
@@ -43,7 +43,7 @@ Platform.MenuBar {
                 model: App.recentFiles
                 delegate: Platform.MenuItem {
                     required property string modelData
-                    text: modelData.replace(/^\/home\/[^\/]+/, "~")
+                    text: App.displayPath(modelData)
                     onTriggered: bar.openRecent(modelData)
                 }
                 onObjectAdded: (index, object) => recent.insertItem(index, object)

@@ -85,214 +85,221 @@ QQC2.ApplicationWindow {
 
     // --- Actions. The menus, the toolbar and the shortcuts all use these.
 
-    QQC2.Action {
+    // A key sequence may live on one object only, or neither fires: on the
+    // global menu's item when there is one (so the menu shows it), else here.
+    component KeyedAction: QQC2.Action {
+        property var keys
+        shortcut: App.hasGlobalMenu ? undefined : keys
+    }
+
+    KeyedAction {
         id: newTabAction
         text: qsTr("New Tab")
-        shortcut: StandardKey.New
+        keys: StandardKey.New
         onTriggered: root.documents.newTab()
     }
-    QQC2.Action {
+    KeyedAction {
         id: newWindowAction
         text: qsTr("New Window")
-        shortcut: "Ctrl+Shift+N"
+        keys: "Ctrl+Shift+N"
         onTriggered: App.newWindow()
     }
-    QQC2.Action {
+    KeyedAction {
         id: openAction
         text: qsTr("Open…")
-        shortcut: StandardKey.Open
+        keys: StandardKey.Open
         onTriggered: openDialog.open()
     }
-    QQC2.Action {
+    KeyedAction {
         id: saveAction
         text: qsTr("Save")
-        shortcut: StandardKey.Save
+        keys: StandardKey.Save
         enabled: root.document !== null && !root.document.loading && !root.document.readOnly
         onTriggered: root.document.save()
     }
-    QQC2.Action {
+    KeyedAction {
         id: saveAsAction
         text: qsTr("Save As…")
-        shortcut: "Ctrl+Shift+S"
+        keys: "Ctrl+Shift+S"
         enabled: root.document !== null && !root.document.loading && root.document.banner !== Document.TooLarge
         onTriggered: root.saveAs(root.document)
     }
-    QQC2.Action {
+    KeyedAction {
         id: saveAllAction
         text: qsTr("Save All")
-        shortcut: "Ctrl+Alt+S"
+        keys: "Ctrl+Alt+S"
         enabled: root.documents.anyModified
         onTriggered: root.saveAll()
     }
-    QQC2.Action {
+    KeyedAction {
         id: printAction
         text: qsTr("Print…")
-        shortcut: StandardKey.Print
+        keys: StandardKey.Print
         enabled: root.document !== null && !root.document.loading
         onTriggered: App.print(root.document, root)
     }
-    QQC2.Action {
+    KeyedAction {
         id: closeTabAction
         text: qsTr("Close Tab")
-        shortcut: StandardKey.Close
+        keys: StandardKey.Close
         enabled: root.documents.count > 0
         onTriggered: root.closeTab(root.documents.currentIndex)
     }
-    QQC2.Action {
+    KeyedAction {
         id: reopenTabAction
         text: qsTr("Reopen Closed Tab")
-        shortcut: "Ctrl+Shift+T"
+        keys: "Ctrl+Shift+T"
         enabled: root.documents.canReopenClosed
         onTriggered: root.documents.reopenClosed()
     }
-    QQC2.Action {
+    KeyedAction {
         id: closeWindowAction
         text: qsTr("Close Window")
-        shortcut: "Ctrl+Shift+W"
+        keys: "Ctrl+Shift+W"
         onTriggered: root.close()
     }
-    QQC2.Action {
+    KeyedAction {
         id: quitAction
         text: qsTr("Quit")
-        shortcut: StandardKey.Quit
+        keys: StandardKey.Quit
         onTriggered: App.quit()
     }
 
-    QQC2.Action {
+    KeyedAction {
         id: undoAction
         text: qsTr("Undo")
-        shortcut: StandardKey.Undo
+        keys: StandardKey.Undo
         enabled: (root.view !== null && root.view.edit.canUndo) && !root.settingsOpen
         onTriggered: root.view.edit.undo()
     }
-    QQC2.Action {
+    KeyedAction {
         id: redoAction
         text: qsTr("Redo")
-        shortcut: "Ctrl+Y"
+        keys: "Ctrl+Y"
         enabled: (root.view !== null && root.view.edit.canRedo) && !root.settingsOpen
         onTriggered: root.view.edit.redo()
     }
-    QQC2.Action {
+    KeyedAction {
         id: cutAction
         text: qsTr("Cut")
-        shortcut: StandardKey.Cut
+        keys: StandardKey.Cut
         enabled: (root.editable && root.view.edit.selectionStart !== root.view.edit.selectionEnd) && !root.settingsOpen
         onTriggered: root.view.edit.cut()
     }
-    QQC2.Action {
+    KeyedAction {
         id: copyAction
         text: qsTr("Copy")
-        shortcut: StandardKey.Copy
+        keys: StandardKey.Copy
         enabled: (root.view !== null && root.view.edit.selectionStart !== root.view.edit.selectionEnd) && !root.settingsOpen
         onTriggered: root.view.edit.copy()
     }
-    QQC2.Action {
+    KeyedAction {
         id: pasteAction
         text: qsTr("Paste")
-        shortcut: StandardKey.Paste
+        keys: StandardKey.Paste
         enabled: (root.editable && root.view.edit.canPaste) && !root.settingsOpen
         onTriggered: root.view.edit.paste()
     }
-    QQC2.Action {
+    KeyedAction {
         id: deleteAction
         text: qsTr("Delete")
         enabled: (root.editable && root.view.edit.selectionStart !== root.view.edit.selectionEnd) && !root.settingsOpen
         onTriggered: root.view.edit.remove(root.view.edit.selectionStart, root.view.edit.selectionEnd)
     }
-    QQC2.Action {
+    KeyedAction {
         id: selectAllAction
         text: qsTr("Select All")
-        shortcut: StandardKey.SelectAll
+        keys: StandardKey.SelectAll
         enabled: (root.view !== null) && !root.settingsOpen
         onTriggered: root.view.edit.selectAll()
     }
-    QQC2.Action {
+    KeyedAction {
         id: findAction
         text: qsTr("Find…")
-        shortcut: StandardKey.Find
+        keys: StandardKey.Find
         enabled: root.view !== null && !root.settingsOpen
         onTriggered: root.openFind(false)
     }
-    QQC2.Action {
+    KeyedAction {
         id: findNextAction
         text: qsTr("Find Next")
-        shortcut: StandardKey.FindNext
+        keys: StandardKey.FindNext
         enabled: (root.view !== null && findBar.findText.length > 0) && !root.settingsOpen
         onTriggered: root.find(false)
     }
-    QQC2.Action {
+    KeyedAction {
         id: findPreviousAction
         text: qsTr("Find Previous")
-        shortcut: StandardKey.FindPrevious
+        keys: StandardKey.FindPrevious
         enabled: (root.view !== null && findBar.findText.length > 0) && !root.settingsOpen
         onTriggered: root.find(true)
     }
-    QQC2.Action {
+    KeyedAction {
         id: replaceAction
         text: qsTr("Replace…")
-        shortcut: "Ctrl+H"
+        keys: "Ctrl+H"
         enabled: root.editable && !root.settingsOpen
         onTriggered: root.openFind(true)
     }
-    QQC2.Action {
+    KeyedAction {
         id: goToAction
         text: qsTr("Go To Line…")
-        shortcut: "Ctrl+G"
+        keys: "Ctrl+G"
         enabled: root.view !== null && !root.settingsOpen
         onTriggered: goToDialog.open()
     }
-    QQC2.Action {
+    KeyedAction {
         id: timeDateAction
         text: qsTr("Time/Date")
-        shortcut: "F5"
+        keys: "F5"
         enabled: (root.editable) && !root.settingsOpen
         onTriggered: root.view.insertText(App.timeDate())
     }
 
-    QQC2.Action {
+    KeyedAction {
         id: zoomInAction
         text: qsTr("Zoom In")
-        shortcut: StandardKey.ZoomIn
+        keys: StandardKey.ZoomIn
         enabled: root.settings.zoom < 400
         onTriggered: root.settings.zoom = root.settings.zoom + 10
     }
-    QQC2.Action {
+    KeyedAction {
         id: zoomOutAction
         text: qsTr("Zoom Out")
-        shortcut: StandardKey.ZoomOut
+        keys: StandardKey.ZoomOut
         enabled: root.settings.zoom > 50
         onTriggered: root.settings.zoom = root.settings.zoom - 10
     }
-    QQC2.Action {
+    KeyedAction {
         id: zoomResetAction
         text: qsTr("Restore Default Zoom")
-        shortcut: "Ctrl+0"
+        keys: "Ctrl+0"
         enabled: root.settings.zoom !== 100
         onTriggered: root.settings.zoom = 100
     }
-    QQC2.Action {
+    KeyedAction {
         id: wordWrapAction
         text: qsTr("Word Wrap")
-        shortcut: "Alt+Z"
+        keys: "Alt+Z"
         checkable: true
         checked: root.settings.wordWrap
         onTriggered: root.settings.wordWrap = !root.settings.wordWrap
     }
-    QQC2.Action {
+    KeyedAction {
         id: lineNumbersAction
         text: qsTr("Line Numbers")
         checkable: true
         checked: root.settings.lineNumbers
         onTriggered: root.settings.lineNumbers = !root.settings.lineNumbers
     }
-    QQC2.Action {
+    KeyedAction {
         id: statusBarAction
         text: qsTr("Status Bar")
         checkable: true
         checked: root.settings.statusBar
         onTriggered: root.settings.statusBar = !root.settings.statusBar
     }
-    QQC2.Action {
+    KeyedAction {
         id: toolbarAction
         text: qsTr("Formatting Toolbar")
         checkable: true
@@ -300,116 +307,116 @@ QQC2.ApplicationWindow {
         enabled: root.settings.formatting
         onTriggered: root.settings.formattingToolbar = !root.settings.formattingToolbar
     }
-    QQC2.Action {
+    KeyedAction {
         id: toggleFormattedAction
         text: qsTr("Show Markdown Syntax")
-        shortcut: "Ctrl+Shift+M"
+        keys: "Ctrl+Shift+M"
         checkable: true
         checked: root.document !== null && !root.document.formatted
         enabled: root.markdown && !root.settingsOpen
         onTriggered: root.document.formatted = !root.document.formatted
     }
-    QQC2.Action {
+    KeyedAction {
         id: settingsAction
         text: qsTr("Settings")
-        shortcut: "Ctrl+,"
+        keys: "Ctrl+,"
         onTriggered: root.settingsOpen = !root.settingsOpen
     }
 
-    QQC2.Action {
+    KeyedAction {
         id: heading1Action
         text: qsTr("Heading 1")
-        shortcut: "Ctrl+1"
+        keys: "Ctrl+1"
         enabled: root.formatEnabled
         onTriggered: root.view.md.setHeading(root.view.heading === 1 ? 0 : 1)
     }
-    QQC2.Action {
+    KeyedAction {
         id: heading2Action
         text: qsTr("Heading 2")
-        shortcut: "Ctrl+2"
+        keys: "Ctrl+2"
         enabled: root.formatEnabled
         onTriggered: root.view.md.setHeading(root.view.heading === 2 ? 0 : 2)
     }
-    QQC2.Action {
+    KeyedAction {
         id: heading3Action
         text: qsTr("Heading 3")
-        shortcut: "Ctrl+3"
+        keys: "Ctrl+3"
         enabled: root.formatEnabled
         onTriggered: root.view.md.setHeading(root.view.heading === 3 ? 0 : 3)
     }
-    QQC2.Action {
+    KeyedAction {
         id: bodyTextAction
         text: qsTr("Body Text")
         enabled: root.formatEnabled
         onTriggered: root.view.md.setHeading(0)
     }
-    QQC2.Action {
+    KeyedAction {
         id: boldAction
         text: qsTr("Bold")
-        shortcut: StandardKey.Bold
+        keys: StandardKey.Bold
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleInline("**")
     }
-    QQC2.Action {
+    KeyedAction {
         id: italicAction
         text: qsTr("Italic")
-        shortcut: StandardKey.Italic
+        keys: StandardKey.Italic
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleInline("*")
     }
-    QQC2.Action {
+    KeyedAction {
         id: strikethroughAction
         text: qsTr("Strikethrough")
-        shortcut: "Ctrl+Shift+X"
+        keys: "Ctrl+Shift+X"
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleInline("~~")
     }
-    QQC2.Action {
+    KeyedAction {
         id: codeAction
         text: qsTr("Code")
-        shortcut: "Ctrl+E"
+        keys: "Ctrl+E"
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleInline("`")
     }
-    QQC2.Action {
+    KeyedAction {
         id: linkAction
         text: qsTr("Link…")
-        shortcut: "Ctrl+K"
+        keys: "Ctrl+K"
         enabled: root.formatEnabled
         onTriggered: root.openLinkDialog()
     }
-    QQC2.Action {
+    KeyedAction {
         id: clearFormattingAction
         text: qsTr("Clear Formatting")
-        shortcut: "Ctrl+Space"
+        keys: "Ctrl+Space"
         enabled: root.formatEnabled
         onTriggered: root.view.md.clearFormatting()
     }
-    QQC2.Action {
+    KeyedAction {
         id: bulletListAction
         text: qsTr("Bulleted List")
-        shortcut: "Ctrl+Shift+8"
+        keys: "Ctrl+Shift+8"
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleBlock("bullet")
     }
-    QQC2.Action {
+    KeyedAction {
         id: numberedListAction
         text: qsTr("Numbered List")
-        shortcut: "Ctrl+Shift+7"
+        keys: "Ctrl+Shift+7"
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleBlock("numbered")
     }
-    QQC2.Action {
+    KeyedAction {
         id: checklistAction
         text: qsTr("Checklist")
-        shortcut: "Ctrl+Shift+9"
+        keys: "Ctrl+Shift+9"
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleBlock("task")
     }
-    QQC2.Action {
+    KeyedAction {
         id: quoteAction
         text: qsTr("Quote")
-        shortcut: "Ctrl+Shift+."
+        keys: "Ctrl+Shift+."
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleBlock("quote")
     }
@@ -444,6 +451,7 @@ QQC2.ApplicationWindow {
     GlobalMenu {
         window: root
         actions: root.actions
+        withShortcuts: App.hasGlobalMenu
         onOpenRecent: path => root.documents.open([path])
     }
 
@@ -1138,22 +1146,22 @@ QQC2.ApplicationWindow {
             return [];
         }
     }
-    QQC2.Action {
+    KeyedAction {
         id: bannerSaveAs
         text: qsTr("Save As…")
         onTriggered: root.saveAs(root.document)
     }
-    QQC2.Action {
+    KeyedAction {
         id: bannerRetry
         text: qsTr("Try Again")
         onTriggered: root.document.save()
     }
-    QQC2.Action {
+    KeyedAction {
         id: bannerSave
         text: qsTr("Save")
         onTriggered: root.document.save()
     }
-    QQC2.Action {
+    KeyedAction {
         id: bannerSaveUtf8
         text: qsTr("Save as UTF-8")
         onTriggered: {
@@ -1161,17 +1169,17 @@ QQC2.ApplicationWindow {
             root.document.save();
         }
     }
-    QQC2.Action {
+    KeyedAction {
         id: bannerReload
         text: qsTr("Reload")
         onTriggered: root.document.reload()
     }
-    QQC2.Action {
+    KeyedAction {
         id: bannerKeepMine
         text: qsTr("Keep Mine")
         onTriggered: root.document.keepMine()
     }
-    QQC2.Action {
+    KeyedAction {
         id: bannerCloseTab
         text: qsTr("Close Tab")
         onTriggered: root.closeTab(root.documents.currentIndex) // asks first: the text may be unsaved

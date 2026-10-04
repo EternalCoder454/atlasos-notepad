@@ -32,7 +32,7 @@ Item {
         // Not `action`: AbstractButton's own would trigger it a second time.
         property QQC2.Action command
         text: command.text.replace("&", "")
-        shortcutText: App.shortcutText(command.shortcut)
+        shortcutText: App.shortcutText(command.keys ?? command.shortcut)
         enabled: command.enabled
         icon.source: Qt.resolvedUrl("../icons/" + iconName + ".svg")
         onClicked: command.trigger()

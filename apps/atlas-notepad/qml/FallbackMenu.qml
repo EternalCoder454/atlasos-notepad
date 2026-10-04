@@ -16,7 +16,7 @@ ContextMenu {
 
     component Item: ContextMenuItem {
         // The shortcut lives on the action; this only shows it.
-        shortcutText: action ? App.shortcutText(action.shortcut) : ""
+        shortcutText: action ? App.shortcutText(action.keys ?? action.shortcut) : ""
     }
 
     Item { action: menu.actions.newTab }
@@ -31,7 +31,7 @@ ContextMenu {
             model: App.recentFiles
             delegate: ContextMenuItem {
                 required property string modelData
-                text: modelData.replace(/^\/home\/[^\/]+/, "~")
+                text: App.displayPath(modelData)
                 onTriggered: menu.openRecent(modelData)
             }
             onObjectAdded: (index, object) => recent.insertItem(index, object)

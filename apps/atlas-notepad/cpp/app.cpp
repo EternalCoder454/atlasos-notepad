@@ -625,6 +625,15 @@ void App::cancelQuit()
     d->quitWaitingOn = nullptr;
 }
 
+QString App::displayPath(const QString &path) const
+{
+    const QString home = QDir::homePath();
+    if (path == home || (path.startsWith(home) && path.at(home.size()) == u'/')) {
+        return u'~' + path.mid(home.size());
+    }
+    return path;
+}
+
 QString App::shortcutText(const QVariant &shortcut) const
 {
     if (!shortcut.isValid() || shortcut.isNull()) {

@@ -469,6 +469,8 @@ public:
     // An Action's shortcut (a key sequence string or a StandardKey) as the
     // menus show it.
     Q_INVOKABLE QString shortcutText(const QVariant &shortcut) const;
+    // A path for menus: the home folder shown as ~.
+    Q_INVOKABLE QString displayPath(const QString &path) const;
     // Saves the session now (also done a second after any edit stops and at
     // quit).
     Q_INVOKABLE void saveSession();

@@ -248,6 +248,14 @@ private Q_SLOTS:
         QCOMPARE(read(m_dir + QStringLiteral("/p.txt")), QByteArray("a\nb\n"));
     }
 
+    void displayPathShortensHome()
+    {
+        const QString home = QDir::homePath();
+        QCOMPARE(m_app->displayPath(home + QStringLiteral("/a.txt")), QStringLiteral("~/a.txt"));
+        QCOMPARE(m_app->displayPath(home + QStringLiteral("x/a.txt")), home + QStringLiteral("x/a.txt"));
+        QCOMPARE(m_app->displayPath(QStringLiteral("/etc/hosts")), QStringLiteral("/etc/hosts"));
+    }
+
     void insertTextIsOneUndo()
     {
         Document *doc = openFile(newList(), write(QStringLiteral("i.txt"), "ab cd"));
