@@ -146,6 +146,28 @@ which is out of scope for a Notepad.
 - Files up to 10 MiB open. Bigger ones are refused with a message saying so:
   a 10 MB file already costs 0.7 GB of memory and 30 ms a key.
 
+## Spell check
+
+Sonnet with the system's Hunspell dictionaries (`cpp/spellcheck.cpp`), on
+for Markdown, text, extensionless and untitled tabs (`Document::prose`), not
+for code. One speller and one cache of answers for every view, loaded on the
+first word; with the C locale it falls back to the UI languages, then en_US.
+
+- The highlighter only notes each line's misspelled ranges in
+  `BlockInfo::misspelled`. Qt Quick's TextEdit draws an underline format in
+  the text colour only (no `SpellCheckUnderline`, no `underlineColor`), so
+  `SpellUnderlines`, a painted item over the visible lines like
+  `MarkdownDecorations`, draws the squiggles.
+- Code, fences and links end words; hidden markers inside a word don't split
+  it (`**bo**ld` is checked as "bold", with no suggestions, since replacing
+  would drop the markers). Skipped: addresses, camelCase, acronyms, words
+  with digits or `_`, one letter, emoji, and letters of a script the
+  dictionary isn't in (CJK has no spaces between words).
+- Plain text gets a `MarkdownHighlighter` with Markdown off. Deleting a
+  `QSyntaxHighlighter` clears every block's formats, so `SpellChecker` and
+  `MarkdownEditor` tell each other to highlight again (queued) when one goes.
+- Typing bench: no change beyond noise against the plain TextEdit baseline.
+
 ## Building and testing
 
 Everything builds in the `localhost/atlas-notepad-dev:44` container
