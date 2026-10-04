@@ -300,12 +300,11 @@ FocusScope {
                     linkHover.forget();
                 }
             }
-            QQC2.ToolTip {
+            AtlasToolTip {
                 x: linkHover.point.position.x
                 y: linkHover.point.position.y + Kirigami.Units.gridUnit
                 visible: linkHover.target.length > 0
                 width: Math.min(implicitWidth, Kirigami.Units.gridUnit * 24)
-                delay: Kirigami.Units.toolTipDelay
                 // Plain text: the style's label would take a tag or "&" in
                 // the URL as markup.
                 contentItem: QQC2.Label {

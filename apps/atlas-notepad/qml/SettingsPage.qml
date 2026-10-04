@@ -37,7 +37,7 @@ AtlasPage {
 
         CompactRow {
             title: qsTr("Family")
-            QQC2.ComboBox {
+            AtlasComboBox {
                 id: family
                 Accessible.name: qsTr("Font family")
                 Layout.preferredWidth: Kirigami.Units.gridUnit * 14
@@ -53,7 +53,7 @@ AtlasPage {
         }
         CompactRow {
             title: qsTr("Size")
-            QQC2.SpinBox {
+            AtlasSpinBox {
                 Accessible.name: qsTr("Font size")
                 from: 6
                 to: 72

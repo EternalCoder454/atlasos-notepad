@@ -564,6 +564,11 @@ QQC2.ApplicationWindow {
                 onCloseRequested: index => root.closeTab(index)
                 onNewRequested: root.documents.newTab()
                 onMoved: (from, to) => root.documents.move(from, to)
+                // Right-click, or the Menu key / Shift+F10 on a focused tab.
+                onContextMenuRequested: (index, position) => {
+                    tabMenu.tabIndex = index;
+                    tabMenu.popup(tabBar, position.x, position.y);
+                }
 
                 SegmentedPill {
                     visible: root.markdown && !root.settingsOpen
@@ -602,6 +607,26 @@ QQC2.ApplicationWindow {
                         actions: root.actions
                         onOpenRecent: path => root.documents.open([path])
                     }
+                }
+            }
+            ContextMenu {
+                id: tabMenu
+                property int tabIndex: -1
+                ContextMenuItem {
+                    text: qsTr("New Tab")
+                    shortcutText: App.shortcutText(newTabAction.keys)
+                    onTriggered: root.documents.newTab()
+                }
+                ContextMenuItem {
+                    text: qsTr("Reopen Closed Tab")
+                    shortcutText: App.shortcutText(reopenTabAction.keys)
+                    enabled: root.documents.canReopenClosed
+                    onTriggered: root.documents.reopenClosed()
+                }
+                ContextMenuSeparator {}
+                ContextMenuItem {
+                    text: qsTr("Close Tab")
+                    onTriggered: root.closeTab(tabMenu.tabIndex)
                 }
             }
         }
@@ -1019,11 +1044,21 @@ QQC2.ApplicationWindow {
             lineField.selectAll();
         }
         onOpened: lineField.forceActiveFocus()
-        onAccepted: root.view.goToLine(parseInt(lineField.text) || 1)
+        // A number past the last line shows its error and keeps the dialog.
+        closeOnAccept: lineField.errorText.length === 0
+        onAccepted: {
+            if (lineField.errorText.length === 0) {
+                root.view.goToLine(parseInt(lineField.text) || 1);
+            }
+        }
 
-        QQC2.TextField {
+        AtlasTextField {
             id: lineField
             Layout.fillWidth: true
+            errorText: {
+                const n = parseInt(text);
+                return root.document && n > root.document.lineCount ? qsTr("The file has %1 lines").arg(root.document.lineCount) : "";
+            }
             inputMethodHints: Qt.ImhDigitsOnly
             validator: IntValidator {
                 bottom: 1
@@ -1032,7 +1067,9 @@ QQC2.ApplicationWindow {
             Accessible.name: qsTr("Line number")
             onAccepted: {
                 goToDialog.accepted();
-                goToDialog.close();
+                if (goToDialog.closeOnAccept) {
+                    goToDialog.close();
+                }
             }
         }
     }
@@ -1042,28 +1079,41 @@ QQC2.ApplicationWindow {
         title: qsTr("Insert Link")
         acceptText: qsTr("Insert")
         onOpened: (linkText.text.length > 0 ? linkUrl : linkText).forceActiveFocus()
-        onAccepted: root.view.md.insertLink(linkText.text, linkUrl.text.trim())
+        // An empty address shows its error and keeps the dialog.
+        property bool addressTried: false
+        closeOnAccept: linkUrl.text.trim().length > 0
+        onAccepted: {
+            if (closeOnAccept) {
+                root.view.md.insertLink(linkText.text, linkUrl.text.trim());
+            } else {
+                addressTried = true;
+                linkUrl.forceActiveFocus();
+            }
+        }
         onClosed: {
             if (root.view) {
                 root.view.focusEditor();
             }
         }
 
-        QQC2.TextField {
+        AtlasTextField {
             id: linkText
             Layout.fillWidth: true
             placeholderText: qsTr("Text to show")
             Accessible.name: qsTr("Text")
             onAccepted: linkUrl.forceActiveFocus()
         }
-        QQC2.TextField {
+        AtlasTextField {
             id: linkUrl
             Layout.fillWidth: true
+            errorText: linkDialog.addressTried && text.trim().length === 0 ? qsTr("An address is required") : ""
             placeholderText: qsTr("Address, such as https://example.com")
             Accessible.name: qsTr("Address")
             onAccepted: {
                 linkDialog.accepted();
-                linkDialog.close();
+                if (linkDialog.closeOnAccept) {
+                    linkDialog.close();
+                }
             }
         }
     }
@@ -1083,6 +1133,7 @@ QQC2.ApplicationWindow {
         }
         const selected = view.edit.selectedText;
         const isUrl = /^[a-z][a-z0-9+.-]*:\S+$/i.test(selected);
+        linkDialog.addressTried = false;
         linkText.text = isUrl ? "" : selected;
         linkUrl.text = isUrl ? selected : (view.md.linkAt(view.edit.cursorPosition) || "");
         linkDialog.open();

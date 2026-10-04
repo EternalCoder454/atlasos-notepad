@@ -39,10 +39,9 @@ T.AbstractButton {
     Accessible.checkable: control.checkable
     Accessible.checked: control.checked
 
-    QQC2.ToolTip {
+    AtlasToolTip {
         parent: control
-        visible: control.tipEnabled && control.hovered && !control.down && control.text.length > 0
-        delay: Kirigami.Units.toolTipDelay
+        shown: control.tipEnabled && (control.hovered || control.visualFocus) && !control.down && control.text.length > 0
         text: control.shortcutText.length > 0 ? qsTr("%1 (%2)").arg(control.text).arg(control.shortcutText) : control.text
         x: control.tipSide === "left" ? -width - Kirigami.Units.smallSpacing : Math.round((control.width - width) / 2)
         y: control.tipSide === "left" ? Math.round((control.height - height) / 2) : control.height + Kirigami.Units.smallSpacing
