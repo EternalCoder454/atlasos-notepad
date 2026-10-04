@@ -30,6 +30,7 @@ FocusScope {
         return md.headingAt(edit.cursorPosition);
     }
 
+    readonly property real scrollbarWidth: 10 // SlimScrollBar.implicitWidth
     // Kept clear at the right edge (the window's tool capsule).
     property real rightInset: 0
 
@@ -226,8 +227,9 @@ FocusScope {
             selectionColor: Kirigami.Theme.highlightColor
             selectedTextColor: Kirigami.Theme.highlightedTextColor
             leftPadding: view.settings.lineNumbers ? Kirigami.Units.largeSpacing : Kirigami.Units.gridUnit
-            // The capsule's margin already keeps text clear of the edge.
-            rightPadding: view.rightInset > 0 ? Kirigami.Units.smallSpacing : Kirigami.Units.gridUnit
+            // The capsule's margin already keeps text clear of the edge, but
+            // not of the overlay scrollbar, which sits inside the view.
+            rightPadding: view.rightInset > 0 ? scrollbarWidth + Kirigami.Units.smallSpacing : Kirigami.Units.gridUnit
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing
             onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
