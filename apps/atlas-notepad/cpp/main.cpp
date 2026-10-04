@@ -95,6 +95,9 @@ int main(int argc, char *argv[])
     const QCommandLineOption benchOption(QStringLiteral("bench"), QStringLiteral("Time typing and scrolling in <file>, print the figures and quit."),
                                         QStringLiteral("file"));
     parser.addOption(benchOption);
+    // Handled by App::activate when another Notepad is running; a first
+    // launch opens a window anyway.
+    parser.addOption(QCommandLineOption(QStringLiteral("new-window"), QStringLiteral("Open a new window.")));
     parser.addPositionalArgument(QStringLiteral("file"), QStringLiteral("Files to open."), QStringLiteral("[file...]"));
     parser.process(app);
     const bool bench = parser.isSet(benchOption);

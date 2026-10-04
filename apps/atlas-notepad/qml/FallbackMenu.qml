@@ -16,7 +16,7 @@ ContextMenu {
 
     component Item: ContextMenuItem {
         // The shortcut lives on the action; this only shows it.
-        shortcutText: action && action.shortcut ? String(action.shortcut) : ""
+        shortcutText: action ? App.shortcutText(action.shortcut) : ""
     }
 
     Item { action: menu.actions.newTab }

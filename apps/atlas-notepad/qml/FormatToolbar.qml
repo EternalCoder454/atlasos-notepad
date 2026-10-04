@@ -8,6 +8,7 @@ import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import Atlas.Ui
+import net.eterneon.atlas.notepad
 
 Item {
     id: bar
@@ -28,12 +29,13 @@ Item {
     }
     component Button: ToolbarButton {
         property string iconName
-        property QQC2.Action action
-        text: action.text.replace("&", "")
-        shortcutText: action.shortcut ? action.shortcut.toString() : ""
-        enabled: action.enabled
+        // Not `action`: AbstractButton's own would trigger it a second time.
+        property QQC2.Action command
+        text: command.text.replace("&", "")
+        shortcutText: App.shortcutText(command.shortcut)
+        enabled: command.enabled
         icon.source: Qt.resolvedUrl("../icons/" + iconName + ".svg")
-        onClicked: action.trigger()
+        onClicked: command.trigger()
     }
 
     RowLayout {
@@ -45,62 +47,62 @@ Item {
 
         Button {
             iconName: "heading1"
-            action: bar.actions.heading1
+            command: bar.actions.heading1
             checked: bar.heading === 1
         }
         Button {
             iconName: "heading2"
-            action: bar.actions.heading2
+            command: bar.actions.heading2
             checked: bar.heading === 2
         }
         Button {
             iconName: "paragraph"
-            action: bar.actions.bodyText
+            command: bar.actions.bodyText
         }
         Separator {}
         Button {
             iconName: "bold"
-            action: bar.actions.bold
+            command: bar.actions.bold
         }
         Button {
             iconName: "italic"
-            action: bar.actions.italic
+            command: bar.actions.italic
         }
         Button {
             iconName: "strikethrough"
-            action: bar.actions.strikethrough
+            command: bar.actions.strikethrough
         }
         Button {
             iconName: "code"
-            action: bar.actions.code
+            command: bar.actions.code
         }
         Button {
             iconName: "link-add"
-            action: bar.actions.link
+            command: bar.actions.link
         }
         Separator {}
         Button {
             iconName: "bullet-list"
-            action: bar.actions.bulletList
+            command: bar.actions.bulletList
         }
         Button {
             iconName: "numbered-list"
-            action: bar.actions.numberedList
+            command: bar.actions.numberedList
         }
         Button {
             iconName: "task"
-            action: bar.actions.checklist
+            command: bar.actions.checklist
         }
         Button {
             iconName: "quote"
-            action: bar.actions.quote
+            command: bar.actions.quote
         }
         Item {
             Layout.fillWidth: true
         }
         Button {
             iconName: "text"
-            action: bar.actions.toggleFormatted
+            command: bar.actions.toggleFormatted
             checked: !bar.formatted
             text: bar.formatted ? qsTr("Show Markdown Syntax") : qsTr("Show Formatting")
         }

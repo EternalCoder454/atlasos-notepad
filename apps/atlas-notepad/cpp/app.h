@@ -457,6 +457,9 @@ public:
     // asks about the unsaved tabs, then calls quit() again).
     Q_INVOKABLE void quit();
     Q_INVOKABLE void copyToClipboard(const QString &text);
+    // An Action's shortcut (a key sequence string or a StandardKey) as the
+    // menus show it.
+    Q_INVOKABLE QString shortcutText(const QVariant &shortcut) const;
     // Saves the session now (also done a second after any edit stops and at
     // quit).
     Q_INVOKABLE void saveSession();

@@ -140,9 +140,19 @@ FocusScope {
             }
         }
 
-        QQC2.ScrollBar.vertical: QQC2.ScrollBar {}
-        QQC2.ScrollBar.horizontal: QQC2.ScrollBar {
+        // Overlaid on the text, as in Atlas.Ui pages.
+        QQC2.ScrollBar.vertical: SlimScrollBar {
+            parent: flick.parent
+            x: flick.x + flick.width - width
+            y: flick.y
+            height: flick.height
+        }
+        QQC2.ScrollBar.horizontal: SlimScrollBar {
+            parent: flick.parent
             visible: !view.settings.wordWrap
+            x: flick.x
+            y: flick.y + flick.height - height
+            width: flick.width
         }
 
         // Ctrl+wheel zooms (every window: the zoom is a setting); the rest

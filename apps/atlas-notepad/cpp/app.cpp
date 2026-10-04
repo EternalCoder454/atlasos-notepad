@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QKeySequence>
 #include <QLocale>
 #include <QPrintDialog>
 #include <QPrinter>
@@ -271,6 +272,11 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
 App::~App()
 {
     d->saveTimer.stop();
+    // The engine outlives App (main.cpp makes it first); its windows go
+    // now, while the App singleton and their documents still exist.
+    for (const auto &w : std::as_const(d->windows)) {
+        delete w->window.data();
+    }
     s_instance = nullptr;
 }
 
@@ -352,7 +358,11 @@ void App::activate(const QStringList &arguments, const QString &workingDirectory
 {
     // The first argument is the program name.
     QList<QUrl> urls;
+    bool newWindow = false;
     for (const QString &arg : arguments.mid(1)) {
+        if (arg == QLatin1String("--new-window")) {
+            newWindow = true;
+        }
         if (arg.startsWith(QLatin1Char('-'))) {
             continue;
         }
@@ -360,7 +370,7 @@ void App::activate(const QStringList &arguments, const QString &workingDirectory
         const QString path = url.isLocalFile() ? url.toLocalFile() : arg;
         urls.append(QUrl::fromLocalFile(QDir(workingDirectory).absoluteFilePath(path)));
     }
-    if (d->windows.isEmpty() || (!urls.isEmpty() && d->settings->openInNewWindow())) {
+    if (d->windows.isEmpty() || newWindow || (!urls.isEmpty() && d->settings->openInNewWindow())) {
         d->createWindow(nullptr);
     }
     DocumentList *target = d->windows.first()->list;
@@ -494,6 +504,22 @@ void App::quit()
         }
     }
     QCoreApplication::quit();
+}
+
+QString App::shortcutText(const QVariant &shortcut) const
+{
+    if (!shortcut.isValid() || shortcut.isNull()) {
+        return {};
+    }
+    // StandardKey arrives as a number; a string is a sequence like "Ctrl+H".
+    if (shortcut.typeId() != QMetaType::QString) {
+        bool ok = false;
+        const int key = shortcut.toInt(&ok);
+        if (ok) {
+            return QKeySequence(QKeySequence::StandardKey(key)).toString(QKeySequence::NativeText);
+        }
+    }
+    return QKeySequence(shortcut.toString()).toString(QKeySequence::NativeText);
 }
 
 void App::copyToClipboard(const QString &text)

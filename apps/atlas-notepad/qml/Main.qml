@@ -648,7 +648,8 @@ QQC2.ApplicationWindow {
         StatusBarItem {
             readonly property int selected: root.view ? root.view.selectedText.length : 0
             readonly property int total: root.document ? root.document.characterCount : 0
-            text: selected > 0 ? qsTr("%1 of %2 characters").arg(Qt.locale().toString(selected)).arg(Qt.locale().toString(total)) : qsTr("%n character(s)", "", total)
+            text: selected > 0 ? qsTr("%1 of %2 characters").arg(selected.toLocaleString(Qt.locale(), "f", 0)).arg(total.toLocaleString(Qt.locale(), "f", 0))
+                : total === 1 ? qsTr("1 character") : qsTr("%1 characters").arg(total.toLocaleString(Qt.locale(), "f", 0))
             toolTip: root.document ? qsTr("%n word(s), %1 line(s)", "", root.document.wordCount).arg(Qt.locale().toString(root.document.lineCount)) : ""
         }
         Item {

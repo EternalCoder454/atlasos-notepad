@@ -69,7 +69,7 @@ qt_add_qml_module(atlas-notepad-app
     NO_IMPORT_SCAN
     QML_FILES
         qml/Main.qml qml/EditorView.qml qml/FormatToolbar.qml qml/GlobalMenu.qml
-        qml/FallbackMenu.qml qml/SettingsPage.qml qml/UnsavedDialog.qml
+        qml/FallbackMenu.qml qml/SettingsPage.qml qml/UnsavedDialog.qml qml/SlimScrollBar.qml
     SOURCES
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
         ${APP_SOURCES}

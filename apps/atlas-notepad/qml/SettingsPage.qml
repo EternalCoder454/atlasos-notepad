@@ -26,8 +26,10 @@ AtlasPage {
                 Layout.preferredWidth: Kirigami.Units.gridUnit * 14
                 model: Qt.fontFamilies()
                 currentIndex: model.indexOf(page.settings.font.family)
+                // A family that isn't installed still shows its name.
+                displayText: currentIndex < 0 ? page.settings.font.family : currentText
                 onActivated: index => page.settings.font = Qt.font({
-                    family: model[index],
+                    family: family.textAt(index),
                     pointSize: page.settings.font.pointSize
                 })
             }
