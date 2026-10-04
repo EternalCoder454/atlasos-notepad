@@ -1,7 +1,7 @@
 // The session: which windows and tabs were open, and the text of every tab
 // that isn't just a file on disk (untitled or modified), so a restart, a
 // logout or a crash brings them back. Stored under
-// $XDG_DATA_HOME/atlas-notepad/: session.json and texts/<uuid>.txt, each
+// $XDG_STATE_HOME/atlas-notepad/session/: session.json and texts/<uuid>.txt, each
 // written atomically (np_file_save). Internal to the app: App owns one.
 #pragma once
 

@@ -85,11 +85,20 @@ Session::~Session()
 
 QString Session::directory()
 {
-    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/atlas-notepad");
+    // XDG state: kept across restarts, but not documents or settings.
+    return QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation) + QStringLiteral("/atlas-notepad/session");
 }
 
 QList<WindowState> Session::read()
 {
+    // Before 0.1 the session lived in $XDG_DATA_HOME/atlas-notepad; move it once.
+    const QString old = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/atlas-notepad");
+    if (!QFileInfo::exists(directory()) && QFileInfo::exists(old + QStringLiteral("/session.json"))) {
+        QDir().mkpath(QFileInfo(directory()).path());
+        if (!QDir().rename(old, directory())) {
+            qWarning("atlas-notepad: couldn't move the old session from %s", qUtf8Printable(old));
+        }
+    }
     // Interrupted writes leave .<name>.<hex>.tmp behind; nothing is writing yet.
     removeTemps(directory());
     removeTemps(directory() + QStringLiteral("/texts"));

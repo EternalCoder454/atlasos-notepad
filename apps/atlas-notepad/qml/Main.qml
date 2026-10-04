@@ -63,6 +63,12 @@ QQC2.ApplicationWindow {
             heading1: heading1Action,
             heading2: heading2Action,
             heading3: heading3Action,
+            heading4: heading4Action,
+            heading5: heading5Action,
+            heading6: heading6Action,
+            font: fontAction,
+            keyboardShortcuts: keyboardShortcutsAction,
+            about: aboutAction,
             bodyText: bodyTextAction,
             bold: boldAction,
             italic: italicAction,
@@ -317,6 +323,21 @@ QQC2.ApplicationWindow {
         onTriggered: root.document.formatted = !root.document.formatted
     }
     KeyedAction {
+        id: fontAction
+        text: qsTr("Font…")
+        onTriggered: root.settingsOpen = true
+    }
+    KeyedAction {
+        id: keyboardShortcutsAction
+        text: qsTr("Keyboard Shortcuts")
+        onTriggered: shortcutsDialog.open()
+    }
+    KeyedAction {
+        id: aboutAction
+        text: qsTr("About Notepad")
+        onTriggered: aboutDialog.open()
+    }
+    KeyedAction {
         id: settingsAction
         text: qsTr("Settings")
         keys: "Ctrl+,"
@@ -345,8 +366,30 @@ QQC2.ApplicationWindow {
         onTriggered: root.view.md.setHeading(root.view.heading === 3 ? 0 : 3)
     }
     KeyedAction {
+        id: heading4Action
+        text: qsTr("Heading 4")
+        keys: "Ctrl+4"
+        enabled: root.formatEnabled
+        onTriggered: root.view.md.setHeading(root.view.heading === 4 ? 0 : 4)
+    }
+    KeyedAction {
+        id: heading5Action
+        text: qsTr("Heading 5")
+        keys: "Ctrl+5"
+        enabled: root.formatEnabled
+        onTriggered: root.view.md.setHeading(root.view.heading === 5 ? 0 : 5)
+    }
+    KeyedAction {
+        id: heading6Action
+        text: qsTr("Heading 6")
+        keys: "Ctrl+6"
+        enabled: root.formatEnabled
+        onTriggered: root.view.md.setHeading(root.view.heading === 6 ? 0 : 6)
+    }
+    KeyedAction {
         id: bodyTextAction
         text: qsTr("Body Text")
+        keys: "Ctrl+Shift+0"
         enabled: root.formatEnabled
         onTriggered: root.view.md.setHeading(0)
     }
@@ -426,6 +469,10 @@ QQC2.ApplicationWindow {
         sequences: ["Ctrl+=", "Ctrl+Shift+="]
         enabled: zoomInAction.enabled
         onActivated: zoomInAction.trigger()
+    }
+    Shortcut {
+        sequence: "Ctrl+T"
+        onActivated: newTabAction.trigger()
     }
     Shortcut {
         sequences: [StandardKey.Redo]
@@ -794,6 +841,61 @@ QQC2.ApplicationWindow {
     }
 
     ConfirmDialog {
+        id: shortcutsDialog
+        title: qsTr("Keyboard Shortcuts")
+        acceptText: qsTr("Close")
+        showReject: false
+
+        QQC2.ScrollView {
+            Layout.fillWidth: true
+            Layout.preferredWidth: Kirigami.Units.gridUnit * 22
+            Layout.preferredHeight: Math.min(implicitHeight, root.height * 0.6)
+            contentWidth: availableWidth
+            QQC2.ScrollBar.vertical: SlimScrollBar {}
+
+            GridLayout {
+                width: parent.width - Kirigami.Units.gridUnit // clear of the scrollbar
+                columns: 2
+                columnSpacing: Kirigami.Units.largeSpacing * 2
+                rowSpacing: Kirigami.Units.smallSpacing
+
+                Repeater {
+                    model: root.shortcutRows()
+                    delegate: QQC2.Label {
+                        required property var modelData
+                        required property int index
+                        Layout.row: Math.floor(index / 2)
+                        Layout.column: index % 2
+                        Layout.fillWidth: index % 2 === 0
+                        text: modelData
+                        opacity: index % 2 === 1 ? 0.7 : 1
+                        Layout.alignment: index % 2 === 1 ? Qt.AlignRight : Qt.AlignLeft
+                    }
+                }
+            }
+        }
+    }
+
+    ConfirmDialog {
+        id: aboutDialog
+        title: qsTr("About Notepad")
+        text: qsTr("Version %1\nA simple, fast Notepad for plain text and Markdown.\nMIT licence, made by Eterneon. Notepad collects nothing and needs no account.").arg(App.version)
+        acceptText: qsTr("Close")
+        showReject: false
+
+        QQC2.Label {
+            Layout.fillWidth: true
+            text: "<a href=\"https://github.com/EternalCoder454/atlasos-notepad\">%1</a>".arg(qsTr("Project page"))
+            textFormat: Text.StyledText
+            linkColor: Kirigami.Theme.linkColor
+            onLinkActivated: link => Qt.openUrlExternally(link)
+            HoverHandler {
+                cursorShape: Qt.PointingHandCursor
+            }
+        }
+    }
+
+    ConfirmDialog {
         id: goToDialog
         title: qsTr("Go To Line")
         acceptText: qsTr("Go To")
@@ -929,6 +1031,24 @@ QQC2.ApplicationWindow {
                 }
             }
         }
+    }
+
+    // Name, keys pairs (flattened) for the Keyboard Shortcuts dialog.
+    function shortcutRows() {
+        const rows = [];
+        for (const action of Object.values(actions)) {
+            if (action.keys !== undefined) {
+                rows.push(action.text.replace("…", ""), App.shortcutText(action.keys));
+            }
+        }
+        rows.push(qsTr("New Tab"), "Ctrl+T");
+        rows.push(qsTr("Next Tab"), "Ctrl+Tab");
+        rows.push(qsTr("Previous Tab"), "Ctrl+Shift+Tab");
+        rows.push(qsTr("Open a Link"), qsTr("Ctrl+Click"));
+        if (!App.hasGlobalMenu) {
+            rows.push(qsTr("Menu"), "F10");
+        }
+        return rows;
     }
 
     // Named tabs save at once; untitled ones ask where, one after another.

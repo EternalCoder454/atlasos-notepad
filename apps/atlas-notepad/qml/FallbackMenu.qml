@@ -63,6 +63,7 @@ ContextMenu {
         Item { action: menu.actions.goTo }
         Item { action: menu.actions.selectAll }
         Item { action: menu.actions.timeDate }
+        Item { action: menu.actions.font }
     }
     ContextMenu {
         title: qsTr("Format")
@@ -70,6 +71,9 @@ ContextMenu {
         Item { action: menu.actions.heading1 }
         Item { action: menu.actions.heading2 }
         Item { action: menu.actions.heading3 }
+        Item { action: menu.actions.heading4 }
+        Item { action: menu.actions.heading5 }
+        Item { action: menu.actions.heading6 }
         Item { action: menu.actions.bodyText }
         ContextMenuSeparator {}
         Item { action: menu.actions.bold }
@@ -96,6 +100,11 @@ ContextMenu {
         Item { action: menu.actions.statusBar }
         Item { action: menu.actions.lineNumbers }
         Item { action: menu.actions.wordWrap }
+    }
+    ContextMenu {
+        title: qsTr("Help")
+        Item { action: menu.actions.keyboardShortcuts }
+        Item { action: menu.actions.about }
     }
     ContextMenuSeparator {}
     Item { action: menu.actions.closeTab }

@@ -86,6 +86,7 @@ Platform.MenuBar {
         Separator {}
         Item { action: bar.actions.selectAll }
         Item { action: bar.actions.timeDate }
+        Item { action: bar.actions.font }
     }
 
     Platform.Menu {
@@ -93,6 +94,9 @@ Platform.MenuBar {
         Item { action: bar.actions.heading1 }
         Item { action: bar.actions.heading2 }
         Item { action: bar.actions.heading3 }
+        Item { action: bar.actions.heading4 }
+        Item { action: bar.actions.heading5 }
+        Item { action: bar.actions.heading6 }
         Item { action: bar.actions.bodyText }
         Separator {}
         Item { action: bar.actions.bold }
@@ -125,5 +129,11 @@ Platform.MenuBar {
         Item { action: bar.actions.wordWrap }
         Separator {}
         Item { action: bar.actions.settings }
+    }
+
+    Platform.Menu {
+        title: qsTr("&Help")
+        Item { action: bar.actions.keyboardShortcuts }
+        Item { action: bar.actions.about }
     }
 }

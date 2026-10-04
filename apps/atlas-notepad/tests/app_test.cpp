@@ -54,9 +54,9 @@ private:
     QString m_dir;
     int m_files = 0;
 
-    QString dataDir() const
+    QString stateDir() const
     {
-        return QString::fromUtf8(qgetenv("XDG_DATA_HOME"));
+        return QString::fromUtf8(qgetenv("XDG_STATE_HOME"));
     }
 
     QString write(const QString &name, const QByteArray &bytes)
@@ -88,7 +88,7 @@ private:
     }
     QString sessionDir() const
     {
-        return dataDir() + QStringLiteral("/atlas-notepad");
+        return stateDir() + QStringLiteral("/atlas-notepad/session");
     }
     QJsonObject sessionJson() const
     {
@@ -131,7 +131,7 @@ private Q_SLOTS:
         delete m_app;
         m_app = nullptr;
         m_edits.clear();
-        QDir(dataDir()).removeRecursively();
+        QDir(stateDir()).removeRecursively();
         QFile::remove(Settings::filePath());
     }
 
@@ -519,7 +519,7 @@ private Q_SLOTS:
         a->setEncoding(Document::Utf8Bom);
         list->setCurrentIndex(list->indexOf(a));
         m_app->saveSession();
-        QVERIFY(QFile::exists(dataDir() + QStringLiteral("/atlas-notepad/session.json")));
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/session.json")));
 
         restart();
         m_app->start({});
@@ -540,7 +540,7 @@ private Q_SLOTS:
         QCOMPARE(docs[3]->text(), QStringLiteral("gamma\n"));
 
         // Closing a tab drops its text file; a changed file is a conflict.
-        const QDir texts(dataDir() + QStringLiteral("/atlas-notepad/texts"));
+        const QDir texts(sessionDir() + QStringLiteral("/texts"));
         QCOMPARE(texts.entryList(QDir::Files).size(), 2);
         list->close(0);
         m_app->saveSession();
@@ -847,6 +847,24 @@ private Q_SLOTS:
         QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/texts/orphan.txt")));
     }
 
+    void oldSessionDirectoryIsMoved()
+    {
+        const QString old = QString::fromUtf8(qgetenv("XDG_DATA_HOME")) + QStringLiteral("/atlas-notepad");
+        QVERIFY(QDir().mkpath(old + QStringLiteral("/texts")));
+        QFile text(old + QStringLiteral("/texts/t1.txt"));
+        QVERIFY(text.open(QIODevice::WriteOnly));
+        text.write("from before");
+        text.close();
+        QFile json(old + QStringLiteral("/session.json"));
+        QVERIFY(json.open(QIODevice::WriteOnly));
+        json.write(R"({"version":1,"windows":[{"tabs":[{"textFile":"t1"}]}]})");
+        json.close();
+        m_app->start({});
+        QCOMPARE(m_app->windows().first()->current()->text(), QStringLiteral("from before"));
+        QVERIFY(!QFileInfo::exists(old));
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/texts/t1.txt")));
+    }
+
     void textWriteFailureRetries()
     {
         m_app->start({});
@@ -978,6 +996,7 @@ int main(int argc, char *argv[])
     qputenv("XDG_CONFIG_HOME", (tmp.path() + QStringLiteral("/config")).toUtf8());
     qputenv("XDG_DATA_HOME", (tmp.path() + QStringLiteral("/data")).toUtf8());
     qputenv("XDG_CACHE_HOME", (tmp.path() + QStringLiteral("/cache")).toUtf8());
+    qputenv("XDG_STATE_HOME", (tmp.path() + QStringLiteral("/state")).toUtf8());
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationDomain(QStringLiteral("atlas.eterneon.net"));
     QCoreApplication::setApplicationName(QStringLiteral("notepad"));
