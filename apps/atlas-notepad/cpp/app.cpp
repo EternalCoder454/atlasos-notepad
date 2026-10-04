@@ -290,6 +290,7 @@ struct App::Private {
             engine->loadFromModule(QStringLiteral("net.eterneon.atlas.notepad"), QStringLiteral("Main"));
             if (engine->rootObjects().size() > before) {
                 w->window = qobject_cast<QQuickWindow *>(engine->rootObjects().last());
+                w->list->setWindow(w->window);
             }
         }
         if (QQuickWindow *win = w->window) {
@@ -663,6 +664,10 @@ void App::renameRecent(const QString &from, const QString &to)
     paths.replace(paths.indexOf(from), to);
     d->writeRecent(paths);
     Q_EMIT recentFilesChanged();
+    // KDE's list too: the old name goes, the new one comes.
+    auto asUrl = [](const QString &p) { return Remote::isStoredUrl(p) ? QUrl(p) : QUrl::fromLocalFile(p); };
+    KRecentDocument::removeFile(asUrl(from));
+    KRecentDocument::add(asUrl(to), QStringLiteral("net.eterneon.atlas.notepad"));
 }
 
 void App::clearRecentFiles()

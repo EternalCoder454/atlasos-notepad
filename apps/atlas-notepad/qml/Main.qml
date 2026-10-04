@@ -6,7 +6,6 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls as QQC2
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import Atlas.Ui
@@ -118,7 +117,7 @@ QQC2.ApplicationWindow {
         id: openAction
         text: qsTr("Open…")
         keys: StandardKey.Open
-        onTriggered: openDialog.open()
+        onTriggered: root.openFiles()
     }
     KeyedAction {
         id: saveAction
@@ -873,31 +872,6 @@ QQC2.ApplicationWindow {
 
     // --- Dialogs.
 
-    FileDialog {
-        id: openDialog
-        title: qsTr("Open")
-        fileMode: FileDialog.OpenFiles
-        currentFolder: root.document && root.document.path.length > 0 ? root.document.folder : ""
-        nameFilters: [qsTr("Text documents (*.txt *.md *.markdown *.log)"), qsTr("All files (*)")]
-        onAccepted: root.documents.open(selectedFiles)
-    }
-
-    FileDialog {
-        id: saveDialog
-
-        property Document target: null
-
-        title: qsTr("Save As")
-        fileMode: FileDialog.SaveFile
-        nameFilters: target && target.markdown ? [qsTr("Markdown (*.md)"), qsTr("Text documents (*.txt)"), qsTr("All files (*)")] : [qsTr("Text documents (*.txt)"), qsTr("Markdown (*.md)"), qsTr("All files (*)")]
-        onAccepted: target.saveAs(selectedFile)
-        onRejected: {
-            if (root.pendingSave === target) {
-                root.resetSave(); // a close or quit waiting on this save stops
-            }
-        }
-    }
-
     UnsavedDialog {
         id: unsavedDialog
 
@@ -1044,11 +1018,12 @@ QQC2.ApplicationWindow {
         linkDialog.open();
     }
 
+    // The file dialogs are made in C++ (DocumentList.openDialog, saveAsDialog).
+    function openFiles() {
+        root.documents.openDialog(root.document && root.document.path.length > 0 ? root.document.folder : "", [qsTr("Text documents (*.txt *.md *.markdown *.log)"), qsTr("All files (*)")]);
+    }
     function saveAs(doc) {
-        saveDialog.target = doc;
-        saveDialog.currentFolder = doc.path.length > 0 ? doc.folder : "";
-        saveDialog.selectedFile = (doc.path.length > 0 ? doc.folder + "/" : "") + doc.suggestedFileName();
-        saveDialog.open();
+        root.documents.saveAsDialog(doc, doc.path.length > 0 ? doc.folder : "", doc.suggestedFileName(), doc.markdown ? [qsTr("Markdown (*.md)"), qsTr("Text documents (*.txt)"), qsTr("All files (*)")] : [qsTr("Text documents (*.txt)"), qsTr("Markdown (*.md)"), qsTr("All files (*)")]);
     }
 
     // Saves `doc`, then runs `then` once it saved.
@@ -1164,6 +1139,11 @@ QQC2.ApplicationWindow {
         function onEmpty() {
             root.close();
         }
+        function onSaveAsRejected(document) {
+            if (root.pendingSave === document) {
+                root.resetSave(); // a close or quit waiting on this save stops
+            }
+        }
         // A tab shown or opened brings the editor back from Settings.
         function onCurrentIndexChanged() {
             root.settingsOpen = false;
@@ -1181,7 +1161,9 @@ QQC2.ApplicationWindow {
     Connections {
         target: App
         function onNotice(text) {
-            toast.show(text);
+            if (App.activeWindow() === root) {
+                toast.show(text);
+            }
         }
         function onMessage(text) {
             if (App.activeWindow() === root) {
@@ -1300,6 +1282,8 @@ QQC2.ApplicationWindow {
         case Document.ReadFailed:
         case Document.TooLarge:
             return "error";
+        case Document.SaveUnchecked:
+            return "warning";
         case Document.Unencodable:
         case Document.ChangedOnDisk:
         case Document.Deleted:
@@ -1317,6 +1301,8 @@ QQC2.ApplicationWindow {
             return qsTr("Couldn't save %1: %2").arg(name).arg(document.bannerText);
         case Document.ReadFailed:
             return qsTr("Couldn't read %1: %2").arg(name).arg(document.bannerText);
+        case Document.SaveUnchecked:
+            return document.bannerText;
         case Document.Unrecovered:
             return document.path.length > 0 ? qsTr("Your unsaved changes to %1 couldn't be recovered; this is the file as saved.").arg(name) : qsTr("The text of %1 couldn't be recovered.").arg(name);
         case Document.Unencodable:
@@ -1350,6 +1336,8 @@ QQC2.ApplicationWindow {
         switch (kind) {
         case Document.SaveFailed:
             return [bannerSaveAs, bannerRetry];
+        case Document.SaveUnchecked:
+            return [bannerSaveAnyway, bannerCancelCheck];
         case Document.ReadFailed:
             // Reading again drops what was typed since.
             return document.modified ? [] : [bannerReadAgain];
@@ -1366,6 +1354,16 @@ QQC2.ApplicationWindow {
         default:
             return [];
         }
+    }
+    KeyedAction {
+        id: bannerSaveAnyway
+        text: qsTr("Save Anyway")
+        onTriggered: root.document.saveAnyway()
+    }
+    KeyedAction {
+        id: bannerCancelCheck
+        text: qsTr("Cancel")
+        onTriggered: root.document.cancelSaveCheck()
     }
     KeyedAction {
         id: bannerCancelLoad

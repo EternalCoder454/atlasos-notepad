@@ -549,7 +549,7 @@ void Document::Private::applyMarkdown(qint64 bytes)
 void Document::Private::checkWritable()
 {
     if (isRemote()) {
-        if (!remoteWritable || !KProtocolManager::supportsWriting(url)) {
+        if (!remoteWritable || !Remote::unsupported(url, true).isEmpty()) {
             setBanner(ReadOnlyFile);
         } else {
             clearBanner(ReadOnlyFile);
@@ -1105,6 +1105,8 @@ void Document::Private::applyDiskStat(int err, const NpStamp &now)
 
 void Document::Private::startLoad(LoadMode mode, int forcedEncoding)
 {
+    lastMode = mode;
+    lastForced = forcedEncoding;
     const int gen = ++loadGeneration;
     watch();
     if (mode == Initial) {
@@ -1253,9 +1255,28 @@ void Document::Private::startSave()
 void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snapshot)
 {
     setSaving(false);
+    if (r.rc == 0 && snapshot.path != path) {
+        // The file was renamed or moved while this save ran, so the bytes
+        // went to the old name. Nothing here counts as saved: the stamp is
+        // the old place's, the tab stays modified, and the text is saved
+        // again, to where the tab is now.
+        setModified(true);
+        resave = false;
+        QTimer::singleShot(0, q, [this] { q->save(); });
+        return;
+    }
     if (r.rc == 0) {
-        stamp = r.stamp;
-        hasStamp = !r.noStamp;
+        if (!r.noStamp) {
+            stamp = r.stamp;
+            hasStamp = true;
+        } else if (!hasStamp) {
+            // The new time couldn't be read. A stamp nothing matches makes the
+            // next save look first (and say so), rather than skip the check.
+            stamp = NpStamp{-2, ~quint64(0), 0, 0};
+            hasStamp = true;
+        }
+        // (Same second and same size as the file we read, but other bytes,
+        // goes unseen: the time KIO gives is whole seconds. A known limit.)
         keepMine = false;
         loaded = true;
         for (const Banner b : {ChangedOnDisk, SaveFailed, ReadFailed, Unrecovered, Unencodable, Deleted, Lossy, MixedLineEndings}) {
@@ -1377,7 +1398,11 @@ void Document::Private::setRemote(const QUrl &remote)
 
 QWindow *Document::Private::window() const
 {
-    return textEdit ? textEdit->window() : nullptr;
+    if (textEdit && textEdit->window()) {
+        return textEdit->window();
+    }
+    // No view yet (a file opened at startup): the window of the tab list.
+    return list ? list->window() : nullptr;
 }
 
 void Document::Private::setPercent(int value)
@@ -1411,6 +1436,8 @@ bool Document::isSaving() const
     return d->saving;
 }
 
+static void dropFirstOpen(DocumentList *list, Document *doc);
+
 void Document::cancelLoad()
 {
     if (!isFetching()) {
@@ -1422,7 +1449,7 @@ void Document::cancelLoad()
     if (!d->loaded && d->announceOpen) {
         // A first open: nothing was ever shown, so the tab goes (and isn't
         // offered by Reopen Closed Tab).
-        d->list->closeDocument(this);
+        dropFirstOpen(d->list, this);
         return;
     }
     // A reload (or a restored tab): the text stays, loading ends.
@@ -1447,6 +1474,9 @@ bool Document::Private::relocate(const QUrl &to)
         }
     }
     const QString oldPath = path;
+    if (!saving) {
+        cancelRemote(); // the jobs of the old place; a save in flight finishes (see finishSave)
+    }
     unwatch();
     if (toRemote) {
         setRemote(to);
@@ -1458,7 +1488,12 @@ bool Document::Private::relocate(const QUrl &to)
     watch();
     Q_EMIT q->pathChanged();
     Q_EMIT q->titleChanged();
-    if (!toRemote) {
+    if (loading) {
+        startLoad(lastMode, lastForced); // reads the new place, not the old (bumps loadGeneration)
+    }
+    if (toRemote) {
+        checkRemote(true); // also clears a Deleted banner from before the move
+    } else {
         // The watcher may have said "deleted" a moment ago: the file is here.
         NpStamp now = {};
         const int err = np_file_stamp(path.toUtf8().constData(), &now);
@@ -1501,6 +1536,17 @@ QString remoteOpenFailure(const QString &name, const LoadResult &r)
 }
 }
 
+// Gives up a tab that never showed anything (cancelled or failed first open).
+// The last tab leaves an empty untitled one behind: the window stays, as at a
+// normal start, instead of closing with it.
+static void dropFirstOpen(DocumentList *list, Document *doc)
+{
+    if (list->rowCount() == 1) {
+        list->newTab();
+    }
+    list->closeDocument(doc);
+}
+
 // Stat, then a stored get; the bytes are decoded on a worker with the Rust
 // code a local file's are. The size limit is checked on the stat and again
 // on what arrives, since a server can lie about the size.
@@ -1517,7 +1563,7 @@ void Document::Private::startRemoteLoad(LoadMode mode, int forcedEncoding, int g
         if (mode == Initial && announceOpen && (r.error || r.tooLarge || r.isDir)) {
             DocumentList *owner = list;
             Q_EMIT owner->openFailed(remoteOpenFailure(QFileInfo(path).fileName(), r));
-            owner->closeDocument(q); // deletes this later: nothing runs after it
+            dropFirstOpen(owner, q); // deletes this later: nothing runs after it
             return;
         }
         announceOpen = false;
@@ -1611,8 +1657,12 @@ void Document::Private::checkRemote(bool force)
         return;
     }
     lastRemoteCheck.start();
-    checkJob = Remote::stat(url, q, window(), [this](const Remote::StatInfo &st) {
+    const QUrl at = url;
+    checkJob = Remote::stat(url, q, window(), [this, at](const Remote::StatInfo &st) {
         checkJob = nullptr;
+        if (at != url) {
+            return; // it moved since: what this says is about the old place
+        }
         if (saving || isLoading()) {
             recheck = true;
             return;
@@ -1640,7 +1690,7 @@ void Document::Private::checkRemote(bool force)
 void Document::Private::saveRemote()
 {
     const QString why = Remote::unsupported(url, true);
-    if (!why.isEmpty() || !KProtocolManager::supportsWriting(url)) {
+    if (!why.isEmpty()) {
         setBanner(ReadOnlyFile);
         Q_EMIT q->saveFailed(why.isEmpty() ? QObject::tr("This location can't be written to. Use Save As.") : why);
         return;
@@ -1651,10 +1701,22 @@ void Document::Private::saveRemote()
     }
     // The file as it is now against the one this text came from.
     setSaving(true);
-    checkJob = Remote::stat(url, q, window(), [this](const Remote::StatInfo &st) {
+    const QUrl at = url;
+    checkJob = Remote::stat(url, q, window(), [this, at](const Remote::StatInfo &st) {
         checkJob = nullptr;
         setSaving(false);
         resave = false;
+        if (at != url) {
+            QTimer::singleShot(0, q, [this] { q->save(); }); // renamed meanwhile: look at the new place
+            return;
+        }
+        if (st.error && st.error != ENOENT) {
+            // Not knowing is not "unchanged": ask, never overwrite silently.
+            const QString message = QObject::tr("Couldn't check %1 on the server before saving: %2").arg(q->title(), st.errorText);
+            setBanner(SaveUnchecked, message);
+            Q_EMIT q->saveFailed(message);
+            return;
+        }
         if (!st.error && !sameStamp(st.stamp, stamp)) {
             setBanner(ChangedOnDisk);
             Q_EMIT q->saveFailed(QObject::tr("The file changed on disk."));
@@ -2172,6 +2234,18 @@ void Document::reopenWithEncoding(int encoding)
         return;
     }
     d->startLoad(Private::AsEncoding, encoding);
+}
+
+void Document::saveAnyway()
+{
+    d->clearBanner(SaveUnchecked);
+    d->keepMine = true; // the check is skipped, as after Keep Mine
+    save();
+}
+
+void Document::cancelSaveCheck()
+{
+    d->clearBanner(SaveUnchecked);
 }
 
 void Document::keepMine()

@@ -12,6 +12,9 @@ ContextMenu {
 
     required property var actions
 
+    // Never taller than the window: the list scrolls past that.
+    height: Math.min(implicitHeight, (QQC2.Overlay.overlay ? QQC2.Overlay.overlay.height : implicitHeight) - topMargin - bottomMargin)
+
     signal openRecent(string path)
 
     component Item: ContextMenuItem {
@@ -47,10 +50,14 @@ ContextMenu {
     Item { action: menu.actions.saveAs }
     Item { action: menu.actions.saveAll }
     ContextMenuSeparator {}
-    Item { action: menu.actions.openWith }
-    Item { action: menu.actions.showInFolder }
-    Item { action: menu.actions.copyLocation }
-    Item { action: menu.actions.properties }
+    // One submenu: the whole menu then fits a default-size window.
+    ContextMenu {
+        title: qsTr("File Location")
+        Item { action: menu.actions.openWith }
+        Item { action: menu.actions.showInFolder }
+        Item { action: menu.actions.copyLocation }
+        Item { action: menu.actions.properties }
+    }
     ContextMenuSeparator {}
     Item { action: menu.actions.print }
     ContextMenuSeparator {}

@@ -6,11 +6,16 @@
 #include <KIO/ApplicationLauncherJob>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/OpenFileManagerWindowJob>
+#include <KFileItem>
+#include <KOpenWithDialog>
+#include <KService>
+#include <KIO/StatJob>
 #include <KJobWindows>
 #include <KPropertiesDialog>
 
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QPointer>
 #include <QWidget>
 #include <QWindow>
 
@@ -35,12 +40,29 @@ void Document::openWith()
     if (d->path.isEmpty()) {
         return;
     }
-    // No service: the job asks, with KDE's Open With dialog.
-    auto *job = new KIO::ApplicationLauncherJob();
-    job->setUrls({d->isRemote() ? d->url : shownUrl(this)});
-    job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, nullptr));
-    KJobWindows::setWindow(job, d->window() ? d->window() : QGuiApplication::focusWindow());
-    job->start();
+    // KDE's Open With dialog, made here (not by the job) so it is transient
+    // for Notepad's window.
+    const QUrl url = shownUrl(this); // no password in what another program is given
+    QWindow *parent = d->window() ? d->window() : QGuiApplication::focusWindow();
+    auto *dialog = new KOpenWithDialog({url});
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setSaveNewApplications(true);
+    dialog->winId();
+    if (parent && dialog->windowHandle()) {
+        dialog->windowHandle()->setTransientParent(parent);
+    }
+    connect(dialog, &QDialog::accepted, dialog, [dialog, url, parent] {
+        KService::Ptr service = dialog->service();
+        if (!service) {
+            return;
+        }
+        auto *job = new KIO::ApplicationLauncherJob(service);
+        job->setUrls({url});
+        job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, nullptr));
+        KJobWindows::setWindow(job, parent);
+        job->start();
+    });
+    dialog->show();
 }
 
 void Document::showProperties()
@@ -48,15 +70,37 @@ void Document::showProperties()
     if (d->path.isEmpty()) {
         return;
     }
-    // Not modal, and over Notepad's window.
-    auto *dialog = new KPropertiesDialog(shownUrl(this));
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->winId();
+    // The window and the document are taken before anything that can run an
+    // event loop of its own.
+    const QPointer<Document> guard(this);
     QWindow *parent = d->window() ? d->window() : QGuiApplication::focusWindow();
-    if (parent && dialog->windowHandle()) {
-        dialog->windowHandle()->setTransientParent(parent);
+    const QUrl url = shownUrl(this);
+    auto show = [parent](KPropertiesDialog *dialog) {
+        // Not modal, and over Notepad's window.
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->winId();
+        if (parent && dialog->windowHandle()) {
+            dialog->windowHandle()->setTransientParent(parent);
+        }
+        dialog->show();
+    };
+    if (!d->isRemote()) {
+        show(new KPropertiesDialog(url));
+        return;
     }
-    dialog->show();
+    // KPropertiesDialog(QUrl) would stat the server in a nested event loop:
+    // stat in the background, then open it for what came back.
+    KIO::StatJob *job = KIO::stat(url, KIO::StatJob::SourceSide, KIO::StatDefaultDetails, KIO::HideProgressInfo);
+    if (!job) {
+        return;
+    }
+    Remote::setup(job, parent);
+    connect(job, &KJob::result, this, [guard, job, url, show] {
+        if (!guard || job->error()) {
+            return; // the tab is gone, or the server said no
+        }
+        show(new KPropertiesDialog(KFileItem(job->statResult(), url)));
+    });
 }
 
 void Document::copyLocation()

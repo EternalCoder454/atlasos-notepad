@@ -23,6 +23,7 @@ class QFileSystemWatcher;
 class QQmlApplicationEngine;
 class QTextDocument;
 class DocumentList;
+class QWindow;
 class Session;
 
 // ~/.config/atlas-notepadrc. Every setter writes through at once.
@@ -178,6 +179,7 @@ public:
     enum Banner {
         NoBanner,
         SaveFailed,      // bannerText says why; actions: Save As, Retry
+        SaveUnchecked,   // the server couldn't be checked before saving: Save Anyway, Cancel
         ReadFailed,      // bannerText says why; action: Try Again (reload) unless modified
         Unencodable,     // the text has characters `encoding` can't store: Save as UTF-8
         ChangedOnDisk,   // modified here and changed outside: Reload, Keep Mine
@@ -211,6 +213,8 @@ public:
     bool isSaving() const;
     // First open: closes the tab. A reload: keeps the text.
     Q_INVOKABLE void cancelLoad();
+    Q_INVOKABLE void saveAnyway();     // after SaveUnchecked
+    Q_INVOKABLE void cancelSaveCheck();
     // File menu: the document's file in the file manager, Open With, the
     // properties dialog, the location on the clipboard. None for untitled.
     Q_INVOKABLE void showInFolder();
@@ -395,6 +399,12 @@ public:
     void setCurrentIndex(int index);
     Document *current() const;
     bool canReopenClosed() const;
+    // The window showing these tabs: jobs of tabs without a view yet (a
+    // startup open) are parented to it.
+    QWindow *window() const;
+    void setWindow(QWindow *window);
+    // A file (or folder) in the closed-tab stack was renamed.
+    void renameClosed(const QString &from, const QString &to);
     bool anyModified() const;
     Q_INVOKABLE QList<Document *> documents() const;
     // Appends an untitled-or-restored tab without making it current (for the
@@ -406,6 +416,12 @@ public:
     // Opens each file in a tab (an already open file: its tab becomes
     // current). The last one becomes current. Reading is asynchronous.
     Q_INVOKABLE void open(const QList<QUrl> &urls);
+    // The Open and Save As dialogs. They are QFileDialog, not the QML
+    // FileDialog: with the KDE platform theme the QML one hands back nothing
+    // for a remote (sftp://...) place. A chosen URL goes to open() or
+    // document->saveAs(); a cancelled Save As emits saveAsRejected.
+    Q_INVOKABLE void openDialog(const QUrl &folder, const QStringList &nameFilters);
+    Q_INVOKABLE void saveAsDialog(Document *document, const QUrl &folder, const QString &fileName, const QStringList &nameFilters);
     // Closes the tab if it is not modified, else emits
     // closeConfirmationNeeded(document) and does nothing.
     Q_INVOKABLE void requestClose(int index);
@@ -429,6 +445,8 @@ Q_SIGNALS:
     void empty();
     // A file couldn't be opened at all (not found, too large, no permission).
     void openFailed(const QString &message);
+    // The Save As dialog for `document` was cancelled.
+    void saveAsRejected(Document *document);
 
 private:
     friend class Session;

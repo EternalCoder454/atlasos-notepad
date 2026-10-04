@@ -1,16 +1,17 @@
 // Follows what other programs do to files (Dolphin renaming or moving one,
 // another app removing it), as org.kde.KDirNotify announces it on the session
 // bus, for local and remote documents alike. With no session bus nothing is
-// connected and this does nothing.
+// connected and this does nothing. Any program on the bus can send these, so
+// a move is followed only when the file is really there (see follow()).
 #pragma once
 
 #include <QObject>
 #include <QStringList>
+#include <QTimer>
 #include <QUrl>
 
 class App;
 class Document;
-class QUrl;
 
 class DirNotifyListener : public QObject
 {
@@ -28,6 +29,12 @@ public Q_SLOTS:
 
 private:
     static QUrl locationOf(Document *doc);
+    void follow(Document *doc, const QUrl &old, const QUrl &to);
+    void apply(Document *doc, const QUrl &old, const QUrl &to);
+    void flush();
+
     App *m_app;
     bool m_connected = false;
+    QTimer m_timer; // one pass for a flood of notices
+    QStringList m_removed, m_changed;
 };

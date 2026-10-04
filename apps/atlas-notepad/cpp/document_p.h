@@ -80,6 +80,8 @@ struct Document::Private {
     bool loaded = true; // false: the text isn't the file's (never saved over it)
     bool keepMine = false;
     bool saving = false;
+    LoadMode lastMode = Initial; // of the load that last started, for a restart after a rename
+    int lastForced = -1;
     int percent = -1; // of a remote read, -1 when unknown
     bool resave = false; // save() asked for during a save
     bool recheck = false; // the file changed during a save or load: look again after

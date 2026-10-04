@@ -3,11 +3,14 @@
 #include "document_p.h"
 #include "remote.h"
 
+#include <QFileDialog>
 #include <QFileInfo>
+#include <QPointer>
 #include <QUrl>
 
 #include <cerrno>
 #include <cstring>
+#include <memory>
 #include <unistd.h>
 
 namespace
@@ -36,6 +39,7 @@ struct DocumentList::Private {
     int current = -1;
     QStringList closed; // newest last
     bool anyModified = false;
+    QPointer<QWindow> window;
 
     // The smallest "Untitled" number no untitled tab here has.
     int freeUntitled() const
@@ -292,6 +296,78 @@ void DocumentList::requestClose(int index)
     } else {
         close(index);
     }
+}
+
+// Not modal to the whole desktop, and over Notepad's window.
+static QFileDialog *newFileDialog(QWindow *parent, const QString &title, const QUrl &folder, const QStringList &nameFilters)
+{
+    auto *dialog = new QFileDialog(nullptr, title);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setNameFilters(nameFilters);
+    if (folder.isValid() && !folder.isEmpty()) {
+        dialog->setDirectoryUrl(folder);
+    }
+    dialog->winId();
+    if (parent && dialog->windowHandle()) {
+        dialog->windowHandle()->setTransientParent(parent);
+    }
+    return dialog;
+}
+
+void DocumentList::openDialog(const QUrl &folder, const QStringList &nameFilters)
+{
+    QFileDialog *dialog = newFileDialog(d->window, tr("Open"), folder, nameFilters);
+    dialog->setAcceptMode(QFileDialog::AcceptOpen);
+    dialog->setFileMode(QFileDialog::ExistingFiles);
+    connect(dialog, &QFileDialog::urlsSelected, this, [this](const QList<QUrl> &urls) { open(urls); });
+    dialog->open();
+}
+
+void DocumentList::saveAsDialog(Document *document, const QUrl &folder, const QString &fileName, const QStringList &nameFilters)
+{
+    if (!document) {
+        return;
+    }
+    QFileDialog *dialog = newFileDialog(d->window, tr("Save As"), folder, nameFilters);
+    dialog->setAcceptMode(QFileDialog::AcceptSave);
+    dialog->setFileMode(QFileDialog::AnyFile);
+    dialog->selectFile(fileName);
+    const QPointer<Document> guard(document);
+    auto chosen = std::make_shared<bool>(false);
+    connect(dialog, &QFileDialog::urlSelected, this, [guard, chosen](const QUrl &url) {
+        *chosen = true;
+        if (guard && !url.isEmpty()) {
+            guard->saveAs(url);
+        }
+    });
+    connect(dialog, &QDialog::finished, this, [this, guard, chosen] {
+        if (!*chosen) {
+            Q_EMIT saveAsRejected(guard);
+        }
+    });
+    dialog->open();
+}
+
+QWindow *DocumentList::window() const
+{
+    return d->window;
+}
+
+void DocumentList::setWindow(QWindow *window)
+{
+    d->window = window;
+}
+
+void DocumentList::renameClosed(const QString &from, const QString &to)
+{
+    bool any = false;
+    for (QString &p : d->closed) {
+        if (p == from || p.startsWith(from + QLatin1Char('/'))) {
+            p = to + p.mid(from.size());
+            any = true;
+        }
+    }
+    (void)any;
 }
 
 void DocumentList::close(int index)

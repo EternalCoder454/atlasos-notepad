@@ -52,7 +52,6 @@ export HOME="$home"
 # side runs as its own user, in the same file system as the tests.
 useradd -m -s /bin/bash -p '*' np-sftp || { echo "kio-sftp-test: can't add the np-sftp user" >&2; exit 2; }
 chmod 755 "$work"; chmod 777 "$work/files"
-umask 000 # the files the tests make are writable for that user too
 ssh-keygen -q -t ed25519 -N '' -f "$ssh_dir/id_ed25519"
 ssh-keygen -q -t ed25519 -N '' -f "$work/server/host_key"
 cp "$ssh_dir/id_ed25519.pub" "$work/server/authorized_keys"
@@ -68,7 +67,7 @@ KbdInteractiveAuthentication no
 UsePAM no
 StrictModes no
 PermitRootLogin yes
-Subsystem sftp internal-sftp
+Subsystem sftp internal-sftp -l INFO
 LogLevel VERBOSE
 CFG
 mkdir -p /run/sshd
@@ -94,16 +93,19 @@ echo "ssh login to the test sshd: exit $?"
 [ -s "$work/ssh.log" ] && grep -E "Authenticat|denied|refused|Permission|Host key|known_hosts" "$work/ssh.log" | head -6
 
 export XDG_CONFIG_HOME="$work/xdg/config" XDG_DATA_HOME="$work/xdg/data" XDG_CACHE_HOME="$work/xdg/cache" XDG_STATE_HOME="$work/xdg/state" XDG_RUNTIME_DIR="$work/run"
+umask 000 # the files the tests make are writable for that user too
 export NP_KIO_TEST_BASE="sftp://np-sftp@127.0.0.1:2222$work/files"
 export QT_QPA_PLATFORM=offscreen
 status=0
 
 echo "== app_test over sftp"
-dbus-run-session -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab > "$work/app_test.log" 2>&1
+dbus-run-session -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab kioSaveRaisesNoBanner relocateDuringRemoteSave renameDuringRemoteLoad > "$work/app_test.log" 2>&1
 test_rc=$?
 grep -E "^(PASS|FAIL|SKIP|Totals|   Loc|   Actual|   Expected)" "$work/app_test.log"
 [ "$test_rc" = 0 ] || { status=1; echo "app_test exit $test_rc"; tail -15 "$work/app_test.log"; tail -15 "$work/sshd.log"; }
 
+echo "== what sshd's sftp-server did with the test files (does a save go through a .part and a rename?)"
+grep -E 'sftp-server|internal-sftp' "$work/sshd.log" | grep -E 'rt\.txt|cf\.txt|\.part|rename' | sed 's/^.*\(open\|rename\|posix-rename\|remove\|close\)/\1/' | sort | uniq -c | head -20
 echo "== the app itself, under Xvfb, opening an sftp URL"
 printf 'from the server\n' > "$work/files/e2e.txt"
 sessions_before=$(grep -c "subsystem 'sftp'" "$work/sshd.log")

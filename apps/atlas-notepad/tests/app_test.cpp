@@ -477,6 +477,16 @@ private Q_SLOTS:
         QVERIFY(failed.last().at(0).toString().contains(QStringLiteral("doesn't exist")));
         list->open({QUrl(QStringLiteral("nosuchscheme://host/x.txt"))});
         QCOMPARE(failed.size(), 4);
+        // Only the schemes Notepad knows (admin: is out, trash: isn't a file).
+        list->open({QUrl(QStringLiteral("admin:///etc/hosts"))});
+        list->open({QUrl(QStringLiteral("trash:/x.txt"))});
+        QCOMPARE(failed.size(), 6);
+        QVERIFY(Remote::unsupported(QUrl(QStringLiteral("sftp://h/x")), true).isEmpty());
+        QVERIFY(Remote::unsupported(QUrl(QStringLiteral("smb://h/s/x")), true).isEmpty());
+        QVERIFY(Remote::unsupported(QUrl(QStringLiteral("https://h/x")), false).isEmpty());
+        QVERIFY(!Remote::unsupported(QUrl(QStringLiteral("https://h/x")), true).isEmpty()); // read-only: Save As
+        QVERIFY(!Remote::unsupported(QUrl(QStringLiteral("zip:/a.zip/x")), true).isEmpty());
+        QVERIFY(!Remote::unsupported(QUrl(QStringLiteral("admin:///x")), false).isEmpty());
         QTRY_COMPARE(list->rowCount(), tabs); // refused tabs are gone again
         QVERIFY(!list->canReopenClosed()); // and aren't offered back
     }
@@ -518,6 +528,7 @@ private Q_SLOTS:
     {
         Remote::setForceKio(true);
         DocumentList *list = newList();
+        QSignalSpy emptied(list, &DocumentList::empty);
         const int tabs = list->rowCount();
         const QString path = write(QStringLiteral("cancel.txt"), "x\n");
         list->open({QUrl::fromLocalFile(path)});
@@ -526,8 +537,13 @@ private Q_SLOTS:
         QVERIFY(doc->isFetching()); // the stat hasn't come back yet
         QPointer<Document> guard = doc;
         doc->cancelLoad();
-        QCOMPARE(list->rowCount(), tabs);
+        // The only tab: an empty untitled one stays (the window doesn't close).
+        QCOMPARE(list->rowCount(), qMax(tabs, 1));
+        QVERIFY(list->current());
+        QVERIFY(list->current() != doc);
+        QVERIFY(tabs > 0 || list->current()->path().isEmpty());
         QVERIFY(!list->canReopenClosed());
+        QCOMPARE(emptied.count(), 0);
         QTRY_VERIFY(!guard);
     }
 
@@ -635,7 +651,8 @@ private Q_SLOTS:
     // (ctest makes one with dbus-run-session); without it they skip.
     bool haveBus()
     {
-        return QDBusConnection::sessionBus().isConnected();
+        // NP_TEST_NO_BUS: ctest had no dbus-run-session; never use an ambient bus.
+        return !qEnvironmentVariableIsSet("NP_TEST_NO_BUS") && QDBusConnection::sessionBus().isConnected();
     }
 
     void dirNotifyRename()
@@ -757,9 +774,11 @@ private Q_SLOTS:
         QCOMPARE(notice.size(), 1);
         // Open Containing Folder, Open With and Properties need a desktop: they
         // start their job or dialog, and nothing crashes.
-        doc->showInFolder();
-        doc->showProperties();
-        doc->openWith();
+        if (haveBus()) {
+            doc->showInFolder();
+            doc->showProperties();
+            doc->openWith();
+        }
         QTest::qWait(300);
         const auto widgets = QApplication::topLevelWidgets();
         for (QWidget *w : widgets) {
@@ -773,6 +792,113 @@ private Q_SLOTS:
         remote->d->path = Remote::display(remote->d->url);
         remote->copyLocation();
         QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("sftp://user@127.0.0.1:1/r.txt"));
+    }
+
+    void kioSaveRaisesNoBanner()
+    {
+        const QString path = write(QStringLiteral("quiet.txt"), "one\n");
+        Document *doc = openKio(newList(), path);
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("two "));
+        QVERIFY(saveAndWait(doc));
+        QTest::qWait(700); // KIO's own FilesChanged and the stat after it
+        QCOMPARE(doc->banner(), Document::NoBanner);
+        QCOMPARE(doc->path(), Remote::display(QUrl::fromLocalFile(path)));
+        QVERIFY(!doc->isModified());
+    }
+
+    void relocateDuringRemoteSave()
+    {
+        const QString a = write(QStringLiteral("ra.txt"), "one\n");
+        const QString b = m_dir + QStringLiteral("/rb.txt");
+        Document *doc = openKio(newList(), a);
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("X "));
+        doc->d->keepMine = true; // no conflict check: the race below may leave a newer time on rb.txt
+        doc->save();
+        QVERIFY(doc->d->saving); // the stat and write are in flight; the event loop hasn't run
+        QVERIFY(QFile::rename(a, b));
+        QVERIFY(doc->d->relocate(QUrl::fromLocalFile(b)));
+        // The first save went to the old name; the text is saved again to the new one.
+        QTRY_VERIFY_WITH_TIMEOUT(!doc->isModified() && !doc->d->saving, 20000);
+        QCOMPARE(read(b), QByteArray("X one\n"));
+        QCOMPARE(doc->path(), Remote::display(QUrl::fromLocalFile(b)));
+        QCOMPARE(doc->text(), QStringLiteral("X one\n"));
+    }
+
+    void renameDuringRemoteLoad()
+    {
+        const QString a = write(QStringLiteral("la.txt"), "one\n");
+        const QString b = m_dir + QStringLiteral("/lb.txt");
+        Remote::setForceKio(true);
+        DocumentList *list = newList();
+        list->open({QUrl::fromLocalFile(a)});
+        Document *doc = list->current();
+        QVERIFY(doc && doc->isFetching());
+        QVERIFY(QFile::rename(a, b));
+        QVERIFY(doc->d->relocate(QUrl::fromLocalFile(b)));
+        QTRY_VERIFY_WITH_TIMEOUT(!doc->isLoading(), 20000);
+        QCOMPARE(doc->text(), QStringLiteral("one\n"));
+        QCOMPARE(doc->banner(), Document::NoBanner);
+        QCOMPARE(doc->title(), QStringLiteral("lb.txt"));
+    }
+
+    void dirNotifyDeletedThenMovedRemote()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        const QString a = write(QStringLiteral("da.txt"), "one\n");
+        const QString b = m_dir + QStringLiteral("/db.txt");
+        Document *doc = openKio(newList(), a);
+        QVERIFY(doc);
+        QVERIFY(QFile::rename(a, b));
+        OrgKdeKDirNotifyInterface::emitFilesRemoved({QUrl::fromLocalFile(a)});
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::Deleted, 20000);
+        OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl::fromLocalFile(b));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->path(), Remote::display(QUrl::fromLocalFile(b)), 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(doc->banner() != Document::Deleted, 20000);
+    }
+
+    void dirNotifyMovesAreChecked()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        const QString a = write(QStringLiteral("ma.txt"), "one\n");
+        Document *doc = openFile(newList(), a);
+        QVERIFY(doc);
+        // Nothing at the new place: a claim, not a move.
+        OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl::fromLocalFile(m_dir + QStringLiteral("/nowhere.txt")));
+        // A copy (the old place is still there).
+        const QString copy = write(QStringLiteral("mcopy.txt"), "one\n");
+        OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl::fromLocalFile(copy));
+        // Another kind of place: the trash.
+        OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl(QStringLiteral("trash:/ma.txt")));
+        QTest::qWait(600);
+        QCOMPARE(doc->path(), a);
+        QVERIFY(doc->banner() != Document::Deleted);
+    }
+
+    void dirNotifyRenamesClosedTabs()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        const QString a = write(QStringLiteral("ca.txt"), "one\n");
+        const QString b = m_dir + QStringLiteral("/cb.txt");
+        DocumentList *list = newList();
+        Document *doc = openFile(list, a);
+        QVERIFY(doc);
+        list->closeDocument(doc);
+        QVERIFY(QFile::rename(a, b));
+        OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl::fromLocalFile(b));
+        QTest::qWait(300);
+        list->reopenClosed();
+        QVERIFY(list->current());
+        QCOMPARE(list->current()->path(), b);
     }
 
     void kioSessionStripsPassword()

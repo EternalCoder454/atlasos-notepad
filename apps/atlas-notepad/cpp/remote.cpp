@@ -10,7 +10,11 @@
 #include <QGuiApplication>
 #include <QWindow>
 
+#include <QSet>
+
 #include <cerrno>
+
+using namespace Qt::StringLiterals;
 
 namespace Remote
 {
@@ -57,16 +61,21 @@ QUrl fromStored(const QString &stored)
     return isStoredUrl(stored) ? QUrl(stored) : QUrl::fromLocalFile(stored);
 }
 
+// What Notepad opens, by scheme, whatever else KIO has workers for. Others
+// reach us from the command line, D-Bus, the session and the dialogs alike.
 QString unsupported(const QUrl &url, bool forWriting)
 {
+    static const QSet<QString> readWrite = {u"file"_s, u"sftp"_s, u"fish"_s, u"ftp"_s, u"ftps"_s, u"smb"_s, u"webdav"_s, u"webdavs"_s, u"nfs"_s, u"mtp"_s, u"gdrive"_s, u"kdeconnect"_s};
+    static const QSet<QString> readOnly = {u"http"_s, u"https"_s, u"zip"_s, u"tar"_s, u"ar"_s, u"archive"_s};
     const QString scheme = url.scheme();
-    if (!KProtocolInfo::isKnownProtocol(url)) {
+    const bool writable = readWrite.contains(scheme);
+    if ((!writable && !readOnly.contains(scheme)) || !KProtocolInfo::isKnownProtocol(url)) {
         return QObject::tr("Notepad can't open “%1:” locations.").arg(scheme);
     }
     if (!KProtocolManager::supportsReading(url)) {
         return QObject::tr("“%1:” locations don't hold files Notepad can read.").arg(scheme);
     }
-    if (forWriting && !KProtocolManager::supportsWriting(url)) {
+    if (forWriting && (!writable || !KProtocolManager::supportsWriting(url))) {
         return QObject::tr("“%1:” locations can't be written to.").arg(scheme);
     }
     return {};
@@ -110,7 +119,8 @@ KJob *stat(const QUrl &url, QObject *ctx, QWindow *window, std::function<void(co
             const qint64 mtime = entry.numberValue(KIO::UDSEntry::UDS_MODIFICATION_TIME, -1);
             const qint64 access = entry.numberValue(KIO::UDSEntry::UDS_ACCESS, -1);
             info.stamp.size = size < 0 ? 0 : quint64(size);
-            info.stamp.mtimeNs = mtime < 0 ? -1 : mtime * 1000000000;
+            // A server's date is its own: clamped so the product can't overflow.
+            info.stamp.mtimeNs = mtime < 0 ? -1 : qMin<qint64>(mtime, 9000000000) * 1000000000;
             info.writable = access < 0 || (access & 0222) != 0;
         }
         done(info);

@@ -110,14 +110,18 @@ if(BUILD_TESTING)
     target_link_libraries(app_test PRIVATE ${APP_LIBS} Qt6::Test)
     # Lets the tests send local files through the KIO path (cpp/remote.h).
     target_compile_definitions(app_test PRIVATE NP_KIO_TEST_HOOK)
-    # KDirNotify tests need a session bus: one of their own when we can make it.
+    # The KDirNotify tests need a session bus, but not one that can start
+    # programs: this one has no service directories. Without dbus-run-session
+    # those tests (and the ones that launch other programs) skip.
     find_program(DBUS_RUN_SESSION dbus-run-session)
     if(DBUS_RUN_SESSION)
-        add_test(NAME app_test COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:app_test>)
+        add_test(NAME app_test COMMAND ${DBUS_RUN_SESSION}
+            --config-file=${CMAKE_CURRENT_SOURCE_DIR}/tests/dbus-session.conf -- $<TARGET_FILE:app_test>)
+        set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     else()
         add_test(NAME app_test COMMAND app_test)
+        set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NP_TEST_NO_BUS=1")
     endif()
-    set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 install(TARGETS atlas-notepad-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
