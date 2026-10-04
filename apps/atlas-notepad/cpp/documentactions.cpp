@@ -43,7 +43,7 @@ void Document::openWith()
     // KDE's Open With dialog, made here (not by the job) so it is transient
     // for Notepad's window.
     const QUrl url = shownUrl(this); // no password in what another program is given
-    QWindow *parent = d->window() ? d->window() : QGuiApplication::focusWindow();
+    const QPointer<QWindow> parent(d->window() ? d->window() : QGuiApplication::focusWindow());
     auto *dialog = new KOpenWithDialog({url});
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setSaveNewApplications(true);
@@ -59,7 +59,7 @@ void Document::openWith()
         auto *job = new KIO::ApplicationLauncherJob(service);
         job->setUrls({url});
         job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, nullptr));
-        KJobWindows::setWindow(job, parent);
+        KJobWindows::setWindow(job, parent.data());
         job->start();
     });
     dialog->show();
@@ -73,7 +73,7 @@ void Document::showProperties()
     // The window and the document are taken before anything that can run an
     // event loop of its own.
     const QPointer<Document> guard(this);
-    QWindow *parent = d->window() ? d->window() : QGuiApplication::focusWindow();
+    const QPointer<QWindow> parent(d->window() ? d->window() : QGuiApplication::focusWindow());
     const QUrl url = shownUrl(this);
     auto show = [parent](KPropertiesDialog *dialog) {
         // Not modal, and over Notepad's window.
@@ -94,10 +94,16 @@ void Document::showProperties()
     if (!job) {
         return;
     }
-    Remote::setup(job, parent);
+    Remote::setup(job, parent.data());
     connect(job, &KJob::result, this, [guard, job, url, show] {
-        if (!guard || job->error()) {
-            return; // the tab is gone, or the server said no
+        if (!guard) {
+            return;
+        }
+        if (job->error()) {
+            if (App *app = App::instance()) {
+                Q_EMIT app->notice(tr("Couldn't get the properties of %1: %2").arg(guard->title(), job->errorString()));
+            }
+            return;
         }
         show(new KPropertiesDialog(KFileItem(job->statResult(), url)));
     });

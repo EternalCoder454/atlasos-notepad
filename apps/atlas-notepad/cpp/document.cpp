@@ -1279,7 +1279,7 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
         // goes unseen: the time KIO gives is whole seconds. A known limit.)
         keepMine = false;
         loaded = true;
-        for (const Banner b : {ChangedOnDisk, SaveFailed, ReadFailed, Unrecovered, Unencodable, Deleted, Lossy, MixedLineEndings}) {
+        for (const Banner b : {ChangedOnDisk, SaveFailed, SaveUnchecked, ReadFailed, Unrecovered, Unencodable, Deleted, Lossy, MixedLineEndings}) {
             banners.erase(b);
         }
         Q_EMIT q->bannerChanged();
@@ -1294,10 +1294,12 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
         }
     } else if (r.rc == -1) {
         const QString message = QObject::tr("Some characters can't be saved as %1.").arg(q->encodingName());
+        keepMine = false;
         setBanner(Unencodable, message);
         Q_EMIT q->saveFailed(message);
     } else {
         const QString message = r.errorText.isEmpty() ? errnoText(r.rc) : r.errorText;
+        keepMine = false;
         setBanner(SaveFailed, message);
         Q_EMIT q->saveFailed(message);
     }
@@ -1460,7 +1462,23 @@ void Document::cancelLoad()
 bool Document::Private::relocate(const QUrl &to)
 {
     const bool toRemote = Remote::useKio(to);
-    const QString newPath = toRemote ? Remote::display(to) : to.toLocalFile();
+    // Only the new path is taken from `to`, cleaned; where it is (scheme,
+    // server, login) stays what this tab has. Nothing in a query or fragment.
+    QUrl target;
+    if (toRemote && isRemote()) {
+        if (to.path().isEmpty()) {
+            return false;
+        }
+        target = url;
+        target.setPath(QDir::cleanPath(to.path()));
+        target.setQuery(QString());
+        target.setFragment(QString());
+    } else if (!toRemote && to.isLocalFile() && !to.toLocalFile().isEmpty()) {
+        target = QUrl::fromLocalFile(QDir::cleanPath(QFileInfo(to.toLocalFile()).absoluteFilePath()));
+    } else {
+        return false;
+    }
+    const QString newPath = toRemote ? Remote::display(target) : target.toLocalFile();
     if (newPath.isEmpty() || newPath == path) {
         return false;
     }
@@ -1474,12 +1492,16 @@ bool Document::Private::relocate(const QUrl &to)
         }
     }
     const QString oldPath = path;
+    // The jobs of the old place go, unless a save is in flight: it finishes
+    // (see finishSave) and the text is written again to the new place. The
+    // write in flight still recreates the old name once; an accepted limit.
     if (!saving) {
-        cancelRemote(); // the jobs of the old place; a save in flight finishes (see finishSave)
+        cancelRemote();
     }
+    clearBanner(Moved);
     unwatch();
     if (toRemote) {
-        setRemote(to);
+        setRemote(target);
     } else {
         url = QUrl();
     }
@@ -1511,11 +1533,15 @@ bool Document::Private::relocate(const QUrl &to)
 
 void Document::Private::cancelRemote()
 {
+    // Quietly: `result` never fires, so the pointers are cleared here (a
+    // stale one would make the next check think a job is still running).
     if (remoteJob) {
         remoteJob->kill(KJob::Quietly);
+        remoteJob = nullptr;
     }
     if (checkJob) {
         checkJob->kill(KJob::Quietly);
+        checkJob = nullptr;
     }
 }
 
@@ -1692,7 +1718,8 @@ void Document::Private::saveRemote()
     const QString why = Remote::unsupported(url, true);
     if (!why.isEmpty()) {
         setBanner(ReadOnlyFile);
-        Q_EMIT q->saveFailed(why.isEmpty() ? QObject::tr("This location can't be written to. Use Save As.") : why);
+        keepMine = false;
+        Q_EMIT q->saveFailed(why);
         return;
     }
     if (!hasStamp || keepMine) {
@@ -1718,10 +1745,12 @@ void Document::Private::saveRemote()
             return;
         }
         if (!st.error && !sameStamp(st.stamp, stamp)) {
+            clearBanner(SaveUnchecked);
             setBanner(ChangedOnDisk);
             Q_EMIT q->saveFailed(QObject::tr("The file changed on disk."));
             return;
         }
+        clearBanner(SaveUnchecked);
         startSave();
     });
 }
@@ -2238,9 +2267,15 @@ void Document::reopenWithEncoding(int encoding)
 
 void Document::saveAnyway()
 {
+    if (d->banners.count(SaveUnchecked) == 0) {
+        return;
+    }
     d->clearBanner(SaveUnchecked);
     d->keepMine = true; // the check is skipped, as after Keep Mine
     save();
+    if (!d->saving) {
+        d->keepMine = false; // the save didn't start: don't leave the check off
+    }
 }
 
 void Document::cancelSaveCheck()
@@ -2274,6 +2309,25 @@ void Document::keepMine()
     d->keepMine = false;
     d->clearBanner(ChangedOnDisk);
     d->setModified(true);
+}
+
+void Document::Private::offerMove(const QUrl &from, const QUrl &to)
+{
+    moveFrom = from;
+    moveTo = to;
+    setBanner(Moved, QObject::tr("“%1” was moved to %2.").arg(q->title(), Remote::display(to.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash))));
+}
+
+void Document::followMove()
+{
+    const QUrl at = d->isRemote() ? d->url : QUrl::fromLocalFile(d->path);
+    const QUrl to = d->moveTo;
+    d->clearBanner(Moved);
+    if (to.isValid() && at == d->moveFrom && d->relocate(to)) {
+        if (App *app = App::instance()) {
+            Q_EMIT app->notice(tr("Following “%1”.").arg(title()));
+        }
+    }
 }
 
 void Document::dismissBanner()

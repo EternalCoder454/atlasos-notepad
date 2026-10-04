@@ -3,6 +3,7 @@
 #include "document_p.h"
 #include "remote.h"
 
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QPointer>
@@ -360,14 +361,22 @@ void DocumentList::setWindow(QWindow *window)
 
 void DocumentList::renameClosed(const QString &from, const QString &to)
 {
-    bool any = false;
+    // Local files only, and only where the new place exists and the old one
+    // doesn't: a notice can't make a closed tab reopen somewhere else.
+    if (!QDir::isAbsolutePath(from) || !QDir::isAbsolutePath(to)) {
+        return;
+    }
     for (QString &p : d->closed) {
-        if (p == from || p.startsWith(from + QLatin1Char('/'))) {
-            p = to + p.mid(from.size());
-            any = true;
+        if (Remote::isStoredUrl(p) || !(p == from || p.startsWith(from + QLatin1Char('/')))) {
+            continue;
+        }
+        const QString moved = to + p.mid(from.size());
+        NpStamp atNew = {}, atOld = {};
+        const int errOld = np_file_stamp(p.toUtf8().constData(), &atOld);
+        if (np_file_stamp(moved.toUtf8().constData(), &atNew) == 0 && (errOld == ENOENT || errOld == ENOTDIR)) {
+            p = moved;
         }
     }
-    (void)any;
 }
 
 void DocumentList::close(int index)

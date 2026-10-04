@@ -5,7 +5,9 @@
 // a move is followed only when the file is really there (see follow()).
 #pragma once
 
+#include <QList>
 #include <QObject>
+#include <QPair>
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
@@ -29,6 +31,7 @@ public Q_SLOTS:
 
 private:
     static QUrl locationOf(Document *doc);
+    void queueMove(const QString &src, const QString &dst);
     void follow(Document *doc, const QUrl &old, const QUrl &to);
     void apply(Document *doc, const QUrl &old, const QUrl &to);
     void flush();
@@ -37,4 +40,5 @@ private:
     bool m_connected = false;
     QTimer m_timer; // one pass for a flood of notices
     QStringList m_removed, m_changed;
+    QList<QPair<QUrl, QUrl>> m_moves; // src -> dst, in the order they came, capped
 };

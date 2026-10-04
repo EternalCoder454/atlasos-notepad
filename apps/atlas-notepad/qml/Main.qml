@@ -1286,6 +1286,7 @@ QQC2.ApplicationWindow {
             return "warning";
         case Document.Unencodable:
         case Document.ChangedOnDisk:
+        case Document.Moved:
         case Document.Deleted:
         case Document.Lossy:
         case Document.Unrecovered:
@@ -1302,6 +1303,7 @@ QQC2.ApplicationWindow {
         case Document.ReadFailed:
             return qsTr("Couldn't read %1: %2").arg(name).arg(document.bannerText);
         case Document.SaveUnchecked:
+        case Document.Moved:
             return document.bannerText;
         case Document.Unrecovered:
             return document.path.length > 0 ? qsTr("Your unsaved changes to %1 couldn't be recovered; this is the file as saved.").arg(name) : qsTr("The text of %1 couldn't be recovered.").arg(name);
@@ -1330,7 +1332,7 @@ QQC2.ApplicationWindow {
         }
     }
     function bannerClosable(kind) {
-        return kind >= Document.Unrecovered || kind === Document.SaveFailed || kind === Document.ReadFailed;
+        return kind >= Document.Unrecovered || kind === Document.SaveFailed || kind === Document.ReadFailed || kind === Document.Moved;
     }
     function bannerActions(kind) {
         switch (kind) {
@@ -1345,6 +1347,8 @@ QQC2.ApplicationWindow {
             return [bannerSaveUtf8];
         case Document.ChangedOnDisk:
             return [bannerReload, bannerKeepMine];
+        case Document.Moved:
+            return [bannerFollow];
         case Document.Deleted:
             return [bannerSave, bannerCloseTab];
         case Document.TooLarge:
@@ -1359,6 +1363,11 @@ QQC2.ApplicationWindow {
         id: bannerSaveAnyway
         text: qsTr("Save Anyway")
         onTriggered: root.document.saveAnyway()
+    }
+    KeyedAction {
+        id: bannerFollow
+        text: qsTr("Follow")
+        onTriggered: root.document.followMove()
     }
     KeyedAction {
         id: bannerCancelCheck

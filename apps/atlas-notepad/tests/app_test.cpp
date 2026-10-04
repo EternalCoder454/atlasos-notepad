@@ -487,6 +487,7 @@ private Q_SLOTS:
         QVERIFY(!Remote::unsupported(QUrl(QStringLiteral("https://h/x")), true).isEmpty()); // read-only: Save As
         QVERIFY(!Remote::unsupported(QUrl(QStringLiteral("zip:/a.zip/x")), true).isEmpty());
         QVERIFY(!Remote::unsupported(QUrl(QStringLiteral("admin:///x")), false).isEmpty());
+        QVERIFY(!Remote::unsupported(QUrl(QStringLiteral("fish://h/x")), false).isEmpty());
         QTRY_COMPARE(list->rowCount(), tabs); // refused tabs are gone again
         QVERIFY(!list->canReopenClosed()); // and aren't offered back
     }
@@ -860,6 +861,25 @@ private Q_SLOTS:
         OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl::fromLocalFile(b));
         QTRY_COMPARE_WITH_TIMEOUT(doc->path(), Remote::display(QUrl::fromLocalFile(b)), 20000);
         QTRY_VERIFY_WITH_TIMEOUT(doc->banner() != Document::Deleted, 20000);
+    }
+
+    void dirNotifyRemoteMoveToOtherFolderIsOffered()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        const QString a = write(QStringLiteral("oa.txt"), "one\n");
+        QVERIFY(QDir().mkpath(m_dir + QStringLiteral("/sub")));
+        const QString b = m_dir + QStringLiteral("/sub/ob.txt");
+        Document *doc = openKio(newList(), a);
+        QVERIFY(doc);
+        QVERIFY(QFile::rename(a, b));
+        OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl::fromLocalFile(b));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::Moved, 20000);
+        QCOMPARE(doc->path(), Remote::display(QUrl::fromLocalFile(a))); // not followed by itself
+        doc->followMove();
+        QCOMPARE(doc->path(), Remote::display(QUrl::fromLocalFile(b)));
+        QTRY_VERIFY_WITH_TIMEOUT(doc->banner() != Document::Moved && doc->banner() != Document::Deleted, 20000);
     }
 
     void dirNotifyMovesAreChecked()

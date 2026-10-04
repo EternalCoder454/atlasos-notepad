@@ -5,7 +5,10 @@
 #include "remote.h"
 
 #include <QDBusConnection>
+#include <QDir>
 #include <QFileInfo>
+#include <QHash>
+#include <QWindow>
 #include <QPointer>
 
 namespace
@@ -86,48 +89,44 @@ DirNotifyListener::DirNotifyListener(App *app)
 
 void DirNotifyListener::FileRenamedWithLocalPath(const QString &src, const QString &dst, const QString &)
 {
-    FileRenamed(src, dst);
+    queueMove(src, dst);
 }
 
 void DirNotifyListener::FileMoved(const QString &src, const QString &dst)
 {
-    FileRenamed(src, dst);
+    queueMove(src, dst);
 }
 
-void DirNotifyListener::FileRenamed(const QString &srcText, const QString &dstText)
+void DirNotifyListener::FileRenamed(const QString &src, const QString &dst)
 {
+    queueMove(src, dst);
+}
+
+// A flood of notices costs a list entry each (up to the cap) and one pass.
+void DirNotifyListener::queueMove(const QString &srcText, const QString &dstText)
+{
+    if (m_moves.size() >= maxListed) {
+        return;
+    }
     const QUrl src(srcText), dst(dstText);
     // Same kind of place only: no trash:/ and no move to another protocol.
     if (!src.isValid() || !dst.isValid() || src.scheme().isEmpty() || src.scheme() != dst.scheme()) {
         return;
     }
-    // The tabs closed from there are offered from the new place.
-    for (DocumentList *list : m_app->windows()) {
-        list->renameClosed(keyOf(src), keyOf(dst));
-    }
-    const QString base = trimmed(dst.path()) == QLatin1String("/") ? QString() : trimmed(dst.path());
-    const auto docs = allDocuments(m_app);
-    for (Document *doc : docs) {
-        const QUrl old = locationOf(doc);
-        if (!old.isValid()) {
-            continue;
-        }
-        const QString rest = below(old, src);
-        if (rest.isNull()) {
-            continue;
-        }
-        QUrl to = dst;
-        to.setPath(base + rest);
-        follow(doc, old, to);
+    m_moves.append({src, dst});
+    if (!m_timer.isActive()) {
+        m_timer.start();
     }
 }
 
 // A notice is only a claim. The tab follows when the same file is at the new
-// place (same server and user, the size and time the tab last saw) and the
+// place (same server and login, the size and time the tab last saw) and the
 // old place is empty; otherwise the usual stat shows what happened to it.
+// A remote file that went to another folder is only offered (a banner with
+// Follow): a program on the bus must not steer a tab to a place of its choice.
 void DirNotifyListener::follow(Document *doc, const QUrl &old, const QUrl &to)
 {
-    if (old.scheme() != to.scheme() || !Remote::unsupported(to, false).isEmpty() || !doc->d->hasStamp) {
+    if (doc->d->validating || old.scheme() != to.scheme() || !Remote::unsupported(to, false).isEmpty() || !doc->d->hasStamp) {
         return;
     }
     if (!doc->d->isRemote()) {
@@ -149,17 +148,36 @@ void DirNotifyListener::follow(Document *doc, const QUrl &old, const QUrl &to)
     if (old.host() != to.host() || old.port() != to.port() || ((!to.userName().isEmpty() || !old.userName().isEmpty()) && old.userName() != to.userName())) {
         return;
     }
-    QUrl target = to;
-    target.setUserInfo(old.userInfo()); // the notice has no password
+    // The old URL's scheme, host, port and login with the new path only.
+    QUrl target = old;
+    target.setPath(QDir::cleanPath(to.path()));
+    target.setQuery(QString());
+    target.setFragment(QString());
     const QPointer<Document> guard(doc);
-    QWindow *window = doc->d->window();
-    Remote::stat(target, this, window, [this, guard, old, target, window](const Remote::StatInfo &atNew) {
-        if (!guard || atNew.error || atNew.isDir || atNew.stamp.size != guard->d->stamp.size || atNew.stamp.mtimeNs != guard->d->stamp.mtimeNs) {
+    const QPointer<QWindow> window(doc->d->window());
+    doc->d->validating = true;
+    Remote::stat(target, this, window, [this, guard, window, old, target](const Remote::StatInfo &atNew) {
+        if (!guard) {
+            return;
+        }
+        if (atNew.error || atNew.isDir || atNew.stamp.size != guard->d->stamp.size || atNew.stamp.mtimeNs != guard->d->stamp.mtimeNs) {
+            guard->d->validating = false;
             return;
         }
         Remote::stat(old, this, window, [this, guard, old, target](const Remote::StatInfo &atOld) {
-            if (guard && atOld.error == ENOENT) {
+            if (!guard) {
+                return;
+            }
+            guard->d->validating = false;
+            if (atOld.error != ENOENT) {
+                return;
+            }
+            const QUrl folderOld = old.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
+            const QUrl folderNew = target.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
+            if (folderOld.path() == folderNew.path()) {
                 apply(guard, old, target);
+            } else if (locationOf(guard) == old) {
+                guard->d->offerMove(old, target);
             }
         });
     });
@@ -182,30 +200,60 @@ void DirNotifyListener::apply(Document *doc, const QUrl &old, const QUrl &to)
 void DirNotifyListener::FilesRemoved(const QStringList &files)
 {
     m_removed += files.mid(0, qMax(0, maxListed - int(m_removed.size())));
-    m_timer.start();
+    if (!m_timer.isActive()) {
+        m_timer.start(); // not restarted: a flood can't push the pass back for ever
+    }
 }
 
 void DirNotifyListener::FilesChanged(const QStringList &files)
 {
     m_changed += files.mid(0, qMax(0, maxListed - int(m_changed.size())));
-    m_timer.start();
+    if (!m_timer.isActive()) {
+        m_timer.start();
+    }
 }
 
 void DirNotifyListener::flush()
 {
     const QStringList removed = std::exchange(m_removed, {});
     const QStringList changed = std::exchange(m_changed, {});
+    const auto moves = std::exchange(m_moves, {});
     const auto docs = allDocuments(m_app);
+    // Closed tabs follow a rename of local files (see renameClosed); each
+    // tab, the latest notice that concerns it.
+    QHash<Document *, QPair<QUrl, QUrl>> latest;
+    for (const auto &move : moves) {
+        for (DocumentList *list : m_app->windows()) {
+            list->renameClosed(keyOf(move.first), keyOf(move.second));
+        }
+        const QString base = trimmed(move.second.path()) == QLatin1String("/") ? QString() : trimmed(move.second.path());
+        for (Document *doc : docs) {
+            const QUrl old = locationOf(doc);
+            if (!old.isValid()) {
+                continue;
+            }
+            const QString rest = below(old, move.first);
+            if (rest.isNull()) {
+                continue;
+            }
+            QUrl to = move.second;
+            to.setPath(base + rest);
+            latest.insert(doc, {old, to});
+        }
+    }
+    for (auto it = latest.cbegin(); it != latest.cend(); ++it) {
+        follow(it.key(), it.value().first, it.value().second);
+    }
     for (const QString &text : removed) {
         const QUrl gone(text);
         for (Document *doc : docs) {
             const QUrl at = locationOf(doc);
             if (at.isValid() && !below(at, gone).isNull()) {
                 // The stat says so: a notice for a file that is still there
-                // (a trash that was undone) changes nothing. One stat for each
-                // tab, so it doesn't wait for the usual interval.
+                // (a trash that was undone) changes nothing. The usual
+                // throttle applies, so a flood costs one stat a tab.
                 if (doc->d->isRemote()) {
-                    doc->d->checkRemote(true);
+                    doc->d->checkRemote(false);
                 } else {
                     doc->d->checkOnDisk();
                 }

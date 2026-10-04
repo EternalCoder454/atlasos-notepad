@@ -184,6 +184,7 @@ public:
         Unencodable,     // the text has characters `encoding` can't store: Save as UTF-8
         ChangedOnDisk,   // modified here and changed outside: Reload, Keep Mine
                          // (save() refuses to overwrite until Keep Mine)
+        Moved,           // a remote file went to another folder: Follow (and close)
         Deleted,         // the file is gone: Save (recreates it), Close
         TooLarge,        // over the size limit: nothing loaded, Close
         Unrecovered,     // the session lost this tab's unsaved text
@@ -213,6 +214,7 @@ public:
     bool isSaving() const;
     // First open: closes the tab. A reload: keeps the text.
     Q_INVOKABLE void cancelLoad();
+    Q_INVOKABLE void followMove();     // after Moved
     Q_INVOKABLE void saveAnyway();     // after SaveUnchecked
     Q_INVOKABLE void cancelSaveCheck();
     // File menu: the document's file in the file manager, Open With, the

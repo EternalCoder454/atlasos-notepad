@@ -109,6 +109,9 @@ struct Document::Private {
     qreal fillBaseScroll = 0;
     QTimer fillTimer;
     std::map<Banner, QString> banners;
+    QUrl moveFrom, moveTo; // what the Moved banner offers
+    bool validating = false; // a KDirNotify move is being checked (one at a time)
+    void offerMove(const QUrl &from, const QUrl &to);
 
     QPointer<QQuickItem> textEdit;
     QPointer<QTextDocument> qdoc;

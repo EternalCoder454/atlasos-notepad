@@ -65,7 +65,7 @@ QUrl fromStored(const QString &stored)
 // reach us from the command line, D-Bus, the session and the dialogs alike.
 QString unsupported(const QUrl &url, bool forWriting)
 {
-    static const QSet<QString> readWrite = {u"file"_s, u"sftp"_s, u"fish"_s, u"ftp"_s, u"ftps"_s, u"smb"_s, u"webdav"_s, u"webdavs"_s, u"nfs"_s, u"mtp"_s, u"gdrive"_s, u"kdeconnect"_s};
+    static const QSet<QString> readWrite = {u"file"_s, u"sftp"_s, u"ftp"_s, u"ftps"_s, u"smb"_s, u"webdav"_s, u"webdavs"_s, u"nfs"_s, u"mtp"_s, u"gdrive"_s, u"kdeconnect"_s};
     static const QSet<QString> readOnly = {u"http"_s, u"https"_s, u"zip"_s, u"tar"_s, u"ar"_s, u"archive"_s};
     const QString scheme = url.scheme();
     const bool writable = readWrite.contains(scheme);
