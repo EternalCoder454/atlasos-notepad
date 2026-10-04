@@ -57,6 +57,16 @@ Item {
     readonly property real edge: scrolls ? Math.round(buttonSize * 0.45) : inset
     readonly property int shown: Math.max(1, Math.floor((available - edge * 2 + gap) / pitch))
 
+    // fullHeight is worked out by hand: when everything shows, the layout
+    // must agree.
+    function checkFullHeight() {
+        if (!scrolls && Math.abs(column.implicitHeight + inset * 2 - fullHeight) > 1) {
+            console.warn("ToolCapsule: fullHeight", fullHeight, "differs from the layout's", column.implicitHeight + inset * 2);
+        }
+    }
+    onFullHeightChanged: checkFullHeight()
+    Component.onCompleted: checkFullHeight()
+
     width: Math.round(Kirigami.Units.gridUnit * 2.2)
     height: scrolls ? shown * pitch - gap + edge * 2 : fullHeight
     anchors.right: parent ? parent.right : undefined
@@ -150,7 +160,9 @@ Item {
         }
         onHeightChanged: scrollBy(0)
         clip: true
-        interactive: contentHeight > height
+        // Not draggable: a drag would stop between buttons, and a press on
+        // a button would turn into a flick. The wheel and the chevrons scroll.
+        interactive: false
         boundsBehavior: Flickable.StopAtBounds
 
         ColumnLayout {
@@ -275,22 +287,56 @@ Item {
         WheelHandler {
             enabled: capsule.scrolls
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: event => flick.scrollBy(event.angleDelta.y > 0 ? -1 : 1)
+            // A mouse notch is 120 units and one button; a touchpad sends
+            // small deltas, which add up to a button each 120.
+            property real carried: 0
+            onWheel: event => {
+                const dy = event.angleDelta.y;
+                if (dy === 0) {
+                    return;
+                }
+                if (carried * dy < 0) {
+                    carried = 0; // the other way
+                }
+                carried += dy;
+                const steps = Math.trunc(carried / 120);
+                if (steps !== 0) {
+                    carried -= steps * 120;
+                    flick.scrollBy(-steps);
+                }
+            }
         }
     }
 
-    // Past either end of a scrolling strip: a chevron in the room kept there.
-    component Hint: Symbol {
+    // Past either end of a scrolling strip: a chevron in the room kept
+    // there, which a tap or click also scrolls by (the strip is not
+    // draggable, so this is how touch reaches the rest).
+    component Hint: Item {
+        id: hint
         property bool atTop: true
-        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.left: parent.left
+        anchors.right: parent.right
         anchors.top: atTop ? parent.top : undefined
         anchors.bottom: atTop ? undefined : parent.bottom
-        anchors.topMargin: atTop ? 1 : 0
-        anchors.bottomMargin: atTop ? 0 : 1
-        name: atTop ? "keyboard_arrow_up" : "keyboard_arrow_down"
-        size: Math.round(capsule.edge * 1.2)
-        opacity: 0.7
+        height: capsule.edge
         visible: capsule.scrolls && (atTop ? flick.contentY > 1 : flick.contentY < flick.contentHeight - flick.height - 1)
+        Accessible.ignored: true
+
+        Symbol {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: hint.atTop ? parent.top : undefined
+            anchors.bottom: hint.atTop ? undefined : parent.bottom
+            anchors.topMargin: hint.atTop ? 1 : 0
+            anchors.bottomMargin: hint.atTop ? 0 : 1
+            name: hint.atTop ? "keyboard_arrow_up" : "keyboard_arrow_down"
+            // Inside the margin: it never covers the first or last button.
+            size: Math.max(1, capsule.edge - 2)
+            Accessible.ignored: true
+            opacity: 0.7
+        }
+        TapHandler {
+            onTapped: flick.scrollBy(hint.atTop ? -1 : 1)
+        }
     }
     Hint {
         atTop: true
