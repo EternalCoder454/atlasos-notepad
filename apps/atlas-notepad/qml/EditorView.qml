@@ -30,6 +30,21 @@ FocusScope {
         return md.headingAt(edit.cursorPosition);
     }
 
+    // The live scrollbar's width, so the text clears it beside the capsule.
+    readonly property real scrollbarWidth: verticalBar.implicitWidth
+    // Kept clear at the right edge (the window's tool capsule).
+    property real rightInset: 0
+
+    // Which formats the caret or selection is in (MarkdownEditor.Format
+    // bits), for the tool capsule: read from the highlighter's layout.
+    readonly property int formats: {
+        if (!document.markdown) {
+            return 0;
+        }
+        edit.length; // re-read on edits too
+        return md.formatsAt(edit.selectionStart, edit.selectionEnd);
+    }
+
     signal linkRequested
 
     function focusEditor() {
@@ -73,8 +88,8 @@ FocusScope {
         } else {
             edit.cursorPosition = position;
         }
-        // After the layout has the text.
-        Qt.callLater(() => flick.contentY = Math.max(0, Math.min(document.scrollY, flick.contentHeight - flick.height)));
+        // The scroll is the document's: Document::applyView re-applies it
+        // while the layout still grows.
     }
 
     Connections {
@@ -107,6 +122,20 @@ FocusScope {
         currentColor: Kirigami.Theme.textColor
     }
 
+    // The wheel over the strip kept free for the capsule scrolls the text too.
+    Item {
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        width: view.rightInset
+        WheelHandler {
+            acceptedModifiers: Qt.NoModifier
+            onWheel: event => {
+                flick.contentY = Math.max(0, Math.min(flick.contentHeight - flick.height, flick.contentY - event.angleDelta.y / 2));
+            }
+        }
+    }
+
     Flickable {
         id: flick
         objectName: view.current ? "view" : ""
@@ -114,6 +143,7 @@ FocusScope {
         anchors.bottom: parent.bottom
         anchors.left: gutter.right
         anchors.right: parent.right
+        anchors.rightMargin: view.rightInset
         contentWidth: edit.width
         contentHeight: edit.height
         clip: true
@@ -154,6 +184,7 @@ FocusScope {
 
         // Overlaid on the text, as in Atlas.Ui pages.
         QQC2.ScrollBar.vertical: SlimScrollBar {
+            id: verticalBar
             parent: flick.parent
             x: flick.x + flick.width - width
             y: flick.y
@@ -161,7 +192,7 @@ FocusScope {
         }
         QQC2.ScrollBar.horizontal: SlimScrollBar {
             parent: flick.parent
-            visible: !view.settings.wordWrap
+            policy: view.settings.wordWrap ? QQC2.ScrollBar.AlwaysOff : QQC2.ScrollBar.AsNeeded
             x: flick.x
             y: flick.y + flick.height - height
             width: flick.width
@@ -181,7 +212,6 @@ FocusScope {
             id: edit
             objectName: view.current ? "editor" : ""
             width: view.settings.wordWrap ? flick.width : Math.max(flick.width, implicitWidth)
-            height: Math.max(implicitHeight, flick.height)
             focus: true
             textFormat: TextEdit.PlainText
             wrapMode: view.settings.wordWrap ? TextEdit.Wrap : TextEdit.NoWrap
@@ -190,19 +220,18 @@ FocusScope {
             persistentSelection: true
             // Four spaces, as Windows Notepad.
             tabStopDistance: fontInfo.advanceWidth(" ") * 4
-            font: {
-                const base = view.formatted ? Kirigami.Theme.defaultFont : view.settings.font;
-                return Qt.font({
-                    family: base.family,
-                    styleName: view.formatted ? "" : view.settings.font.styleName,
-                    pointSize: view.settings.font.pointSize * view.settings.zoom / 100
-                });
-            }
+            // Set one by one: Qt.font({pointSize}) cuts a fractional size
+            // (9 * 110% = 9.9) down to a whole one, so 110% looked like 100%.
+            font.family: (view.formatted ? Kirigami.Theme.defaultFont : view.settings.font).family
+            font.styleName: view.formatted ? "" : view.settings.font.styleName
+            font.pointSize: view.settings.font.pointSize * view.settings.zoom / 100
             color: Kirigami.Theme.textColor
             selectionColor: Kirigami.Theme.highlightColor
             selectedTextColor: Kirigami.Theme.highlightedTextColor
             leftPadding: view.settings.lineNumbers ? Kirigami.Units.largeSpacing : Kirigami.Units.gridUnit
-            rightPadding: Kirigami.Units.gridUnit
+            // The capsule's margin already keeps text clear of the edge, but
+            // not of the overlay scrollbar, which sits inside the view.
+            rightPadding: view.rightInset > 0 ? scrollbarWidth + Kirigami.Units.smallSpacing : Kirigami.Units.gridUnit
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing
             onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
@@ -210,6 +239,15 @@ FocusScope {
             Accessible.role: Accessible.EditableText
             Accessible.name: view.document.title
             Accessible.multiLine: true
+
+            // Delayed: the text's implicit height follows its width (wrap), and
+            // a plain binding here loops with the layout.
+            Binding {
+                target: edit
+                property: "height"
+                value: Math.max(edit.implicitHeight, flick.height)
+                delayed: true
+            }
 
             FontMetrics {
                 id: fontInfo
@@ -452,7 +490,7 @@ FocusScope {
             visible: view.document.markdown
             enabled: !edit.readOnly
             text: qsTr("Link…")
-            icon.source: Qt.resolvedUrl("../icons/link-add.svg")
+            icon.name: "insert-link"
             shortcutText: "Ctrl+K"
             onTriggered: view.linkRequested()
         }

@@ -28,8 +28,22 @@ ContextMenu {
     ContextMenu {
         id: recent
         title: qsTr("Open Recent")
-        enabled: App.recentFiles.length > 0
+        // Where the recent files go: just after the separator that ends the
+        // lead items (Reopen Closed Tab), wherever that is in the menu.
+        function recentLead(): int {
+            for (let i = 0; i < count; ++i) {
+                if (itemAt(i) === leadEnd) {
+                    return i + 1;
+                }
+            }
+            console.warn("FallbackMenu: the Open Recent lead separator is missing");
+            return count; // after everything, never above Reopen Closed Tab
+        }
 
+        Item { action: menu.actions.reopenTab }
+        ContextMenuSeparator {
+            id: leadEnd
+        }
         Instantiator {
             model: App.recentFiles
             delegate: ContextMenuItem {
@@ -37,19 +51,23 @@ ContextMenu {
                 text: App.displayPath(modelData)
                 onTriggered: menu.openRecent(modelData)
             }
-            onObjectAdded: (index, object) => recent.insertItem(index, object)
+            onObjectAdded: (index, object) => recent.insertItem(index + recent.recentLead(), object)
             onObjectRemoved: (index, object) => recent.removeItem(object)
         }
-        ContextMenuSeparator {}
+        // Only with files to separate from the rest: else it would sit
+        // directly under the first separator.
+        ContextMenuSeparator {
+            visible: App.recentFiles.length > 0
+        }
         ContextMenuItem {
             text: qsTr("Clear List")
+            enabled: App.recentFiles.length > 0
             onTriggered: App.clearRecentFiles()
         }
     }
     Item { action: menu.actions.save }
     Item { action: menu.actions.saveAs }
     Item { action: menu.actions.saveAll }
-    ContextMenuSeparator {}
     // One submenu: the whole menu then fits a default-size window.
     ContextMenu {
         title: qsTr("File Location")
@@ -58,7 +76,6 @@ ContextMenu {
         Item { action: menu.actions.copyLocation }
         Item { action: menu.actions.properties }
     }
-    ContextMenuSeparator {}
     Item { action: menu.actions.print }
     ContextMenuSeparator {}
     ContextMenu {
@@ -119,9 +136,9 @@ ContextMenu {
         Item { action: menu.actions.keyboardShortcuts }
         Item { action: menu.actions.about }
     }
+    Item { action: menu.actions.settings }
     ContextMenuSeparator {}
     Item { action: menu.actions.closeTab }
-    Item { action: menu.actions.reopenTab }
     Item { action: menu.actions.closeWindow }
     Item { action: menu.actions.quit }
 }

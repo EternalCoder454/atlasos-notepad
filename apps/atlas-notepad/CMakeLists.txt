@@ -66,8 +66,9 @@ qt_add_qml_module(atlas-notepad-app
     # Atlas.Ui, Kirigami and Qt load their plugins at run time.
     NO_IMPORT_SCAN
     QML_FILES
-        qml/Main.qml qml/EditorView.qml qml/FormatToolbar.qml qml/GlobalMenu.qml
+        qml/Main.qml qml/EditorView.qml qml/ToolCapsule.qml qml/GlobalMenu.qml
         qml/FallbackMenu.qml qml/SettingsPage.qml qml/UnsavedDialog.qml qml/SlimScrollBar.qml
+        qml/SegmentedPill.qml qml/StatusCell.qml qml/SymbolButton.qml
     SOURCES
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
         cpp/spellcheck.h cpp/spellcheck.cpp

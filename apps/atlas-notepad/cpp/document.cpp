@@ -10,6 +10,7 @@
 #include <QFileSystemWatcher>
 #include <QFutureWatcher>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QQuickWindow>
 #include <QQuickTextDocument>
 #include <QRegularExpression>
@@ -19,6 +20,7 @@
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QtConcurrent>
+#include <QWheelEvent>
 
 #include <KIO/Job>
 #include <KIO/StoredTransferJob>
@@ -28,6 +30,7 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <functional>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
@@ -627,16 +630,159 @@ void Document::Private::applyView()
     cursor = c;
     anchor = a;
     scrollY = y;
+    // A new view state replaces a restore still waiting for the layout.
+    const int generation = endHeldScroll();
     if (y > 0) {
         QPointer<QQuickItem> flick = flickable();
         if (flick) {
-            QTimer::singleShot(0, flick, [flick, y] {
-                // Never past the end: a stale or bad value would show nothing.
-                const qreal end = qMax(0.0, flick->property("contentHeight").toReal() - flick->height());
-                flick->setProperty("contentY", qBound(0.0, y, end));
+            QTimer::singleShot(0, q, [this, flick, y, generation] {
+                if (flick && generation == heldGeneration) {
+                    holdScroll(flick, y);
+                }
             });
         }
     }
+}
+
+namespace
+{
+// Calls back on the user's own input in a window: a wheel turn, a press, a
+// key (not a modifier or lock key alone), a touch, a gesture.
+class InputWatch : public QObject
+{
+public:
+    InputWatch(QObject *parent, std::function<void(QEvent *)> onInput)
+        : QObject(parent)
+        , m_onInput(std::move(onInput))
+    {
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        switch (event->type()) {
+        case QEvent::KeyPress:
+            switch (static_cast<QKeyEvent *>(event)->key()) {
+            case Qt::Key_Shift:
+            case Qt::Key_Control:
+            case Qt::Key_Meta:
+            case Qt::Key_Alt:
+            case Qt::Key_CapsLock:
+            case Qt::Key_NumLock:
+            case Qt::Key_ScrollLock:
+            case Qt::Key_AltGr:
+            case Qt::Key_Super_L:
+            case Qt::Key_Super_R:
+            case Qt::Key_Hyper_L:
+            case Qt::Key_Hyper_R:
+            case Qt::Key_Direction_L:
+            case Qt::Key_Direction_R:
+                break;
+            default:
+                m_onInput(event);
+            }
+            break;
+        case QEvent::Wheel:
+        case QEvent::MouseButtonPress:
+        case QEvent::MouseButtonDblClick:
+        case QEvent::TouchBegin:
+        case QEvent::NativeGesture:
+            m_onInput(event);
+            break;
+        default:
+            break;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    std::function<void(QEvent *)> m_onInput;
+};
+}
+
+void Document::Private::holdScroll(QQuickItem *flick, qreal y)
+{
+    endHeldScroll();
+    heldFlick = flick;
+    heldScroll = y;
+    heldHeight = -1;
+    heldSteady = 0;
+    heldClock.start();
+    // The user's input ends the hold: their scroll, click or key wins. The
+    // view's own moves (following the caret, clamping to a shorter layout)
+    // don't, as the layout isn't final yet. A view without a window yet
+    // gets the watch once it has one.
+    watchHeldWindow(flick->window());
+    heldWindowChange = QObject::connect(flick, &QQuickItem::windowChanged, q, [this](QQuickWindow *window) { watchHeldWindow(window); });
+    stepHeldScroll(heldGeneration);
+}
+
+void Document::Private::watchHeldWindow(QQuickWindow *window)
+{
+    if (heldWatch) {
+        if (heldWindow) {
+            heldWindow->removeEventFilter(heldWatch);
+        }
+        heldWatch->deleteLater();
+        heldWatch = nullptr;
+    }
+    heldWindow = window;
+    if (window) {
+        auto *watch = new InputWatch(q, [this](QEvent *event) {
+            // A hidden tab's view takes no input: what the user does in
+            // the shown one isn't about it. Nor is a wheel turn over
+            // something else (the tool capsule, the find bar).
+            if (!heldFlick || !heldFlick->isVisible()) {
+                return;
+            }
+            if (event->type() == QEvent::Wheel) {
+                const QPointF at = heldFlick->mapFromScene(static_cast<QWheelEvent *>(event)->scenePosition());
+                if (!heldFlick->contains(at)) {
+                    return;
+                }
+            }
+            endHeldScroll();
+        });
+        window->installEventFilter(watch);
+        heldWatch = watch;
+    }
+}
+
+int Document::Private::endHeldScroll()
+{
+    QObject::disconnect(heldWindowChange);
+    watchHeldWindow(nullptr); // may be inside the watch's own eventFilter: it goes later
+    heldFlick = nullptr;
+    heldScroll = -1;
+    return ++heldGeneration;
+}
+
+void Document::Private::stepHeldScroll(int generation)
+{
+    if (generation != heldGeneration || heldScroll < 0) {
+        return; // ended
+    }
+    if (!heldFlick) {
+        endHeldScroll(); // the view is gone
+        return;
+    }
+    const qreal height = heldFlick->property("contentHeight").toReal();
+    // Never past the end: a stale or bad value would show nothing.
+    const qreal end = qMax(0.0, height - heldFlick->height());
+    heldFlick->setProperty("contentY", qBound(0.0, heldScroll, end));
+    // Done once the layout has settled (the text all in, the same height
+    // for three steps running) with room for the target; or, when it never
+    // makes room (a text shorter than before), once it settles after a
+    // second; and at the latest after five, for a layout still growing.
+    heldSteady = (!isLoading() && qAbs(height - heldHeight) < 0.5) ? heldSteady + 1 : 0;
+    heldHeight = height;
+    const bool settled = heldSteady >= 2;
+    const qint64 elapsed = heldClock.elapsed();
+    if ((settled && (end >= heldScroll || elapsed >= 1000)) || elapsed >= 5000) {
+        endHeldScroll();
+        return;
+    }
+    QTimer::singleShot(50, q, [this, generation] { stepHeldScroll(generation); });
 }
 
 void Document::Private::putText(const QString &text, bool keepView)
@@ -2031,6 +2177,7 @@ void Document::setTextEdit(QQuickItem *edit)
         }
         d->qdoc = nullptr;
     }
+    d->endHeldScroll(); // it was for the old view
     d->textEdit = edit;
     ++d->editGeneration;
     ++d->contentVersion;

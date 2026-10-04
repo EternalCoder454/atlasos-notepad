@@ -7,8 +7,131 @@
 #include <QAbstractTextDocumentLayout>
 #include <QFontMetricsF>
 #include <QPainter>
+#include <QQuickWindow>
 #include <QPainterPath>
 #include <QTextLayout>
+
+namespace
+{
+QFont labelFont(const QFont &base)
+{
+    QFont f = base;
+    if (f.pointSizeF() > 0) {
+        f.setPointSizeF(f.pointSizeF() * 0.78);
+    } else if (f.pixelSize() > 0) {
+        f.setPixelSize(qMax(1, qRound(f.pixelSize() * 0.78)));
+    }
+    return f;
+}
+} // namespace
+
+QString MarkdownDecorations::fenceLabel(const QString &fenceLine)
+{
+    constexpr qsizetype maxScan = 256; // of the line, in UTF-16 units
+    constexpr qsizetype maxChars = 64;
+    const QStringView line = QStringView(fenceLine).left(maxScan);
+    qsizetype i = 0;
+    while (i < line.size() && line.at(i) != u'`' && line.at(i) != u'~') {
+        ++i;
+    }
+    if (i == line.size()) {
+        return {};
+    }
+    const QChar fence = line.at(i);
+    while (i < line.size() && line.at(i) == fence) {
+        ++i;
+    }
+    while (i < line.size() && line.at(i).isSpace()) {
+        ++i;
+    }
+    // RMarkdown and Pandoc: ```{r} or ```{python, echo=FALSE}.
+    if (i < line.size() && line.at(i) == u'{') {
+        ++i;
+    }
+    // Only letters, digits and + # . _ - / (c++, objective-c, f#, text/x-foo):
+    // the word ends at anything else. That leaves out controls, bidi and other
+    // format characters, combining marks, symbols and the letters that draw
+    // blank (U+3164, U+115F...), none of which a language name needs.
+    QList<char32_t> kept;
+    bool cut = false;
+    for (const char32_t c : line.mid(i).toUcs4()) {
+        bool ok = c == u'+' || c == u'#' || c == u'.' || c == u'_' || c == u'-' || c == u'/';
+        if (!ok && c != 0xFFFD) {
+            switch (QChar::category(c)) {
+            case QChar::Letter_Uppercase:
+            case QChar::Letter_Lowercase:
+            case QChar::Letter_Titlecase:
+            case QChar::Letter_Modifier:
+            case QChar::Letter_Other:
+            case QChar::Number_DecimalDigit:
+            case QChar::Number_Letter:
+            case QChar::Number_Other:
+                ok = true;
+                break;
+            default:
+                break;
+            }
+        }
+        // The Hangul and Braille fillers are letters that draw nothing.
+        if (c == 0x115F || c == 0x1160 || c == 0x3164 || c == 0xFFA0 || c == 0x2800) {
+            ok = false;
+        }
+        if (!ok) {
+            break;
+        }
+        if (kept.size() == maxChars) {
+            cut = true;
+            break;
+        }
+        kept.append(c);
+    }
+    QString out = QString::fromUcs4(kept.constData(), kept.size());
+    if (cut) {
+        out += QChar(0x2026);
+    }
+    return out;
+}
+
+QStringList MarkdownDecorations::labelsForTest() const
+{
+    std::vector<Shape> shapes;
+    layOut(shapes);
+    QStringList out;
+    for (const Shape &s : shapes) {
+        if (s.type == Shape::Label) {
+            out.append(s.text);
+        }
+    }
+    return out;
+}
+
+const MarkdownDecorations::Elided &MarkdownDecorations::elide(const QString &label, qreal width) const
+{
+    const QFont font = labelFont(m_editor->font());
+    const QQuickWindow *window = m_editor->textEdit() ? m_editor->textEdit()->window() : nullptr;
+    const qreal dpr = window ? window->devicePixelRatio() : 1;
+    if (font != m_labelFont || dpr != m_labelDpr || m_elided.size() > 64) {
+        m_labelFont = font;
+        m_labelDpr = dpr;
+        m_labelMetrics = QFontMetricsF(font);
+        m_elided.clear();
+    }
+    Elided &e = m_elided[label];
+    if (e.width != qRound(width)) {
+        e.width = qRound(width);
+        // A label already cut at 64 characters ends with "…": elide the rest
+        // so a second one isn't added.
+        const bool capped = label.endsWith(QChar(0x2026));
+        const QString base = capped ? label.chopped(1) : label;
+        const qreal mark = capped ? m_labelMetrics.horizontalAdvance(QChar(0x2026)) : 0;
+        e.text = m_labelMetrics.elidedText(base, Qt::ElideRight, qMax<qreal>(0, width - mark));
+        if (capped && e.text == base) {
+            e.text += QChar(0x2026);
+        }
+        e.advance = m_labelMetrics.horizontalAdvance(e.text);
+    }
+    return e;
+}
 
 MarkdownDecorations::MarkdownDecorations(QQuickItem *parent)
     : QQuickPaintedItem(parent)
@@ -130,7 +253,17 @@ void MarkdownDecorations::layOut(std::vector<Shape> &out) const
         case Md::FenceLine: {
             const uint8_t ends = (isCode(block.previous()) ? 0 : 1) | (isCode(block.next()) ? 0 : 2);
             const qreal pad = 6;
-            out.push_back({Shape::Code, ends, QRectF(br.left() - pad, br.top(), right - br.left() + 2 * pad, br.height())});
+            const QRectF box(br.left() - pad, br.top(), right - br.left() + 2 * pad, br.height());
+            out.push_back({Shape::Code, ends, box});
+            // The language, small at the top right of an opening fence. While
+            // the caret is on the line its own text shows instead.
+            if (l.kind == Md::FenceLine && l.state != 0 && !m_editor->fenceRevealed(block)) {
+                if (!info->fenceLabel.isEmpty()) {
+                    const qreal inset = 10;
+                    const Elided &e = elide(info->fenceLabel, qMax<qreal>(24, box.width() * 0.4));
+                    out.push_back({Shape::Label, 0, QRectF(box.right() - inset - e.advance - 1, box.top(), e.advance + 2, box.height()), e.text});
+                }
+            }
             break;
         }
         default:
@@ -205,6 +338,14 @@ void MarkdownDecorations::paint(QPainter *painter)
             break;
         case Shape::Rule:
             painter->fillRect(s.rect, faint);
+            break;
+        case Shape::Label:
+            painter->save();
+            painter->setClipRect(s.rect);
+            painter->setFont(labelFont(m_editor->font()));
+            painter->setPen(dim);
+            painter->drawText(s.rect, Qt::AlignRight | Qt::AlignVCenter | Qt::TextSingleLine, s.text);
+            painter->restore();
             break;
         case Shape::Code: {
             constexpr qreal radius = 6;

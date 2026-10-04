@@ -60,7 +60,267 @@ private:
         QCoreApplication::sendEvent(m_edit.get(), &event);
     }
 
+    QTextBlock blockAt(int blockNumber) const
+    {
+        return m_edit->property("textDocument").value<QQuickTextDocument *>()->textDocument()->findBlockByNumber(blockNumber);
+    }
+    // Whether every character of a line is drawn invisibly (a fence line the
+    // Formatted view hides). False when the line has no formats.
+    bool lineHidden(int blockNumber) const
+    {
+        const auto formats = blockAt(blockNumber).layout()->formats();
+        if (formats.isEmpty()) {
+            return false;
+        }
+        for (const auto &r : formats) {
+            if (r.format.foreground().color().alpha() != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Whether the line has formats and all of them are the dim text colour.
+    bool lineShown(int blockNumber) const
+    {
+        const auto formats = blockAt(blockNumber).layout()->formats();
+        if (formats.isEmpty()) {
+            return false;
+        }
+        for (const auto &r : formats) {
+            if (r.format.foreground().color() != m_editor->dimColor()) {
+                return false;
+            }
+        }
+        return true;
+    }
+    void type(const QString &chars)
+    {
+        for (const QChar c : chars) {
+            QKeyEvent event(QEvent::KeyPress, c == u'`' ? int(Qt::Key_QuoteLeft) : int(c.toLatin1()), Qt::NoModifier, QString(c));
+            QCoreApplication::sendEvent(m_edit.get(), &event);
+        }
+    }
+    int caret() const
+    {
+        return m_edit->property("cursorPosition").toInt();
+    }
+    QStringList labels(int height = 600) const
+    {
+        MarkdownDecorations deco;
+        deco.setWidth(400);
+        deco.setHeight(height);
+        deco.setEditor(m_editor.get());
+        return deco.labelsForTest();
+    }
+
 private Q_SLOTS:
+    // Fence markers are hidden in the Formatted view, except on the line the
+    // caret is on, and the text and the caret don't change by it.
+    void fenceMarkersHiddenAwayFromCaret()
+    {
+        const QString md = QStringLiteral("```rust\nlet x;\n```\nafter");
+        open(md);
+        place(9);
+        QVERIFY(lineHidden(0));
+        QVERIFY(lineHidden(2));
+        QCOMPARE(m_edit->property("cursorPosition").toInt(), 9);
+        place(3);
+        QVERIFY(lineShown(0));
+        QVERIFY(lineHidden(2));
+        QCOMPARE(m_edit->property("cursorPosition").toInt(), 3);
+        place(md.indexOf(u"after"));
+        QVERIFY(lineHidden(0));
+        QVERIFY(lineHidden(2));
+        place(md.indexOf(u"```\nafter") + 1);
+        QVERIFY(lineHidden(0));
+        QVERIFY(lineShown(2));
+        QCOMPARE(text(), md);
+        QCOMPARE(m_edit->property("lineCount").toInt(), 4);
+    }
+
+    void fenceMarkersShownInSyntaxView()
+    {
+        open(QStringLiteral("```rust\nlet x;\n```"));
+        m_editor->setFormatted(false);
+        QCoreApplication::processEvents();
+        m_editor->rehighlightNow();
+        place(9);
+        QVERIFY(lineShown(0));
+        QVERIFY(lineShown(2));
+    }
+
+    void typingAFenceShowsIt()
+    {
+        open(QStringLiteral("a\n"));
+        place(2);
+        for (const QChar c : QStringLiteral("```")) {
+            QKeyEvent event(QEvent::KeyPress, Qt::Key_QuoteLeft, Qt::NoModifier, QString(c));
+            QCoreApplication::sendEvent(m_edit.get(), &event);
+        }
+        QCOMPARE(text(), QStringLiteral("a\n```"));
+        QVERIFY(lineShown(1));
+    }
+
+    void copyKeepsFences()
+    {
+        const QString md = QStringLiteral("```rust\nlet x;\n```");
+        open(md);
+        select(0, int(md.size()));
+        QMetaObject::invokeMethod(m_edit.get(), "copy");
+        QCOMPARE(QGuiApplication::clipboard()->text(), md);
+    }
+
+    void fenceLabelText_data()
+    {
+        QTest::addColumn<QString>("line");
+        QTest::addColumn<QString>("label");
+        QTest::newRow("language") << QStringLiteral("```rust") << QStringLiteral("rust");
+        QTest::newRow("spaced") << QStringLiteral("  ~~~~  python title=x") << QStringLiteral("python");
+        QTest::newRow("none") << QStringLiteral("```") << QString();
+        QTest::newRow("blank") << QStringLiteral("```   ") << QString();
+        QTest::newRow("symbols") << QStringLiteral("```c++") << QStringLiteral("c++");
+        QTest::newRow("allowed punctuation") << QStringLiteral("```f#.x_y-z/w") << QStringLiteral("f#.x_y-z/w");
+        QTest::newRow("control") << QStringLiteral("```ru\x01st") << QStringLiteral("ru");
+        QTest::newRow("escape") << QStringLiteral("```\x1b[31m") << QString();
+        QTest::newRow("bidi") << QStringLiteral("```ru\u202Est") << QStringLiteral("ru");
+        QTest::newRow("only invisible") << QStringLiteral("```\u202E\u2066") << QString();
+        QTest::newRow("lone surrogate") << QStringLiteral("```a\xD800z") << QStringLiteral("a");
+        QTest::newRow("emoji ends it") << QStringLiteral("```rs\U0001F980x") << QStringLiteral("rs");
+        QTest::newRow("zalgo") << QStringLiteral("```a\u0300\u0301\u0302\u0303b") << QStringLiteral("a");
+        QTest::newRow("braille blank") << QStringLiteral("```\u2800") << QString();
+        QTest::newRow("hangul filler") << QStringLiteral("```\u3164\u115F\u1160\uFFA0") << QString();
+        QTest::newRow("blank inside") << QStringLiteral("```Saved\u2800successfully") << QStringLiteral("Saved");
+        QTest::newRow("rmarkdown") << QStringLiteral("```{r}") << QStringLiteral("r");
+        QTest::newRow("rmarkdown options") << QStringLiteral("```{python, echo=FALSE}") << QStringLiteral("python");
+        QTest::newRow("exactly 64") << (QStringLiteral("```") + QString(64, u'x')) << QString(64, u'x');
+        QTest::newRow("long") << (QStringLiteral("```") + QString(70, u'x')) << (QString(64, u'x') + QChar(0x2026));
+        QTest::newRow("very long") << (QStringLiteral("```") + QString(5000, u'x')) << (QString(64, u'x') + QChar(0x2026));
+    }
+    void fenceLabelText()
+    {
+        QFETCH(QString, line);
+        QFETCH(QString, label);
+        QCOMPARE(MarkdownDecorations::fenceLabel(line), label);
+    }
+
+    void fenceRehidesAfterTypingAndLeaving()
+    {
+        open(QStringLiteral("a\n"));
+        place(2);
+        type(QStringLiteral("```"));
+        QVERIFY(lineShown(1));
+        place(0);
+        QVERIFY(lineHidden(1));
+    }
+
+    void undoRedoOfTheCaretsFenceLine()
+    {
+        open(QStringLiteral("a\n"));
+        place(2);
+        type(QStringLiteral("```"));
+        for (int i = 0; i < 6 && text() != QStringLiteral("a\n"); ++i) {
+            QMetaObject::invokeMethod(m_edit.get(), "undo");
+        }
+        QCOMPARE(text(), QStringLiteral("a\n"));
+        QCOMPARE(m_edit->property("lineCount").toInt(), 2);
+        for (int i = 0; i < 6 && text() != QStringLiteral("a\n```"); ++i) {
+            QMetaObject::invokeMethod(m_edit.get(), "redo");
+        }
+        QCOMPARE(text(), QStringLiteral("a\n```"));
+        QCOMPARE(caret(), 5);
+        QVERIFY(lineShown(1));
+        place(0);
+        QVERIFY(lineHidden(1));
+    }
+
+    void selectionSpanningFences()
+    {
+        const QString md = QStringLiteral("```rust\nlet x;\n```\nafter");
+        open(md);
+        select(0, int(md.size()));
+        QVERIFY(lineHidden(0));
+        QVERIFY(lineHidden(2));
+        QMetaObject::invokeMethod(m_edit.get(), "copy");
+        QCOMPARE(QGuiApplication::clipboard()->text(), md);
+        // The caret end (the closing fence) shows its markers.
+        select(2, 17);
+        QVERIFY(lineShown(2));
+        QMetaObject::invokeMethod(m_edit.get(), "copy");
+        QCOMPARE(QGuiApplication::clipboard()->text(), md.mid(2, 15));
+        QCOMPARE(text(), md);
+    }
+
+    void tildeAndUnclosedFences()
+    {
+        open(QStringLiteral("~~~py\ncode\n~~~"));
+        place(8);
+        QVERIFY(lineHidden(0));
+        QVERIFY(lineHidden(2));
+        QCOMPARE(labels(), QStringList{QStringLiteral("py")});
+        open(QStringLiteral("```rs\ncode"));
+        place(8);
+        QVERIFY(lineHidden(0));
+        QCOMPARE(labels(), QStringList{QStringLiteral("rs")});
+        place(2);
+        QVERIFY(lineShown(0));
+        QVERIFY(labels().isEmpty());
+    }
+
+    void fenceThroughSyntaxViewAndBack()
+    {
+        const QString md = QStringLiteral("```rust\nlet x;\n```");
+        open(md);
+        place(3);
+        QVERIFY(lineShown(0));
+        m_editor->setFormatted(false);
+        QCoreApplication::processEvents();
+        m_editor->rehighlightNow();
+        QVERIFY(lineShown(0));
+        QVERIFY(lineShown(2));
+        m_editor->setFormatted(true);
+        QCoreApplication::processEvents();
+        m_editor->rehighlightNow();
+        QCOMPARE(caret(), 3);
+        QVERIFY(lineShown(0));
+        QVERIFY(lineHidden(2));
+    }
+
+    void labelShapeFollowsTheCaret()
+    {
+        open(QStringLiteral("```rust\nlet x;\n```\n\n```\nplain\n```"));
+        place(10);
+        QCOMPARE(labels(), QStringList{QStringLiteral("rust")});
+        place(3);
+        QVERIFY(labels().isEmpty());
+        place(10);
+        QCOMPARE(labels(), QStringList{QStringLiteral("rust")});
+        m_editor->setFormatted(false);
+        QCoreApplication::processEvents();
+        QVERIFY(labels().isEmpty());
+    }
+
+    // Replacing the whole text moves the caret to 0 without a signal: the
+    // first fence is the one that shows.
+    void fenceAfterWholeTextReplace()
+    {
+        open(QStringLiteral("x"));
+        place(0);
+        m_edit->setProperty("text", QStringLiteral("```a\nx\n```"));
+        QCoreApplication::processEvents();
+        m_editor->rehighlightNow();
+        QCOMPARE(caret(), 0);
+        QVERIFY(lineShown(0));
+        QVERIFY(lineHidden(2));
+        place(0);
+        QVERIFY(lineShown(0));
+        QVERIFY(lineHidden(2));
+        m_edit->setProperty("text", QStringLiteral("```b\ny\n```"));
+        QCoreApplication::processEvents();
+        QCOMPARE(caret(), 0);
+        QVERIFY(lineShown(0));
+        QVERIFY(lineHidden(2));
+    }
+
     void enterContinuesList()
     {
         open(QStringLiteral("- a"));
@@ -258,6 +518,54 @@ private Q_SLOTS:
         place(4);
         press(Qt::Key_Return);
         QCOMPARE(text(), QStringLiteral("1. a\n2. \n3. b\n   - c\n4. d"));
+    }
+
+    void formatsAtReportsCaretAndSelectionFormats()
+    {
+        open(QStringLiteral("plain **bold** *it* `code` ~~gone~~\n- item\n1. one\n- [ ] task\n> quote\n# Head **strong**"));
+        const auto at = [&](int s, int e = -1) { return m_editor->formatsAt(s, e < 0 ? s : e); };
+        QCOMPARE(at(2), 0);
+        QVERIFY(at(9) & MarkdownEditor::FmtBold);
+        QVERIFY(!(at(9) & MarkdownEditor::FmtItalic));
+        QVERIFY(at(17) & MarkdownEditor::FmtItalic);
+        QVERIFY(at(22) & MarkdownEditor::FmtCode);
+        QVERIFY(at(30) & MarkdownEditor::FmtStrike);
+        // A selection of the bold word.
+        QVERIFY(at(8, 12) & MarkdownEditor::FmtBold);
+        const QString body = text();
+        QVERIFY(at(body.indexOf(u"item")) & MarkdownEditor::FmtBullet);
+        QVERIFY(at(body.indexOf(u"1. one") + 4) & MarkdownEditor::FmtNumbered);
+        QVERIFY(at(body.indexOf(u"task")) & MarkdownEditor::FmtTask);
+        QVERIFY(at(body.indexOf(u"quote")) & MarkdownEditor::FmtQuote);
+        // A heading is not bold by itself; its strong word is.
+        QVERIFY(!(at(body.indexOf(u"Head")) & MarkdownEditor::FmtBold));
+        QVERIFY(at(body.indexOf(u"strong") + 2) & MarkdownEditor::FmtBold);
+        QCOMPARE(at(-1), 0);
+        QCOMPARE(at(9999), 0);
+    }
+
+    void formatsAtHeadingStrongOnlyInFormattedView()
+    {
+        open(QStringLiteral("# Head **strong** end"));
+        const int word = text().indexOf(u"strong") + 2;
+        QVERIFY(m_editor->formatsAt(word, word) & MarkdownEditor::FmtBold);
+        QVERIFY(!(m_editor->formatsAt(2, 2) & MarkdownEditor::FmtBold));
+        // The Syntax view draws the whole heading bold: not told apart.
+        m_editor->setFormatted(false);
+        m_editor->rehighlightNow();
+        QVERIFY(!(m_editor->formatsAt(word, word) & MarkdownEditor::FmtBold));
+        QVERIFY(!(m_editor->formatsAt(2, 2) & MarkdownEditor::FmtBold));
+    }
+
+    void formatsAtOnALongLine()
+    {
+        QString line;
+        for (int i = 0; i < 5000; ++i) {
+            line += QStringLiteral("a *b* ");
+        }
+        open(line);
+        QVERIFY(m_editor->formatsAt(line.size() - 2, line.size() - 2) & MarkdownEditor::FmtItalic);
+        QVERIFY(!(m_editor->formatsAt(0, 0) & MarkdownEditor::FmtItalic));
     }
 
     void clearFormattingKeepsText()

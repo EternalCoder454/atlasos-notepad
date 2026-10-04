@@ -16,6 +16,8 @@
 
 class QQuickTextDocument;
 class QWindow;
+class QQuickItem;
+class QQuickWindow;
 class KJob;
 
 struct LoadResult {
@@ -177,6 +179,24 @@ struct Document::Private {
     int editAnchor() const; // the TextEdit's selection anchor, also mid-fill
     bool isLoading() const { return loading || filling; }
     void applyView();
+    // A restored scroll waits for the layout: the view's content height
+    // may still grow after the text is in (a wrapped text, a delayed
+    // binding, a big text filled in pieces), so the target is re-applied
+    // every 50 ms until the layout settles, or the user scrolls, clicks or
+    // types.
+    void holdScroll(QQuickItem *flick, qreal y);
+    void stepHeldScroll(int generation);
+    void watchHeldWindow(QQuickWindow *window); // nullptr: stop watching
+    int endHeldScroll(); // returns the new generation
+    QPointer<QQuickItem> heldFlick;
+    QPointer<QObject> heldWatch; // the window's input watch while holding
+    QPointer<QQuickWindow> heldWindow; // the window it watches
+    QMetaObject::Connection heldWindowChange;
+    qreal heldScroll = -1;
+    qreal heldHeight = -1; // the content height at the last step
+    int heldSteady = 0; // steps running with that height
+    int heldGeneration = 0;
+    QElapsedTimer heldClock;
     QQuickItem *flickable() const;
 
     struct SaveSnapshot {

@@ -20,6 +20,10 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
+#include <QQuickWindow>
+#include <QWheelEvent>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSignalSpy>
@@ -2597,6 +2601,216 @@ private Q_SLOTS:
         QVERIFY(flick);
         QTRY_COMPARE(flick->property("contentY").toReal(), 300.0);
         QCOMPARE(doc->textEdit()->property("cursorPosition").toInt(), 500);
+    }
+
+    // As attachInFlickable, but the content height follows the text late (as
+    // a delayed binding does) and the text wraps at the view's width.
+    // `lagMs`: how late the content height follows the text.
+    QQuickItem *attachInLaggingFlickable(Document *doc, int lagMs = 80)
+    {
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nFlickable {\n"
+                          "    id: flick\n"
+                          "    property QtObject doc\n"
+                          "    property alias edit: e\n"
+                          "    width: 200; height: 100\n"
+                          "    onContentHeightChanged: contentY = Math.max(0, Math.min(contentY, contentHeight - height))\n"
+                          "    property int lag: 80\n"
+                          "    Timer { interval: flick.lag; running: flick.doc !== null && !flick.doc.loading; repeat: true; onTriggered: flick.contentHeight = e.height }\n"
+                          "    TextEdit {\n"
+                          "        id: e\n"
+                          "        width: flick.width\n"
+                          "        wrapMode: TextEdit.Wrap\n"
+                          "        textFormat: TextEdit.PlainText\n"
+                          "        readOnly: flick.doc !== null && (flick.doc.readOnly || flick.doc.loading)\n"
+                          "    }\n"
+                          "}",
+                          QUrl());
+        auto *flick = qobject_cast<QQuickItem *>(
+            component.createWithInitialProperties({{QStringLiteral("doc"), QVariant::fromValue(doc)}, {QStringLiteral("lag"), lagMs}}));
+        if (!flick) {
+            return nullptr;
+        }
+        m_edits.emplace_back(flick);
+        doc->setTextEdit(flick->property("edit").value<QQuickItem *>());
+        return flick;
+    }
+
+    // A restored scroll in a wrapped text survives a content height that is
+    // not final when the text arrives, small or big (filled in pieces).
+    void restoredScrollWaitsForTheLayout_data()
+    {
+        QTest::addColumn<QByteArray>("bytes");
+        QTest::addColumn<qreal>("scroll");
+        QTest::newRow("wrapped") << QByteArray("one two three four five six seven eight nine ten\n").repeated(300) << 800.0;
+        QTest::newRow("over 64K") << bigText(false) << 200'000.0;
+    }
+
+    void restoredScrollWaitsForTheLayout()
+    {
+        QFETCH(QByteArray, bytes);
+        QFETCH(qreal, scroll);
+        Document *doc = openFile(newList(), write(QStringLiteral("late.txt"), bytes));
+        QVERIFY(doc);
+        doc->d->cursor = doc->d->anchor = 0;
+        doc->d->scrollY = scroll;
+        QQuickItem *flick = attachInLaggingFlickable(doc);
+        QVERIFY(flick);
+        QVERIFY(filled(doc));
+        QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), scroll, 5000);
+    }
+
+    // A restore waiting for a lagging layout, in a window, with the hold
+    // started: the window is what the hold watches for the user's input.
+    Document *startHeldRestore(QQuickWindow &window, QQuickItem *&flick)
+    {
+        Document *doc = openFile(newList(), write(QStringLiteral("late.txt"), QByteArray("one two three four five six seven eight nine ten\n").repeated(300)));
+        if (!doc) {
+            return nullptr;
+        }
+        doc->d->cursor = doc->d->anchor = 0;
+        doc->d->scrollY = 800.0;
+        flick = attachInLaggingFlickable(doc, 600); // the hold waits that long at least
+        if (!flick) {
+            return nullptr;
+        }
+        flick->setParentItem(window.contentItem()); // before the hold starts
+        return doc;
+    }
+
+    // While the restore waits for the layout, the user's own scroll wins:
+    // the view doesn't jump back to the restored place once it arrives.
+    void restoredScrollYieldsToTheUser()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch); // the hold is waiting
+        QWheelEvent wheel(QPointF(10, 10), QPointF(10, 10), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(&window, &wheel);
+        flick->setProperty("contentY", 5.0); // what the wheel does
+        QVERIFY(!doc->d->heldFlick);
+        QTest::qWait(1200);
+        QVERIFY(flick->property("contentHeight").toReal() > 900);
+        QCOMPARE(flick->property("contentY").toReal(), 5.0);
+    }
+
+    // The view's own moves while the layout settles (following the caret,
+    // clamping to a shorter height) don't end the restore.
+    void restoredScrollOutlastsTheViewsOwnMoves()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        flick->setProperty("contentY", 5.0); // no input: the view itself
+        QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), 800.0, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!doc->d->heldWatch, 7000); // done once the layout settled
+    }
+
+    // A hidden tab's view takes no input: a key in the shown one doesn't
+    // end its restore.
+    void hiddenViewKeepsItsHeldRestore()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        flick->setVisible(false);
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier, QStringLiteral("a"));
+        QCoreApplication::sendEvent(&window, &key);
+        QVERIFY(doc->d->heldFlick);
+        QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), 800.0, 5000);
+    }
+
+    // A modifier alone (the start of a shortcut) isn't the user moving
+    // away; a key is, and a press.
+    void heldRestoreEndsOnAKeyNotAModifier()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        QKeyEvent ctrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+        QCoreApplication::sendEvent(&window, &ctrl);
+        QKeyEvent caps(QEvent::KeyPress, Qt::Key_CapsLock, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &caps);
+        // A wheel turn over something beside the view (the tool capsule).
+        QWheelEvent beside(QPointF(400, 10), QPointF(400, 10), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(&window, &beside);
+        QVERIFY(doc->d->heldFlick);
+        QKeyEvent down(QEvent::KeyPress, Qt::Key_PageDown, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &down);
+        QVERIFY(!doc->d->heldFlick);
+        QVERIFY(!doc->d->heldWatch);
+    }
+
+    // A view that gets its window only after the hold started is watched
+    // from then on.
+    void heldRestoreWatchesALateWindow()
+    {
+        Document *doc = openFile(newList(), write(QStringLiteral("late.txt"), QByteArray("one two three four five six seven eight nine ten\n").repeated(300)));
+        QVERIFY(doc);
+        doc->d->cursor = doc->d->anchor = 0;
+        doc->d->scrollY = 800.0;
+        QQuickItem *flick = attachInLaggingFlickable(doc, 600);
+        QVERIFY(flick);
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldFlick);
+        QVERIFY(!doc->d->heldWatch);
+        QQuickWindow window;
+        flick->setParentItem(window.contentItem());
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(doc->d->heldWatch);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(5, 5), QPointF(5, 5), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &press);
+        QVERIFY(!doc->d->heldFlick);
+    }
+
+    // A new TextEdit (the tab's view rebuilt) ends the old view's restore.
+    void newTextEditEndsAHeldRestore()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        doc->setTextEdit(nullptr);
+        QVERIFY(!doc->d->heldFlick);
+        QVERIFY(!doc->d->heldWatch);
+    }
+
+    // A new view state (a tab switch, a reload at the top) ends a restore
+    // still waiting: the old place doesn't come back.
+    void newViewStateEndsAHeldRestore()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        doc->d->scrollY = 0;
+        doc->d->applyView();
+        QVERIFY(!doc->d->heldFlick);
+        flick->setProperty("contentY", 5.0);
+        QTest::qWait(1200);
+        QCOMPARE(flick->property("contentY").toReal(), 5.0);
     }
 
     // A reload of a big text keeps a scroll past the first piece, though the

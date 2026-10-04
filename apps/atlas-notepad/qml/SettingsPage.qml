@@ -15,11 +15,27 @@ AtlasPage {
 
     title: qsTr("Settings")
 
+    // A SectionRow a little shorter than the default, for the compact look.
+    // Never shorter than its text needs (a long, wrapped or translated
+    // subtitle): the row's own layout is the one child with `uniformCellSizes`.
+    component CompactRow: SectionRow {
+        id: row
+        readonly property real textHeight: {
+            for (const child of row.children) {
+                if (child.uniformCellSizes !== undefined) {
+                    return child.implicitHeight + Kirigami.Units.largeSpacing;
+                }
+            }
+            return 0;
+        }
+        implicitHeight: Math.max(Math.round(Kirigami.Units.gridUnit * 2.2), textHeight)
+    }
+
     Section {
         title: qsTr("Font")
         footer: qsTr("Used for plain text and the Markdown syntax view. The formatted view uses your system font at this size.")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Family")
             QQC2.ComboBox {
                 id: family
@@ -35,7 +51,7 @@ AtlasPage {
                 })
             }
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Size")
             QQC2.SpinBox {
                 Accessible.name: qsTr("Font size")
@@ -64,26 +80,26 @@ AtlasPage {
     Section {
         title: qsTr("Text")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Word wrap")
             subtitle: qsTr("Long lines continue on the next line instead of scrolling sideways")
             showSwitch: true
             switchChecked: page.settings.wordWrap
             onSwitchToggled: checked => page.settings.wordWrap = checked
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Line numbers")
             showSwitch: true
             switchChecked: page.settings.lineNumbers
             onSwitchToggled: checked => page.settings.lineNumbers = checked
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Status bar")
             showSwitch: true
             switchChecked: page.settings.statusBar
             onSwitchToggled: checked => page.settings.statusBar = checked
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Check spelling")
             subtitle: qsTr("Underlines misspelled words in Markdown and text files, not in code")
             showSwitch: true
@@ -96,14 +112,14 @@ AtlasPage {
         title: qsTr("Markdown")
         footer: qsTr("Markdown files (.md) can show their formatting, such as headings, bold text and lists, instead of the symbols that make it. The file itself stays plain text.")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Formatting")
             subtitle: qsTr("Show Markdown files and new tabs with formatting")
             showSwitch: true
             switchChecked: page.settings.formatting
             onSwitchToggled: checked => page.settings.formatting = checked
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Open files formatted")
             subtitle: qsTr("Off: files open showing the Markdown syntax")
             enabled: page.settings.formatting
@@ -111,8 +127,9 @@ AtlasPage {
             switchChecked: page.settings.openMarkdownFormatted
             onSwitchToggled: checked => page.settings.openMarkdownFormatted = checked
         }
-        SectionRow {
-            title: qsTr("Formatting toolbar")
+        CompactRow {
+            title: qsTr("Tools")
+            subtitle: qsTr("The formatting capsule at the right edge")
             enabled: page.settings.formatting
             showSwitch: true
             switchChecked: page.settings.formattingToolbar
@@ -123,7 +140,7 @@ AtlasPage {
     Section {
         title: qsTr("When Notepad Starts")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Continue previous session")
             subtitle: qsTr("Tabs come back as you left them, unsaved changes too")
             clickable: true
@@ -133,7 +150,7 @@ AtlasPage {
             Accessible.checked: checkmark
             onClicked: page.settings.continueSession = true
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Start a new session")
             subtitle: qsTr("Closing a window asks about unsaved changes")
             clickable: true
@@ -148,7 +165,7 @@ AtlasPage {
     Section {
         title: qsTr("Opening Files")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Open in a new tab")
             clickable: true
             radio: true
@@ -157,7 +174,7 @@ AtlasPage {
             Accessible.checked: checkmark
             onClicked: page.settings.openInNewWindow = false
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Open in a new window")
             clickable: true
             radio: true
@@ -172,7 +189,7 @@ AtlasPage {
         title: qsTr("Drawing")
         footer: qsTr("Notepad draws its window with the processor, which starts faster and uses less memory. Takes effect the next time Notepad opens.")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Use the graphics card to draw the window")
             showSwitch: true
             switchChecked: page.settings.gpuRendering
@@ -184,7 +201,7 @@ AtlasPage {
         title: qsTr("Crash Reports")
         footer: qsTr("Crash reports for every Atlas app are turned on or off in Atlas Updater. They're off unless you turn them on, and each one is shown to you before it's sent. A report you send is posted as a public issue on the AtlasOS GitHub project, with no name or account attached. Anyone can read it, including the error and stack trace and your AtlasOS version, kernel, CPU, GPU and memory.")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Open Atlas Updater")
             chevron: true
             onClicked: updaterMissing.visible = !App.openUpdater()
@@ -203,20 +220,20 @@ AtlasPage {
         title: qsTr("About")
         footer: qsTr("Notepad collects nothing and needs no account. Crash reports are off unless you turn them on in Atlas Updater, and are sent, as public GitHub issues, only when you choose to.")
 
-        SectionRow {
+        CompactRow {
             title: qsTr("Notepad")
             value: qsTr("Version %1").arg(App.version)
             iconName: "accessories-text-editor"
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("License")
             value: qsTr("MIT")
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Made by")
             value: qsTr("Eterneon")
         }
-        SectionRow {
+        CompactRow {
             title: qsTr("Project Page")
             chevron: true
             onClicked: Qt.openUrlExternally("https://github.com/EternalCoder454/atlasos-notepad")

@@ -4,6 +4,8 @@
 // is one step on the document's own undo stack.
 #include "markdown.h"
 
+#include <algorithm>
+
 #include <QAbstractTextDocumentLayout>
 #include <QFontDatabase>
 #include <QKeyEvent>
@@ -47,9 +49,16 @@ void MarkdownEditor::setTextEdit(QQuickItem *edit)
         m_doc = textDocument ? textDocument->textDocument() : nullptr;
         edit->installEventFilter(this);
         connect(edit, SIGNAL(cursorPositionChanged()), this, SLOT(snapCursor()));
+        // Replacing the whole text (load, reload) can move the caret without
+        // its signal: the fence lines' reveal follows it again.
+        connect(edit, SIGNAL(textChanged()), this, SLOT(syncCaret()));
         if (m_doc) {
             m_highlighter = new MarkdownHighlighter(m_doc);
             m_highlighter->setSpellChecker(m_spell);
+            m_highlighter->setCaretSource([edit = QPointer<QQuickItem>(edit)] {
+                return edit ? edit->property("cursorPosition").toInt() : 0;
+            });
+            m_highlighter->setCaret(cursor());
             m_highlighter->setStyle(m_style);
         }
     }
@@ -322,9 +331,19 @@ bool MarkdownEditor::moveCaret(int direction, bool extend)
     return true;
 }
 
+void MarkdownEditor::syncCaret()
+{
+    if (m_highlighter && m_edit) {
+        m_highlighter->setCaret(cursor());
+    }
+}
+
 // After a click, Up, Down, Home or End: out of hidden syntax.
 void MarkdownEditor::snapCursor()
 {
+    if (m_highlighter && m_edit) {
+        m_highlighter->setCaret(cursor());
+    }
     if (!m_style.formatted || m_snapping || !m_doc || !m_edit || hasSelection()) {
         return;
     }
@@ -876,6 +895,75 @@ int MarkdownEditor::headingAt(int position) const
     }
     const BlockInfo *info = BlockInfo::of(m_doc->findBlock(position));
     return info && info->line.kind == Md::HeadingLine ? info->line.heading : 0;
+}
+
+int MarkdownEditor::formatsAt(int start, int end) const
+{
+    if (!m_doc || start < 0) {
+        return 0;
+    }
+    end = qMax(start, end);
+    const QTextBlock block = m_doc->findBlock(start);
+    if (!block.isValid()) {
+        return 0;
+    }
+    const BlockInfo *info = BlockInfo::of(block);
+    if (!info) {
+        return 0;
+    }
+    int bits = 0;
+    switch (info->line.kind) {
+    case Md::Bullet:
+        bits |= FmtBullet;
+        break;
+    case Md::Numbered:
+        bits |= FmtNumbered;
+        break;
+    case Md::Task:
+        bits |= FmtTask;
+        break;
+    case Md::FenceLine:
+    case Md::CodeLine:
+    case Md::RuleLine:
+        return 0; // no inline formats in code, and a rule has none
+    default:
+        break;
+    }
+    if (info->line.quoteDepth > 0) {
+        bits |= FmtQuote;
+    }
+    const bool heading = info->line.kind == Md::HeadingLine;
+    // The characters looked at, in the block: the selection clipped to the
+    // line, or for a caret the character before it (or after, at the start).
+    const int from = start - block.position();
+    const int to = qMin(end, block.position() + block.length() - 1) - block.position();
+    const bool caret = start == end;
+    // The ranges are sorted and don't overlap: jump to the first one that
+    // reaches the characters looked at, and stop after the last (a long line
+    // has thousands).
+    const int lo = caret ? (from > 0 ? from - 1 : from) : from;
+    const int hi = caret ? lo + 1 : to;
+    const auto formats = block.layout() ? block.layout()->formats() : QList<QTextLayout::FormatRange>();
+    auto it = std::partition_point(formats.cbegin(), formats.cend(), [lo](const QTextLayout::FormatRange &r) { return r.start + r.length <= lo; });
+    for (; it != formats.cend() && it->start < hi; ++it) {
+        const QTextCharFormat &f = it->format;
+        // A heading is bold by itself: only its own bold (Strong) counts when
+        // it can be told apart. The Syntax view draws the whole heading line
+        // bold, so a **strong** word in a heading is not reported there.
+        if (f.fontWeight() >= QFont::Bold && (!heading || formatted())) {
+            bits |= FmtBold;
+        }
+        if (f.fontItalic()) {
+            bits |= FmtItalic;
+        }
+        if (f.fontStrikeOut() && info->line.kind != Md::Task) {
+            bits |= FmtStrike;
+        }
+        if (f.fontFamilies().toStringList().contains(m_style.monoFamily)) {
+            bits |= FmtCode;
+        }
+    }
+    return bits;
 }
 
 QString MarkdownEditor::linkAt(int position) const
