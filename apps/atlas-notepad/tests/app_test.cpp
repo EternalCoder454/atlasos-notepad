@@ -2605,7 +2605,8 @@ private Q_SLOTS:
 
     // As attachInFlickable, but the content height follows the text late (as
     // a delayed binding does) and the text wraps at the view's width.
-    QQuickItem *attachInLaggingFlickable(Document *doc)
+    // `lagMs`: how late the content height follows the text.
+    QQuickItem *attachInLaggingFlickable(Document *doc, int lagMs = 80)
     {
         QQmlComponent component(&m_engine);
         component.setData("import QtQuick\nFlickable {\n"
@@ -2614,7 +2615,8 @@ private Q_SLOTS:
                           "    property alias edit: e\n"
                           "    width: 200; height: 100\n"
                           "    onContentHeightChanged: contentY = Math.max(0, Math.min(contentY, contentHeight - height))\n"
-                          "    Timer { interval: 80; running: flick.doc !== null && !flick.doc.loading; repeat: true; onTriggered: flick.contentHeight = e.height }\n"
+                          "    property int lag: 80\n"
+                          "    Timer { interval: flick.lag; running: flick.doc !== null && !flick.doc.loading; repeat: true; onTriggered: flick.contentHeight = e.height }\n"
                           "    TextEdit {\n"
                           "        id: e\n"
                           "        width: flick.width\n"
@@ -2624,7 +2626,8 @@ private Q_SLOTS:
                           "    }\n"
                           "}",
                           QUrl());
-        auto *flick = qobject_cast<QQuickItem *>(component.createWithInitialProperties({{QStringLiteral("doc"), QVariant::fromValue(doc)}}));
+        auto *flick = qobject_cast<QQuickItem *>(
+            component.createWithInitialProperties({{QStringLiteral("doc"), QVariant::fromValue(doc)}, {QStringLiteral("lag"), lagMs}}));
         if (!flick) {
             return nullptr;
         }
@@ -2667,7 +2670,7 @@ private Q_SLOTS:
         }
         doc->d->cursor = doc->d->anchor = 0;
         doc->d->scrollY = 800.0;
-        flick = attachInLaggingFlickable(doc);
+        flick = attachInLaggingFlickable(doc, 600); // the hold waits that long at least
         if (!flick) {
             return nullptr;
         }
@@ -2742,6 +2745,11 @@ private Q_SLOTS:
         QTRY_VERIFY(doc->d->heldWatch);
         QKeyEvent ctrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
         QCoreApplication::sendEvent(&window, &ctrl);
+        QKeyEvent caps(QEvent::KeyPress, Qt::Key_CapsLock, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &caps);
+        // A wheel turn over something beside the view (the tool capsule).
+        QWheelEvent beside(QPointF(400, 10), QPointF(400, 10), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(&window, &beside);
         QVERIFY(doc->d->heldFlick);
         QKeyEvent down(QEvent::KeyPress, Qt::Key_PageDown, Qt::NoModifier);
         QCoreApplication::sendEvent(&window, &down);
@@ -2757,7 +2765,7 @@ private Q_SLOTS:
         QVERIFY(doc);
         doc->d->cursor = doc->d->anchor = 0;
         doc->d->scrollY = 800.0;
-        QQuickItem *flick = attachInLaggingFlickable(doc);
+        QQuickItem *flick = attachInLaggingFlickable(doc, 600);
         QVERIFY(flick);
         QVERIFY(filled(doc));
         QTRY_VERIFY(doc->d->heldFlick);

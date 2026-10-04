@@ -20,6 +20,7 @@
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QtConcurrent>
+#include <QWheelEvent>
 
 #include <KIO/Job>
 #include <KIO/StoredTransferJob>
@@ -646,11 +647,11 @@ void Document::Private::applyView()
 namespace
 {
 // Calls back on the user's own input in a window: a wheel turn, a press, a
-// key (not a modifier alone), a touch, a gesture.
+// key (not a modifier or lock key alone), a touch, a gesture.
 class InputWatch : public QObject
 {
 public:
-    InputWatch(QObject *parent, std::function<void()> onInput)
+    InputWatch(QObject *parent, std::function<void(QEvent *)> onInput)
         : QObject(parent)
         , m_onInput(std::move(onInput))
     {
@@ -664,12 +665,21 @@ protected:
             switch (static_cast<QKeyEvent *>(event)->key()) {
             case Qt::Key_Shift:
             case Qt::Key_Control:
-            case Qt::Key_Alt:
             case Qt::Key_Meta:
+            case Qt::Key_Alt:
+            case Qt::Key_CapsLock:
+            case Qt::Key_NumLock:
+            case Qt::Key_ScrollLock:
             case Qt::Key_AltGr:
+            case Qt::Key_Super_L:
+            case Qt::Key_Super_R:
+            case Qt::Key_Hyper_L:
+            case Qt::Key_Hyper_R:
+            case Qt::Key_Direction_L:
+            case Qt::Key_Direction_R:
                 break;
             default:
-                m_onInput();
+                m_onInput(event);
             }
             break;
         case QEvent::Wheel:
@@ -677,7 +687,7 @@ protected:
         case QEvent::MouseButtonDblClick:
         case QEvent::TouchBegin:
         case QEvent::NativeGesture:
-            m_onInput();
+            m_onInput(event);
             break;
         default:
             break;
@@ -686,7 +696,7 @@ protected:
     }
 
 private:
-    std::function<void()> m_onInput;
+    std::function<void(QEvent *)> m_onInput;
 };
 }
 
@@ -718,12 +728,20 @@ void Document::Private::watchHeldWindow(QQuickWindow *window)
     }
     heldWindow = window;
     if (window) {
-        auto *watch = new InputWatch(q, [this] {
+        auto *watch = new InputWatch(q, [this](QEvent *event) {
             // A hidden tab's view takes no input: what the user does in
-            // the shown one isn't about it.
-            if (heldFlick && heldFlick->isVisible()) {
-                endHeldScroll();
+            // the shown one isn't about it. Nor is a wheel turn over
+            // something else (the tool capsule, the find bar).
+            if (!heldFlick || !heldFlick->isVisible()) {
+                return;
             }
+            if (event->type() == QEvent::Wheel) {
+                const QPointF at = heldFlick->mapFromScene(static_cast<QWheelEvent *>(event)->scenePosition());
+                if (!heldFlick->contains(at)) {
+                    return;
+                }
+            }
+            endHeldScroll();
         });
         window->installEventFilter(watch);
         heldWatch = watch;
