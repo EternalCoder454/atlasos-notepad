@@ -45,13 +45,20 @@ Item {
 
     readonly property real gap: Kirigami.Units.smallSpacing
     readonly property real pitch: buttonSize + gap
-    // Whole buttons only when the window is too short for all of them.
+    readonly property int buttonCount: 9
+    // The height with everything showing, from sizes alone (the two dividers
+    // are 1px with a gap above and below).
+    readonly property real fullHeight: buttonCount * buttonSize + (buttonCount - 1) * gap + 2 * (1 + 3 * gap) + inset * 2
     readonly property real available: Math.max(buttonSize + inset * 2, (parent ? parent.height : 0) - topInset - edgeMargin * 2)
-    readonly property real fullHeight: column.implicitHeight + inset * 2
+    // Too short for everything: the dividers go, the buttons are a plain
+    // column of equal steps, and it shows whole buttons that scroll one
+    // button at a time, with a chevron in the room kept at each end.
     readonly property bool scrolls: fullHeight > available
+    readonly property real edge: scrolls ? Math.round(buttonSize * 0.45) : inset
+    readonly property int shown: Math.max(1, Math.floor((available - edge * 2 + gap) / pitch))
 
     width: Math.round(Kirigami.Units.gridUnit * 2.2)
-    height: scrolls ? Math.max(1, Math.floor((available - inset * 2 + gap) / pitch)) * pitch - gap + inset * 2 : fullHeight
+    height: scrolls ? shown * pitch - gap + edge * 2 : fullHeight
     anchors.right: parent ? parent.right : undefined
     anchors.rightMargin: edgeMargin
     y: Math.round(topInset + edgeMargin + Math.max(0, ((parent ? parent.height : 0) - topInset - edgeMargin * 2 - height) / 2))
@@ -84,6 +91,7 @@ Item {
     }
     component Divider: Rectangle {
         Layout.alignment: Qt.AlignHCenter
+        visible: !capsule.scrolls
         Layout.topMargin: Kirigami.Units.smallSpacing
         Layout.bottomMargin: Kirigami.Units.smallSpacing
         implicitWidth: Math.round(capsule.buttonSize * 0.55)
@@ -131,10 +139,16 @@ Item {
     Flickable {
         id: flick
         anchors.fill: parent
-        anchors.topMargin: capsule.inset
-        anchors.bottomMargin: capsule.inset
+        anchors.topMargin: capsule.edge
+        anchors.bottomMargin: capsule.edge
         contentWidth: width
         contentHeight: column.implicitHeight
+        // One button at a time: contentY is a whole number of steps.
+        function scrollBy(steps) {
+            const max = Math.max(0, contentHeight - height);
+            contentY = Math.max(0, Math.min(max, (Math.round(contentY / capsule.pitch) + steps) * capsule.pitch));
+        }
+        onHeightChanged: scrollBy(0)
         clip: true
         interactive: contentHeight > height
         boundsBehavior: Flickable.StopAtBounds
@@ -261,45 +275,22 @@ Item {
         WheelHandler {
             enabled: capsule.scrolls
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            onWheel: event => {
-                const max = Math.max(0, flick.contentHeight - flick.height);
-                flick.contentY = Math.max(0, Math.min(max, flick.contentY - event.angleDelta.y / 120 * capsule.pitch));
-            }
+            onWheel: event => flick.scrollBy(event.angleDelta.y > 0 ? -1 : 1)
         }
     }
 
-    // Past either end of a scrolling strip: a chevron on a soft fade.
-    component Hint: Item {
+    // Past either end of a scrolling strip: a chevron in the room kept there.
+    component Hint: Symbol {
         property bool atTop: true
-        width: parent.width
-        height: capsule.inset + capsule.gap * 3
+        anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: atTop ? parent.top : undefined
         anchors.bottom: atTop ? undefined : parent.bottom
+        anchors.topMargin: atTop ? 1 : 0
+        anchors.bottomMargin: atTop ? 0 : 1
+        name: atTop ? "keyboard_arrow_up" : "keyboard_arrow_down"
+        size: Math.round(capsule.edge * 1.2)
+        opacity: 0.7
         visible: capsule.scrolls && (atTop ? flick.contentY > 1 : flick.contentY < flick.contentHeight - flick.height - 1)
-        Accessible.ignored: true
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: 1
-            radius: width / 2
-            gradient: Gradient {
-                GradientStop {
-                    position: atTop ? 0 : 1
-                    color: Kirigami.Theme.backgroundColor
-                }
-                GradientStop {
-                    position: atTop ? 1 : 0
-                    color: Qt.alpha(Kirigami.Theme.backgroundColor, 0)
-                }
-            }
-        }
-        Symbol {
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: atTop ? parent.top : undefined
-            anchors.bottom: atTop ? undefined : parent.bottom
-            name: atTop ? "keyboard_arrow_up" : "keyboard_arrow_down"
-            size: Math.round(capsule.buttonSize * 0.5)
-            opacity: 0.7
-        }
     }
     Hint {
         atTop: true
