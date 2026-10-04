@@ -102,6 +102,44 @@ than half used. Still to measure: the GPU backend, and a comparison with Kate.
 so large files need it done lazily or in chunks, or Formatted turned off past
 a size limit.
 
+## S2: large files
+
+`scripts/bench-s2.sh` runs the same bench on 1 MB and 10 MB Markdown and a
+5 MB single line (`bench/make-large.py` writes them to `out/s2`). The machine
+was busy for these runs (load 4-6 from other work), so the plain-text
+baseline doubled against S1's; compare within a row, not with S1.
+
+| File | View | Open to first frame | Key, mean | Memory (RSS) |
+| --- | --- | --- | --- | --- |
+| 1 MB Markdown | Formatted | 494 ms | 4.8 ms | 133 MB |
+| 1 MB Markdown | plain | 167 ms | 4.3 ms | 151 MB |
+| 10 MB Markdown | Formatted | 4.7 s | 28 ms | 504 MB |
+| 10 MB Markdown | plain | 1.6 s | 28 ms | 728 MB |
+| 5 MB, one line | Formatted | 2.2 s | 940 ms | 577 MB |
+
+**Fixed on the way.** The first highlight of a 1 MB file took 9 s:
+`QSyntaxHighlighter::rehighlight()` reports each block to the layout on its
+own, and `QTextDocumentLayout` walks the document from the top for each.
+`MarkdownHighlighter::rehighlightAll()` sets the formats, user data and
+states straight on the blocks and reports once (9 s to 0.24 s). Typing still
+goes through `highlightBlock`, one block at a time.
+
+**What can't be fixed here.** Past a few MB the time goes to Qt's own
+`TextEdit`: every edit walks the block list from the top
+(`QTextDocumentLayout::layoutFlow`), every frame resets the font cache of
+every block (`QQuickTextEdit::invalidateFontCaches`), and a fully laid-out
+document keeps about 70 bytes per character. A long line is laid out again
+whole on every keystroke. Getting past that means a different text widget,
+which is out of scope for a Notepad.
+
+**Limits** (`cpp/limits.h`):
+- Formatted view up to 1 MiB. Bigger Markdown opens as plain text with a
+  banner ("Large file: formatting is off").
+- Lines up to 100,000 characters stay editable (typing about 15 ms at that
+  length). A file with a longer line opens read-only with a banner.
+- Files up to 10 MiB open. Bigger ones are refused with a message saying so:
+  a 10 MB file already costs 0.7 GB of memory and 30 ms a key.
+
 ## Building and testing
 
 Everything builds in the `localhost/atlas-notepad-dev:44` container

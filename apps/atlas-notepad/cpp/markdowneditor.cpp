@@ -104,7 +104,7 @@ void MarkdownEditor::applyStyle()
 void MarkdownEditor::rehighlightNow()
 {
     if (m_highlighter) {
-        m_highlighter->rehighlight();
+        m_highlighter->rehighlightAll();
     }
 }
 

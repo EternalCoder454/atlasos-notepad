@@ -175,6 +175,14 @@ void Bench::finish()
     if (m_missed) {
         printf("steps without a frame: %d\n", m_missed);
     }
+    QFile status(QStringLiteral("/proc/self/status"));
+    if (status.open(QIODevice::ReadOnly)) {
+        for (const QByteArray &l : status.readAll().split('\n')) {
+            if (l.startsWith("VmRSS") || l.startsWith("VmHWM")) {
+                printf("%s\n", l.simplified().constData());
+            }
+        }
+    }
     fflush(stdout);
     QCoreApplication::exit(0);
 }

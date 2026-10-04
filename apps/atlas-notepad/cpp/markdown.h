@@ -114,6 +114,7 @@ public:
     explicit MarkdownHighlighter(QTextDocument *document);
 
     void setStyle(const MarkdownStyle &style);
+    void rehighlightAll();
     const MarkdownStyle &style() const
     {
         return m_style;
@@ -124,10 +125,12 @@ protected:
 
 private:
     const QTextCharFormat &format(uint32_t flags, int heading);
+    int read(const QString &text, int previous, BlockInfo *info);
 
     MarkdownStyle m_style;
     QHash<quint64, QTextCharFormat> m_formats;
     std::vector<NpRun> m_runs;
+    QList<QTextLayout::FormatRange> m_ranges;
 };
 
 // Attach to a TextEdit (textEdit) to edit Markdown in it.

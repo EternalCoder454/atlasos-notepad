@@ -10,12 +10,13 @@ void MarkdownHighlighter::setStyle(const MarkdownStyle &style)
 {
     m_style = style;
     m_formats.clear();
-    rehighlight();
+    rehighlightAll();
 }
 
-void MarkdownHighlighter::highlightBlock(const QString &text)
+// Reads one line: fills `info` (the line, its hidden ranges, its quote
+// marks) and m_ranges (the formats), and returns the state for the next line.
+int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info)
 {
-    const int previous = qMax(0, previousBlockState());
     const auto *utf16 = reinterpret_cast<const uint16_t *>(text.utf16());
     NpLine line{};
     size_t n = np_md_line(utf16, size_t(text.size()), previous, m_runs.data(), m_runs.size(), &line);
@@ -24,19 +25,17 @@ void MarkdownHighlighter::highlightBlock(const QString &text)
         n = np_md_line(utf16, size_t(text.size()), previous, m_runs.data(), m_runs.size(), &line);
     }
 
-    auto *info = static_cast<BlockInfo *>(currentBlockUserData());
-    if (!info) {
-        info = new BlockInfo;
-        setCurrentBlockUserData(info);
-    }
     info->line = line;
     info->hidden.clear();
     info->quoteMarks.clear();
+    m_ranges.clear();
     for (size_t i = 0; i < n; ++i) {
         const NpRun &r = m_runs[i];
         const int start = int(r.start);
         const int end = int(r.start + r.len);
-        setFormat(start, int(r.len), format(r.flags, line.heading));
+        if (r.flags) {
+            m_ranges.append({start, int(r.len), format(r.flags, line.heading)});
+        }
         if (r.flags & Md::Hidden) {
             if (!info->hidden.isEmpty() && info->hidden.last().second == start) {
                 info->hidden.last().second = end;
@@ -52,7 +51,45 @@ void MarkdownHighlighter::highlightBlock(const QString &text)
             }
         }
     }
-    setCurrentBlockState(line.state);
+    return line.state;
+}
+
+void MarkdownHighlighter::highlightBlock(const QString &text)
+{
+    auto *info = static_cast<BlockInfo *>(currentBlockUserData());
+    if (!info) {
+        info = new BlockInfo;
+        setCurrentBlockUserData(info);
+    }
+    const int state = read(text, qMax(0, previousBlockState()), info);
+    for (const QTextLayout::FormatRange &r : std::as_const(m_ranges)) {
+        setFormat(r.start, r.length, r.format);
+    }
+    setCurrentBlockState(state);
+}
+
+// QSyntaxHighlighter::rehighlight() tells the layout about each block on its
+// own, and the layout walks the document from the top every time: quadratic,
+// 9 s for a 1 MB file. This sets the same formats, user data and states
+// straight on the blocks and tells the layout once.
+void MarkdownHighlighter::rehighlightAll()
+{
+    QTextDocument *doc = document();
+    if (!doc) {
+        return;
+    }
+    int state = 0;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+        auto *info = static_cast<BlockInfo *>(b.userData());
+        if (!info) {
+            info = new BlockInfo;
+            b.setUserData(info);
+        }
+        state = read(b.text(), state, info);
+        b.layout()->setFormats(m_ranges);
+        b.setUserState(state);
+    }
+    doc->markContentsDirty(0, doc->characterCount());
 }
 
 const QTextCharFormat &MarkdownHighlighter::format(uint32_t flags, int heading)
