@@ -60,7 +60,103 @@ private:
         QCoreApplication::sendEvent(m_edit.get(), &event);
     }
 
+    // Whether every character of a line is drawn invisibly (a fence line the
+    // Formatted view hides) rather than dim text.
+    bool lineHidden(int blockNumber) const
+    {
+        const QTextBlock b = m_edit->property("textDocument").value<QQuickTextDocument *>()->textDocument()->findBlockByNumber(blockNumber);
+        const auto formats = b.layout()->formats();
+        if (formats.isEmpty()) {
+            return false;
+        }
+        for (const auto &r : formats) {
+            if (r.format.foreground().color().alpha() != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 private Q_SLOTS:
+    // Fence markers are hidden in the Formatted view, except on the line the
+    // caret is on, and the text and the caret don't change by it.
+    void fenceMarkersHiddenAwayFromCaret()
+    {
+        const QString md = QStringLiteral("```rust\nlet x;\n```\nafter");
+        open(md);
+        place(9);
+        QVERIFY(lineHidden(0));
+        QVERIFY(lineHidden(2));
+        QCOMPARE(m_edit->property("cursorPosition").toInt(), 9);
+        place(3);
+        QVERIFY(!lineHidden(0));
+        QVERIFY(lineHidden(2));
+        QCOMPARE(m_edit->property("cursorPosition").toInt(), 3);
+        place(md.indexOf(u"after"));
+        QVERIFY(lineHidden(0));
+        QVERIFY(lineHidden(2));
+        place(md.indexOf(u"```\nafter") + 1);
+        QVERIFY(lineHidden(0));
+        QVERIFY(!lineHidden(2));
+        QCOMPARE(text(), md);
+        QCOMPARE(m_edit->property("lineCount").toInt(), 4);
+    }
+
+    void fenceMarkersShownInSyntaxView()
+    {
+        open(QStringLiteral("```rust\nlet x;\n```"));
+        m_editor->setFormatted(false);
+        QCoreApplication::processEvents();
+        m_editor->rehighlightNow();
+        place(9);
+        QVERIFY(!lineHidden(0));
+        QVERIFY(!lineHidden(2));
+    }
+
+    void typingAFenceShowsIt()
+    {
+        open(QStringLiteral("a\n"));
+        place(2);
+        for (const QChar c : QStringLiteral("```")) {
+            QKeyEvent event(QEvent::KeyPress, Qt::Key_QuoteLeft, Qt::NoModifier, QString(c));
+            QCoreApplication::sendEvent(m_edit.get(), &event);
+        }
+        QCOMPARE(text(), QStringLiteral("a\n```"));
+        QVERIFY(!lineHidden(1));
+    }
+
+    void copyKeepsFences()
+    {
+        const QString md = QStringLiteral("```rust\nlet x;\n```");
+        open(md);
+        select(0, int(md.size()));
+        QMetaObject::invokeMethod(m_edit.get(), "copy");
+        QCOMPARE(QGuiApplication::clipboard()->text(), md);
+    }
+
+    void fenceLabelText_data()
+    {
+        QTest::addColumn<QString>("line");
+        QTest::addColumn<QString>("label");
+        QTest::newRow("language") << QStringLiteral("```rust") << QStringLiteral("rust");
+        QTest::newRow("spaced") << QStringLiteral("  ~~~~  python title=x") << QStringLiteral("python");
+        QTest::newRow("none") << QStringLiteral("```") << QString();
+        QTest::newRow("blank") << QStringLiteral("```   ") << QString();
+        QTest::newRow("symbols") << QStringLiteral("```c++") << QStringLiteral("c++");
+        QTest::newRow("control") << QStringLiteral("```ru\x01st\x1b[31m") << QStringLiteral("rust[31m");
+        QTest::newRow("bidi") << QStringLiteral("```ru\u202Est\u2066\u200B\u200F") << QStringLiteral("rust");
+        QTest::newRow("only invisible") << QStringLiteral("```\u202E\u2066") << QString();
+        QTest::newRow("lone surrogate") << QStringLiteral("```a\xD800z") << QStringLiteral("az");
+        QTest::newRow("emoji kept") << QStringLiteral("```\U0001F980rs") << QStringLiteral("\U0001F980rs");
+        QTest::newRow("long") << (QStringLiteral("```") + QString(500, u'x')) << QString(64, u'x');
+    }
+    void fenceLabelText()
+    {
+        QFETCH(QString, line);
+        QFETCH(QString, label);
+        QCOMPARE(MarkdownDecorations::fenceLabel(line), label);
+    }
+
     void enterContinuesList()
     {
         open(QStringLiteral("- a"));

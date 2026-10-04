@@ -50,6 +50,7 @@ void MarkdownEditor::setTextEdit(QQuickItem *edit)
         if (m_doc) {
             m_highlighter = new MarkdownHighlighter(m_doc);
             m_highlighter->setSpellChecker(m_spell);
+            m_highlighter->setCaret(cursor());
             m_highlighter->setStyle(m_style);
         }
     }
@@ -325,6 +326,9 @@ bool MarkdownEditor::moveCaret(int direction, bool extend)
 // After a click, Up, Down, Home or End: out of hidden syntax.
 void MarkdownEditor::snapCursor()
 {
+    if (m_highlighter && m_edit) {
+        m_highlighter->setCaret(cursor());
+    }
     if (!m_style.formatted || m_snapping || !m_doc || !m_edit || hasSelection()) {
         return;
     }
