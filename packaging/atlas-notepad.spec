@@ -47,12 +47,12 @@ BuildRequires:  hunspell-en-US
 # from atlas-framework, which is in no repository: install its RPMs first
 # (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
 BuildRequires:  kf6-kirigami-devel
-BuildRequires:  atlas-ui >= 1.2.0
+BuildRequires:  atlas-ui >= 1.3.0
 
 Requires:       kf6-kirigami
 Recommends:     kio-extras
-# Atlas.Ui (its 1.2.0 has the editor components)
-Requires:       atlas-ui >= 1.2.0
+# Atlas.Ui (its 1.3.0 has the editor components and the Atlas form controls)
+Requires:       atlas-ui >= 1.3.0
 Requires:       kf6-qqc2-desktop-style
 # spell check (dictionaries come from the system's langpacks)
 Requires:       kf6-sonnet
@@ -118,7 +118,7 @@ appstream-util validate-relax --nonet \
 
 %changelog
 * Sun Oct 04 2026 Atlas <atlas@eterneon.net> - 0.1.0-2
-- Built on atlas-framework (atlas-ui >= 1.2.0)
+- Built on atlas-framework (atlas-ui >= 1.3.0)
 - dnf protected.d entry: not removable on AtlasOS
 
 * Sat Oct 03 2026 Atlas <atlas@eterneon.net> - 0.1.0-1

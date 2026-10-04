@@ -29,15 +29,17 @@ corrosion_import_crate(MANIFEST_PATH ${WORKSPACE_DIR}/Cargo.toml
 # Atlas.Ui, the shared Atlas look, is installed like Kirigami (atlas-ui, from
 # atlas-framework): QML imports it and nothing links it. qmlcachegen and
 # qmllint read its types from the installed copy.
-# 1.2.0 added the editor parts (TabBar, StatusBar...); an older one only
-# fails later, in qmlcachegen, with "unknown type".
+# 1.3.0 added the form controls (AtlasTextField, AtlasComboBox...) and
+# TabBar.contextMenuRequested; an older one only fails later, in qmlcachegen,
+# with "unknown type". (The app has no Rust app! to carry `ui:`, so this is
+# its Atlas.Ui version check.)
 set(_atlas_ui_qmldir "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_QML}/Atlas/Ui/qmldir")
 if(NOT EXISTS "${_atlas_ui_qmldir}")
-    message(FATAL_ERROR "Atlas.Ui is not installed: install atlas-ui >= 1.2.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
+    message(FATAL_ERROR "Atlas.Ui is not installed: install atlas-ui >= 1.3.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
 endif()
-file(STRINGS "${_atlas_ui_qmldir}" _atlas_ui_tabbar REGEX "^TabBar ")
-if(NOT _atlas_ui_tabbar)
-    message(FATAL_ERROR "The installed Atlas.Ui is older than 1.2.0: install atlas-ui >= 1.2.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
+file(STRINGS "${_atlas_ui_qmldir}" _atlas_ui_forms REGEX "^AtlasTextField ")
+if(NOT _atlas_ui_forms)
+    message(FATAL_ERROR "The installed Atlas.Ui is older than 1.3.0: install atlas-ui >= 1.3.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
 endif()
 
 # The app's QObjects (cpp/app.h), shared with app_test.
