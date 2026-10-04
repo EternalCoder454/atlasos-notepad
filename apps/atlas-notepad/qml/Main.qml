@@ -1,4 +1,4 @@
-// A Notepad window: tabs, the formatting toolbar for Markdown, the editors,
+// A Notepad window: tabs, the tool capsule for Markdown, the editors,
 // find, banners and the status bar. Menus go to Plasma's global menu when
 // there is one, else to a menu button by the tabs. The App (C++) makes each
 // window with its own DocumentList and shows it.
@@ -344,7 +344,7 @@ QQC2.ApplicationWindow {
     }
     KeyedAction {
         id: toolbarAction
-        text: qsTr("Formatting Toolbar")
+        text: qsTr("Show Tools")
         checkable: true
         checked: root.settings.formattingToolbar
         enabled: root.settings.formatting
@@ -605,13 +605,6 @@ QQC2.ApplicationWindow {
                 }
             }
         }
-        FormatToolbar {
-            Layout.fillWidth: true
-            visible: root.markdown && root.settings.formattingToolbar && !root.settingsOpen
-            actions: root.actions
-            heading: root.view ? root.view.heading : 0
-            formatted: root.document !== null && root.document.formatted
-        }
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: 1
@@ -705,7 +698,29 @@ QQC2.ApplicationWindow {
                     sourceComponent: EditorView {
                         document: tab.document
                         current: tab.current
+                        // Room for the tool capsule, so text and scrollbar stay clear of it.
+                        rightInset: document.markdown && root.settings.formattingToolbar ? capsule.reserve : 0
                         onLinkRequested: root.openLinkDialog()
+                    }
+                }
+            }
+
+            HoverHandler {
+                id: editorsHover
+            }
+
+            ToolCapsule {
+                id: capsule
+                visible: root.markdown && root.settings.formattingToolbar && !root.settingsOpen
+                z: 5
+                pointerNear: editorsHover.hovered && editorsHover.point.position.x >= x - nearDistance && editorsHover.point.position.y >= y - nearDistance && editorsHover.point.position.y <= y + height + nearDistance
+                actions: root.actions
+                heading: root.view ? root.view.heading : 0
+                formatted: root.document !== null && root.document.formatted
+                topInset: findBar.visible ? findBar.height + Kirigami.Units.smallSpacing : 0
+                onEditorFocusRequested: {
+                    if (root.view) {
+                        root.view.focusEditor();
                     }
                 }
             }

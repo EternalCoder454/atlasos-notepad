@@ -30,6 +30,9 @@ FocusScope {
         return md.headingAt(edit.cursorPosition);
     }
 
+    // Kept clear at the right edge (the window's tool capsule).
+    property real rightInset: 0
+
     signal linkRequested
 
     function focusEditor() {
@@ -114,6 +117,7 @@ FocusScope {
         anchors.bottom: parent.bottom
         anchors.left: gutter.right
         anchors.right: parent.right
+        anchors.rightMargin: view.rightInset
         contentWidth: edit.width
         contentHeight: edit.height
         clip: true

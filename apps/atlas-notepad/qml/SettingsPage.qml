@@ -117,7 +117,7 @@ AtlasPage {
             onSwitchToggled: checked => page.settings.openMarkdownFormatted = checked
         }
         CompactRow {
-            title: qsTr("Formatting toolbar")
+            title: qsTr("Tool capsule")
             enabled: page.settings.formatting
             showSwitch: true
             switchChecked: page.settings.formattingToolbar

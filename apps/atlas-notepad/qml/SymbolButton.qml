@@ -16,6 +16,12 @@ T.AbstractButton {
     property string symbol
     // The shortcut as shown to people, such as "Ctrl+B".
     property string shortcutText
+    // A circle instead of a rounded square (the tool capsule).
+    property bool round: false
+    // Where the tooltip goes: "bottom" or "left".
+    property string tipSide: "bottom"
+    // False while something else (a menu) shows from the button.
+    property bool tipEnabled: true
 
     implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.5)
     implicitWidth: implicitHeight
@@ -28,12 +34,17 @@ T.AbstractButton {
     Accessible.checkable: control.checkable
     Accessible.checked: control.checked
 
-    QQC2.ToolTip.visible: control.hovered && control.text.length > 0
-    QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
-    QQC2.ToolTip.text: control.shortcutText.length > 0 ? qsTr("%1 (%2)").arg(control.text).arg(control.shortcutText) : control.text
+    QQC2.ToolTip {
+        parent: control
+        visible: control.tipEnabled && control.hovered && !control.down && control.text.length > 0
+        delay: Kirigami.Units.toolTipDelay
+        text: control.shortcutText.length > 0 ? qsTr("%1 (%2)").arg(control.text).arg(control.shortcutText) : control.text
+        x: control.tipSide === "left" ? -width - Kirigami.Units.smallSpacing : Math.round((control.width - width) / 2)
+        y: control.tipSide === "left" ? Math.round((control.height - height) / 2) : control.height + Kirigami.Units.smallSpacing
+    }
 
     background: Rectangle {
-        radius: 6
+        radius: control.round ? Math.min(width, height) / 2 : 6
         color: control.checked ? Qt.alpha(Kirigami.Theme.highlightColor, control.down ? 0.28 : 0.18) : Qt.alpha(Kirigami.Theme.textColor, control.down ? 0.12 : control.hovered ? 0.07 : 0)
         Behavior on color {
             ColorAnimation {
