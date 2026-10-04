@@ -28,8 +28,11 @@ ContextMenu {
     ContextMenu {
         id: recent
         title: qsTr("Open Recent")
-        enabled: App.recentFiles.length > 0
+        // Items before the recent files: Reopen Closed Tab and its separator.
+        readonly property int recentLead: 2
 
+        Item { action: menu.actions.reopenTab }
+        ContextMenuSeparator {}
         Instantiator {
             model: App.recentFiles
             delegate: ContextMenuItem {
@@ -37,19 +40,19 @@ ContextMenu {
                 text: App.displayPath(modelData)
                 onTriggered: menu.openRecent(modelData)
             }
-            onObjectAdded: (index, object) => recent.insertItem(index, object)
+            onObjectAdded: (index, object) => recent.insertItem(index + recentLead, object)
             onObjectRemoved: (index, object) => recent.removeItem(object)
         }
         ContextMenuSeparator {}
         ContextMenuItem {
             text: qsTr("Clear List")
+            enabled: App.recentFiles.length > 0
             onTriggered: App.clearRecentFiles()
         }
     }
     Item { action: menu.actions.save }
     Item { action: menu.actions.saveAs }
     Item { action: menu.actions.saveAll }
-    ContextMenuSeparator {}
     // One submenu: the whole menu then fits a default-size window.
     ContextMenu {
         title: qsTr("File Location")
@@ -58,7 +61,6 @@ ContextMenu {
         Item { action: menu.actions.copyLocation }
         Item { action: menu.actions.properties }
     }
-    ContextMenuSeparator {}
     Item { action: menu.actions.print }
     ContextMenuSeparator {}
     ContextMenu {
@@ -119,11 +121,9 @@ ContextMenu {
         Item { action: menu.actions.keyboardShortcuts }
         Item { action: menu.actions.about }
     }
-    ContextMenuSeparator {}
     Item { action: menu.actions.settings }
     ContextMenuSeparator {}
     Item { action: menu.actions.closeTab }
-    Item { action: menu.actions.reopenTab }
     Item { action: menu.actions.closeWindow }
     Item { action: menu.actions.quit }
 }
