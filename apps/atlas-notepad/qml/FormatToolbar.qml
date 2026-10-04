@@ -18,7 +18,8 @@ Item {
     required property int heading
     required property bool formatted
 
-    implicitHeight: row.implicitHeight + Kirigami.Units.smallSpacing * 2
+    // The same height class as the top bar.
+    implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.8)
 
     component Separator: Rectangle {
         Layout.leftMargin: Kirigami.Units.smallSpacing
@@ -27,49 +28,49 @@ Item {
         implicitHeight: Kirigami.Units.iconSizes.small
         color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
     }
-    component Button: ToolbarButton {
+    component Button: SymbolButton {
         property string iconName
         // Not `action`: AbstractButton's own would trigger it a second time.
         property QQC2.Action command
         text: command.text.replace("&", "")
         shortcutText: App.shortcutText(command.keys ?? command.shortcut)
         enabled: command.enabled
-        icon.source: Qt.resolvedUrl("../icons/" + iconName + ".svg")
+        symbol: iconName
         onClicked: command.trigger()
     }
 
     RowLayout {
         id: row
         anchors.fill: parent
-        anchors.leftMargin: Kirigami.Units.largeSpacing
-        anchors.rightMargin: Kirigami.Units.largeSpacing
+        anchors.leftMargin: Kirigami.Units.smallSpacing
+        anchors.rightMargin: Kirigami.Units.smallSpacing
         spacing: 2
 
         Button {
-            iconName: "heading1"
+            iconName: "format_h1"
             command: bar.actions.heading1
             checked: bar.heading === 1
         }
         Button {
-            iconName: "heading2"
+            iconName: "format_h2"
             command: bar.actions.heading2
             checked: bar.heading === 2
         }
         Button {
-            iconName: "paragraph"
+            iconName: "format_paragraph"
             command: bar.actions.bodyText
         }
         Separator {}
         Button {
-            iconName: "bold"
+            iconName: "format_bold"
             command: bar.actions.bold
         }
         Button {
-            iconName: "italic"
+            iconName: "format_italic"
             command: bar.actions.italic
         }
         Button {
-            iconName: "strikethrough"
+            iconName: "format_strikethrough"
             command: bar.actions.strikethrough
         }
         Button {
@@ -77,31 +78,31 @@ Item {
             command: bar.actions.code
         }
         Button {
-            iconName: "link-add"
+            iconName: "add_link"
             command: bar.actions.link
         }
         Separator {}
         Button {
-            iconName: "bullet-list"
+            iconName: "format_list_bulleted"
             command: bar.actions.bulletList
         }
         Button {
-            iconName: "numbered-list"
+            iconName: "format_list_numbered"
             command: bar.actions.numberedList
         }
         Button {
-            iconName: "task"
+            iconName: "checklist"
             command: bar.actions.checklist
         }
         Button {
-            iconName: "quote"
+            iconName: "format_quote"
             command: bar.actions.quote
         }
         Item {
             Layout.fillWidth: true
         }
         Button {
-            iconName: "text"
+            iconName: "text_format"
             command: bar.actions.toggleFormatted
             checked: !bar.formatted
             text: bar.formatted ? qsTr("Show Markdown Syntax") : qsTr("Show Formatting")

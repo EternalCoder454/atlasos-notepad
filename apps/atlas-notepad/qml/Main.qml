@@ -376,7 +376,7 @@ QQC2.ApplicationWindow {
     }
     KeyedAction {
         id: settingsAction
-        text: qsTr("Settings")
+        text: qsTr("Settings…")
         keys: "Ctrl+,"
         onTriggered: root.settingsOpen = !root.settingsOpen
     }
@@ -544,46 +544,65 @@ QQC2.ApplicationWindow {
     header: ColumnLayout {
         spacing: 0
 
-        TabBar {
-            id: tabBar
+        // One compact bar: tabs and "+", then the view switch for Markdown
+        // and the menu button on the right.
+        Item {
             Layout.fillWidth: true
-            model: root.documents
-            currentIndex: root.documents.currentIndex
-            onActivated: index => {
-                root.documents.currentIndex = index;
-                root.settingsOpen = false;
-            }
-            onCloseRequested: index => root.closeTab(index)
-            onNewRequested: root.documents.newTab()
-            onMoved: (from, to) => root.documents.move(from, to)
+            implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.8)
 
-            ToolbarButton {
-                id: menuButton
-                visible: !App.hasGlobalMenu
-                text: qsTr("Menu")
-                shortcutText: "F10"
-                icon.source: Qt.resolvedUrl("../icons/menu.svg")
-                onClicked: fallbackMenu.popup(menuButton, 0, menuButton.height)
-
-                // The keyboard way in, as F10 opens a menu bar elsewhere.
-                Shortcut {
-                    sequence: "F10"
-                    enabled: menuButton.visible
-                    onActivated: menuButton.clicked()
+            TabBar {
+                id: tabBar
+                anchors.fill: parent
+                anchors.topMargin: 1
+                anchors.bottomMargin: 1
+                model: root.documents
+                currentIndex: root.documents.currentIndex
+                onActivated: index => {
+                    root.documents.currentIndex = index;
+                    root.settingsOpen = false;
                 }
+                onCloseRequested: index => root.closeTab(index)
+                onNewRequested: root.documents.newTab()
+                onMoved: (from, to) => root.documents.move(from, to)
 
-                FallbackMenu {
-                    id: fallbackMenu
-                    actions: root.actions
-                    onOpenRecent: path => root.documents.open([path])
+                SegmentedPill {
+                    visible: root.markdown && !root.settingsOpen
+                    items: [
+                        {
+                            text: qsTr("Formatted"),
+                            toolTip: qsTr("Formatted view")
+                        },
+                        {
+                            text: qsTr("Syntax"),
+                            toolTip: qsTr("Markdown syntax view")
+                        }
+                    ]
+                    currentIndex: root.document !== null && !root.document.formatted ? 1 : 0
+                    shortcutText: App.shortcutText(toggleFormattedAction.keys)
+                    enabled: toggleFormattedAction.enabled
+                    onChosen: index => root.document.formatted = index === 0
                 }
-            }
-            ToolbarButton {
-                text: settingsAction.text
-                shortcutText: "Ctrl+,"
-                icon.source: Qt.resolvedUrl("../icons/settings.svg")
-                checked: root.settingsOpen
-                onClicked: settingsAction.trigger()
+                SymbolButton {
+                    id: menuButton
+                    visible: !App.hasGlobalMenu
+                    symbol: "more_horiz"
+                    text: qsTr("Menu")
+                    shortcutText: "F10"
+                    onClicked: fallbackMenu.popup(menuButton, 0, menuButton.height)
+
+                    // The keyboard way in, as F10 opens a menu bar elsewhere.
+                    Shortcut {
+                        sequence: "F10"
+                        enabled: menuButton.visible
+                        onActivated: menuButton.clicked()
+                    }
+
+                    FallbackMenu {
+                        id: fallbackMenu
+                        actions: root.actions
+                        onOpenRecent: path => root.documents.open([path])
+                    }
+                }
             }
         }
         FormatToolbar {
@@ -759,8 +778,18 @@ QQC2.ApplicationWindow {
 
     footer: StatusBar {
         visible: root.settings.statusBar && !root.settingsOpen && root.document !== null
+        implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.2) + 1
 
-        StatusBarItem {
+        // Left: save state, position, size of the text.
+        StatusCell {
+            readonly property bool saving: root.document !== null && root.document.saving
+            readonly property bool modified: root.document !== null && root.document.modified
+            readonly property bool saved: root.document !== null && root.document.path.length > 0 && !modified && !saving
+            visible: text.length > 0
+            text: saving ? qsTr("Saving…") : modified ? qsTr("Edited") : saved ? qsTr("Saved") : ""
+            symbol: saved ? "check" : ""
+        }
+        StatusCell {
             readonly property point lineColumn: {
                 const edit = root.view && root.document ? root.view.edit : null;
                 return edit ? root.document.lineColumn(edit.cursorPosition) : Qt.point(1, 1);
@@ -770,21 +799,36 @@ QQC2.ApplicationWindow {
             toolTip: goToAction.text
             onClicked: goToAction.trigger()
         }
-        StatusBarItem {
+        StatusCell {
+            // Words for Markdown, characters for plain text; a selection
+            // shows its own count. A very large selection is counted in
+            // characters, to keep the cursor moving.
             readonly property int selected: root.view ? root.view.edit.selectionEnd - root.view.edit.selectionStart : 0
             readonly property int total: root.document ? root.document.characterCount : 0
-            text: selected > 0 ? qsTr("%1 of %2 characters").arg(selected.toLocaleString(Qt.locale(), "f", 0)).arg(total.toLocaleString(Qt.locale(), "f", 0))
-                : total === 1 ? qsTr("1 character") : qsTr("%1 characters").arg(total.toLocaleString(Qt.locale(), "f", 0))
-            toolTip: root.document ? qsTr("%n word(s), %1 line(s)", "", root.document.wordCount).arg(Qt.locale().toString(root.document.lineCount)) : ""
+            readonly property int words: root.document ? root.document.wordCount : 0
+            readonly property bool byWords: root.markdown && selected <= 50000
+            readonly property int selectedWords: byWords && selected > 0 ? (root.view.edit.selectedText.match(/\S+/g) ?? []).length : 0
+            function num(n) {
+                return n.toLocaleString(Qt.locale(), "f", 0);
+            }
+            text: byWords ? (selected > 0 ? qsTr("%1 of %2 words").arg(num(selectedWords)).arg(num(words)) : words === 1 ? qsTr("1 word") : qsTr("%1 words").arg(num(words)))
+                : selected > 0 ? qsTr("%1 of %2 characters").arg(num(selected)).arg(num(total))
+                : total === 1 ? qsTr("1 character") : qsTr("%1 characters").arg(num(total))
+            toolTip: root.document ? (byWords ? qsTr("%1 characters, %2 line(s)") : qsTr("%1 words, %2 line(s)")).arg(num(byWords ? total : words)).arg(num(root.document.lineCount)) : ""
         }
         Item {
             Layout.fillWidth: true
         }
-        StatusBarItem {
-            visible: root.document !== null && root.document.saving
-            text: qsTr("Saving…")
+        // Right: where a remote file is, zoom (only when changed), line
+        // endings, encoding.
+        StatusCell {
+            visible: root.document !== null && root.document.isRemote
+            symbol: "cloud"
+            text: root.document ? root.document.host : ""
+            toolTip: root.document ? root.document.toolTip : ""
         }
-        StatusBarItem {
+        StatusCell {
+            visible: root.settings.zoom !== 100
             text: qsTr("%1%").arg(root.settings.zoom)
             clickable: true
             toolTip: qsTr("Zoom")
@@ -803,8 +847,8 @@ QQC2.ApplicationWindow {
                 }
             }
         }
-        StatusBarItem {
-            text: root.document ? root.document.lineEndingName : ""
+        StatusCell {
+            text: !root.document ? "" : root.document.lineEnding === Document.CrLf ? qsTr("CRLF") : root.document.lineEnding === Document.Cr ? qsTr("CR") : qsTr("LF")
             clickable: root.editable
             toolTip: qsTr("Line endings")
             menu: ContextMenu {
@@ -824,7 +868,7 @@ QQC2.ApplicationWindow {
                 }
             }
         }
-        StatusBarItem {
+        StatusCell {
             text: root.document ? root.document.encodingName : ""
             clickable: true
             toolTip: qsTr("Encoding")

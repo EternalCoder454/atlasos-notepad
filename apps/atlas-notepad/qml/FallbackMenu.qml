@@ -120,6 +120,8 @@ ContextMenu {
         Item { action: menu.actions.about }
     }
     ContextMenuSeparator {}
+    Item { action: menu.actions.settings }
+    ContextMenuSeparator {}
     Item { action: menu.actions.closeTab }
     Item { action: menu.actions.reopenTab }
     Item { action: menu.actions.closeWindow }

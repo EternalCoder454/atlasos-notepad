@@ -452,7 +452,7 @@ FocusScope {
             visible: view.document.markdown
             enabled: !edit.readOnly
             text: qsTr("Link…")
-            icon.source: Qt.resolvedUrl("../icons/link-add.svg")
+            icon.name: "insert-link"
             shortcutText: "Ctrl+K"
             onTriggered: view.linkRequested()
         }
