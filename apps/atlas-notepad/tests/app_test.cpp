@@ -21,12 +21,14 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTextDocument>
 #include <QTest>
 
 #include <KDirNotify>
+#include <KSharedConfig>
 
 #include <memory>
 #include <vector>
@@ -709,6 +711,33 @@ private Q_SLOTS:
         QVERIFY(all.contains(QStringLiteral("net.eterneon.atlas.notepad")));
     }
 
+    void recentDocumentsFollowKdeSetting()
+    {
+        // Plasma's "remember recent documents" switched off ([RecentDocuments]
+        // UseRecent in kdeglobals): KRecentDocument records nothing.
+        const QString config = QString::fromUtf8(qgetenv("XDG_CONFIG_HOME"));
+        QVERIFY(QDir().mkpath(config));
+        const QString globals = config + QStringLiteral("/kdeglobals");
+        auto restore = qScopeGuard([&globals] {
+            QFile::remove(globals);
+            KSharedConfig::openConfig()->reparseConfiguration();
+        });
+        QFile file(globals);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("[RecentDocuments]\nUseRecent=false\n");
+        file.close();
+        KSharedConfig::openConfig()->reparseConfiguration();
+
+        m_app->addRecentFile(QStringLiteral("sftp://host/dir/not-remembered.txt"));
+        QTest::qWait(200);
+        QString all;
+        QDirIterator it(QString::fromUtf8(qgetenv("XDG_DATA_HOME")), QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            all += QString::fromUtf8(read(it.next()));
+        }
+        QVERIFY(!all.contains(QStringLiteral("not-remembered.txt")));
+    }
+
     void copyLocationAndActions()
     {
         QApplication::clipboard()->setText(QStringLiteral("before"));
@@ -726,7 +755,7 @@ private Q_SLOTS:
         doc->copyLocation();
         QCOMPARE(QApplication::clipboard()->text(), path);
         QCOMPARE(notice.size(), 1);
-        // Show in Folder, Open With and Properties need a desktop: they
+        // Open Containing Folder, Open With and Properties need a desktop: they
         // start their job or dialog, and nothing crashes.
         doc->showInFolder();
         doc->showProperties();

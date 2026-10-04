@@ -159,7 +159,7 @@ QQC2.ApplicationWindow {
     }
     KeyedAction {
         id: showInFolderAction
-        text: qsTr("Show in Folder")
+        text: qsTr("Open Containing Folder")
         enabled: root.hasFile
         onTriggered: root.document.showInFolder()
     }
