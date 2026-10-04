@@ -5,6 +5,8 @@
 #   scripts/dev.sh                  an interactive shell
 # The first run installs the build dependencies from the spec (cached after).
 # Set CARGO_TARGET_DIR to /src/target/<name> to keep one target dir per task.
+# Set ATLAS_UI=/path/to/atlasos-updater to mount a local checkout at /atlas-ui
+# (then configure with -DFETCHCONTENT_SOURCE_DIR_ATLASOS_UPDATER=/atlas-ui).
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -28,9 +30,11 @@ fi
 
 tty=()
 [ -t 0 ] && tty=(-it)
+extra=()
+[ -n "${ATLAS_UI:-}" ] && extra=(-v "$ATLAS_UI":/atlas-ui:ro,z)
 exec podman run --rm "${tty[@]}" \
     -v "$repo":/src:Z -w /src \
     -v atlas-cargo:/root/.cargo/registry \
     -v atlas-cargo-git:/root/.cargo/git \
     -e CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/src/target/dev}" \
-    "$image" "${@:-bash}"
+    "${extra[@]}" "$image" "${@:-bash}"
