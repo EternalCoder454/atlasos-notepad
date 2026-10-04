@@ -23,6 +23,7 @@ AtlasPage {
             title: qsTr("Family")
             QQC2.ComboBox {
                 id: family
+                Accessible.name: qsTr("Font family")
                 Layout.preferredWidth: Kirigami.Units.gridUnit * 14
                 model: Qt.fontFamilies()
                 currentIndex: model.indexOf(page.settings.font.family)
@@ -37,6 +38,7 @@ AtlasPage {
         SectionRow {
             title: qsTr("Size")
             QQC2.SpinBox {
+                Accessible.name: qsTr("Font size")
                 from: 6
                 to: 72
                 value: Math.round(page.settings.font.pointSize)

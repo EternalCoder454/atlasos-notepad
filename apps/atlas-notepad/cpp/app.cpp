@@ -18,6 +18,7 @@
 #include <QLocale>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QScreen>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QTextDocument>
@@ -30,6 +31,32 @@ namespace
 constexpr int recentLimit = 10;
 constexpr auto menuService = "com.canonical.AppMenu.Registrar";
 App *s_instance = nullptr;
+
+// `rect` moved and shrunk onto the screen it overlaps most (the primary one if
+// it overlaps none), so a restored window can't end up off the desktop.
+QRect clampToScreens(const QRect &rect)
+{
+    const auto screens = QGuiApplication::screens();
+    if (screens.isEmpty() || !rect.isValid()) {
+        return rect;
+    }
+    QScreen *best = QGuiApplication::primaryScreen() ? QGuiApplication::primaryScreen() : screens.first();
+    qint64 bestArea = 0;
+    for (QScreen *screen : screens) {
+        const QRect i = screen->availableGeometry().intersected(rect);
+        const qint64 area = qint64(qMax(0, i.width())) * qMax(0, i.height());
+        if (area > bestArea) {
+            bestArea = area;
+            best = screen;
+        }
+    }
+    const QRect avail = best->availableGeometry();
+    QRect out = rect;
+    out.setSize(rect.size().boundedTo(avail.size()));
+    out.moveLeft(qBound(avail.left(), out.left(), avail.right() + 1 - out.width()));
+    out.moveTop(qBound(avail.top(), out.top(), avail.bottom() + 1 - out.height()));
+    return out;
+}
 
 struct Window {
     DocumentList *list = nullptr;
@@ -46,8 +73,13 @@ struct App::Private {
     Session session;
     bool sessionEnabled = true;
     bool quitting = false;
+    bool exiting = false; // quitting for good: never reset
+    bool quitInProgress = false; // quit() without a session, waiting on a dialog
+    DocumentList *quitWaitingOn = nullptr;
+    QList<QPointer<QQuickWindow>> closed; // closed windows not yet destroyed
     QList<std::shared_ptr<Window>> windows; // most recent first
-    QTimer saveTimer;
+    QTimer saveTimer; // quiet period
+    QTimer maxTimer; // longest an unsaved change waits
     bool hasMenu = false;
 
     std::shared_ptr<Window> windowOf(const DocumentList *list) const
@@ -60,13 +92,15 @@ struct App::Private {
         return nullptr;
     }
 
+    // The stored list, whether the files exist now or not (an unmounted
+    // drive keeps its entries); only the display filters.
     QStringList readRecent() const
     {
         QStringList out;
         settings->rc().beginGroup(QStringLiteral("Recent"));
         for (int i = 0; i < recentLimit; ++i) {
             const QString p = settings->rc().value(QString::number(i)).toString();
-            if (!p.isEmpty() && QFileInfo::exists(p)) {
+            if (!p.isEmpty()) {
                 out.append(p);
             }
         }
@@ -111,7 +145,16 @@ struct App::Private {
     {
         if (sessionOn()) {
             saveTimer.start();
+            if (!maxTimer.isActive()) {
+                maxTimer.start();
+            }
         }
+    }
+
+    void stopTimers()
+    {
+        saveTimer.stop();
+        maxTimer.stop();
     }
 
     void connectDocument(Document *doc)
@@ -169,6 +212,7 @@ struct App::Private {
         }
         if (QQuickWindow *win = w->window) {
             if (w->geometry.isValid()) {
+                w->geometry = clampToScreens(w->geometry);
                 win->setGeometry(w->geometry);
             }
             // Follow the normal (not maximized) geometry for the session.
@@ -176,11 +220,14 @@ struct App::Private {
                 if (!w->window) {
                     return;
                 }
-                const bool max = w->window->visibility() == QWindow::Maximized;
-                if (w->window->visibility() == QWindow::Windowed) {
+                // Hidden and minimized say nothing about the window's size.
+                const auto visibility = w->window->visibility();
+                if (visibility == QWindow::Windowed) {
                     w->geometry = w->window->geometry();
+                    w->maximized = false;
+                } else if (visibility == QWindow::Maximized) {
+                    w->maximized = true;
                 }
-                w->maximized = max;
             };
             for (auto signal : {&QWindow::xChanged, &QWindow::yChanged, &QWindow::widthChanged, &QWindow::heightChanged}) {
                 QObject::connect(win, signal, q, track);
@@ -231,7 +278,14 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
     d->settings = new Settings(this);
     d->saveTimer.setSingleShot(true);
     d->saveTimer.setInterval(1000);
-    connect(&d->saveTimer, &QTimer::timeout, this, [this] { d->write(false); });
+    d->maxTimer.setSingleShot(true);
+    d->maxTimer.setInterval(5000);
+    auto writeNow = [this] {
+        d->stopTimers();
+        d->write(false);
+    };
+    connect(&d->saveTimer, &QTimer::timeout, this, writeNow);
+    connect(&d->maxTimer, &QTimer::timeout, this, writeNow);
     connect(d->settings, &Settings::formattingChanged, this, [this] {
         for (const auto &w : d->windows) {
             for (Document *doc : w->list->documents()) {
@@ -245,12 +299,17 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
         auto *guiApp = qobject_cast<QGuiApplication *>(QCoreApplication::instance());
         if (guiApp) {
             connect(guiApp, &QGuiApplication::commitDataRequest, this, [this] {
+                // No signal says a logout was cancelled: the app becoming
+                // active again (below) resets this.
                 d->quitting = true;
                 saveSession();
             }, Qt::DirectConnection);
             connect(guiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
                 if (state != Qt::ApplicationActive) {
                     return;
+                }
+                if (!d->exiting) {
+                    d->quitting = false;
                 }
                 for (const auto &w : d->windows) {
                     for (Document *doc : w->list->documents()) {
@@ -261,6 +320,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
         }
         connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
             d->quitting = true;
+            d->exiting = true;
             saveSession();
         });
         auto *watcher = new QDBusServiceWatcher(QLatin1String(menuService), QDBusConnection::sessionBus(), QDBusServiceWatcher::WatchForOwnerChange, this);
@@ -271,11 +331,15 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
 
 App::~App()
 {
-    d->saveTimer.stop();
+    d->stopTimers();
     // The engine outlives App (main.cpp makes it first); its windows go
-    // now, while the App singleton and their documents still exist.
+    // now, while the App singleton and their documents still exist: those
+    // still open and those closed but not yet deleted.
     for (const auto &w : std::as_const(d->windows)) {
         delete w->window.data();
+    }
+    for (const auto &win : std::as_const(d->closed)) {
+        delete win.data();
     }
     s_instance = nullptr;
 }
@@ -298,7 +362,13 @@ Settings *App::settings() const
 
 QStringList App::recentFiles() const
 {
-    return d->readRecent();
+    QStringList out;
+    for (const QString &p : d->readRecent()) {
+        if (QFileInfo::exists(p)) {
+            out.append(p);
+        }
+    }
+    return out;
 }
 
 bool App::hasGlobalMenu() const
@@ -322,7 +392,18 @@ QList<DocumentList *> App::windows() const
 
 QQuickWindow *App::activeWindow() const
 {
-    return d->windows.isEmpty() ? nullptr : d->windows.first()->window.data();
+    for (const auto &w : d->windows) {
+        if (w->window && w->window->isVisible()) {
+            return w->window.data();
+        }
+    }
+    return nullptr;
+}
+
+void App::setSaveDelays(int quietMs, int maxMs)
+{
+    d->saveTimer.setInterval(quietMs);
+    d->maxTimer.setInterval(maxMs);
 }
 
 void App::setSessionEnabled(bool enabled)
@@ -370,15 +451,23 @@ void App::activate(const QStringList &arguments, const QString &workingDirectory
         const QString path = url.isLocalFile() ? url.toLocalFile() : arg;
         urls.append(QUrl::fromLocalFile(QDir(workingDirectory).absoluteFilePath(path)));
     }
+    // A closed last window stays (the session keeps its tabs) but is hidden:
+    // when none is visible, bring that one back.
+    bool anyVisible = false;
+    for (const auto &w : d->windows) {
+        anyVisible = anyVisible || !w->window || w->window->isVisible();
+    }
     if (d->windows.isEmpty() || newWindow || (!urls.isEmpty() && d->settings->openInNewWindow())) {
         d->createWindow(nullptr);
+    } else if (!anyVisible && d->windows.first()->window) {
+        d->windows.first()->window->show();
     }
     DocumentList *target = d->windows.first()->list;
     if (!urls.isEmpty()) {
         target->open(urls);
     }
     d->ensureTab(target);
-    if (QQuickWindow *win = activeWindow()) {
+    if (QQuickWindow *win = d->windows.first()->window) {
         // KDBusService put the second launch's activation token in the
         // environment; on Wayland, KWin only lets a window take focus with one.
         KWindowSystem::updateStartupId(win);
@@ -463,6 +552,9 @@ bool App::closeWindow(DocumentList *documents, bool force)
         return true;
     }
     if (documents->anyModified() && !force) {
+        if (d->quitInProgress) {
+            d->quitWaitingOn = documents; // its dialog decides the quit
+        }
         return false;
     }
     if (last) {
@@ -471,10 +563,26 @@ bool App::closeWindow(DocumentList *documents, bool force)
     // The tabs leave the session with the window.
     d->windows.removeAll(w);
     d->write(false);
+    // Nothing of this window reaches App any more (no saves, no tracking).
+    QObject::disconnect(documents, nullptr, this, nullptr);
+    for (Document *doc : documents->documents()) {
+        QObject::disconnect(doc, nullptr, this, nullptr);
+    }
     if (w->window) {
+        // Closing only hides it (the engine owns it): delete it, and its
+        // tabs with it.
+        QObject::disconnect(w->window, nullptr, this, nullptr);
         QObject::connect(w->window, &QObject::destroyed, documents, &QObject::deleteLater);
+        d->closed.removeAll(nullptr);
+        d->closed.append(w->window);
+        w->window->deleteLater();
     } else {
         documents->deleteLater();
+    }
+    if (force && d->quitInProgress && d->quitWaitingOn == documents) {
+        // The dialog's "discard" ended the wait: on to the next window.
+        d->quitWaitingOn = nullptr;
+        QMetaObject::invokeMethod(this, &App::quit, Qt::QueuedConnection);
     }
     return true;
 }
@@ -484,6 +592,7 @@ void App::quit()
     const auto windows = d->windows;
     if (d->settings->continueSession()) {
         d->quitting = true;
+        d->exiting = true;
         saveSession();
         for (const auto &w : windows) {
             if (w->window) {
@@ -493,17 +602,27 @@ void App::quit()
         QCoreApplication::quit();
         return;
     }
+    d->quitInProgress = true;
+    d->quitWaitingOn = nullptr;
     for (const auto &w : windows) {
         if (w->window) {
             w->window->close();
             if (w->window && w->window->isVisible()) {
-                return; // refused: its QML asks, then calls quit() again
+                return; // refused: its QML asks, then closeWindow(force) continues
             }
         } else if (!closeWindow(w->list, false)) {
             return;
         }
     }
+    d->quitInProgress = false;
+    d->exiting = true;
     QCoreApplication::quit();
+}
+
+void App::cancelQuit()
+{
+    d->quitInProgress = false;
+    d->quitWaitingOn = nullptr;
 }
 
 QString App::shortcutText(const QVariant &shortcut) const
@@ -531,6 +650,6 @@ void App::copyToClipboard(const QString &text)
 
 void App::saveSession()
 {
-    d->saveTimer.stop();
+    d->stopTimers();
     d->write(true);
 }

@@ -252,6 +252,87 @@ private Q_SLOTS:
         m_editor->insertLink(QString(), QStringLiteral("new"));
         QCOMPARE(text(), QStringLiteral("[t](new)"));
     }
+
+    void enterKeepsUnsequentialNumbers()
+    {
+        open(QStringLiteral("1. a\n1. b\n1. c"));
+        place(4);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("1. a\n2. \n1. b\n1. c"));
+    }
+
+    void clearFormattingWholeLinesLeavesNextLine()
+    {
+        open(QStringLiteral("**a**\n# **b**\n**c**"));
+        select(0, 6); // line one with its newline: ends at the start of line two
+        m_editor->clearFormatting();
+        QCOMPARE(text(), QStringLiteral("a\n# **b**\n**c**"));
+    }
+
+    void clearFormattingHeadingWithBold()
+    {
+        open(QStringLiteral("# **Title**"));
+        select(4, 9); // "Title"
+        m_editor->clearFormatting();
+        QCOMPARE(text(), QStringLiteral("Title"));
+    }
+
+    void clearFormattingAcrossMergedSpans()
+    {
+        open(QStringLiteral("[a](u)**b** c"));
+        select(1, 2); // "a"
+        m_editor->clearFormatting();
+        QCOMPARE(text(), QStringLiteral("a**b** c"));
+        open(QStringLiteral("[a](u)**b** c"));
+        select(1, 9); // "a" through "b"
+        m_editor->clearFormatting();
+        QCOMPARE(text(), QStringLiteral("ab c"));
+    }
+
+    void clearFormattingWithoutSelectionTakesTheLine()
+    {
+        open(QStringLiteral("x\n## **a** `b`\ny"));
+        place(6);
+        m_editor->clearFormatting();
+        QCOMPARE(text(), QStringLiteral("x\na b\ny"));
+    }
+
+    void insertLinkOnAngleLinkTwice()
+    {
+        open(QStringLiteral("[t](<a b>) z"));
+        place(2);
+        m_editor->insertLink(QString(), QStringLiteral("c d"));
+        QCOMPARE(text(), QStringLiteral("[t](<c d>) z"));
+        place(2);
+        m_editor->insertLink(QString(), QStringLiteral("e f"));
+        QCOMPARE(text(), QStringLiteral("[t](<e f>) z"));
+        place(2);
+        m_editor->insertLink(QString(), QStringLiteral("plain"));
+        QCOMPARE(text(), QStringLiteral("[t](plain) z"));
+        QCOMPARE(m_editor->linkAt(2), QStringLiteral("plain"));
+    }
+
+    void insertLinkOnAutolink()
+    {
+        open(QStringLiteral("<https://x.org>"));
+        place(3);
+        QCOMPARE(m_editor->linkAt(3), QStringLiteral("https://x.org"));
+        m_editor->insertLink(QString(), QStringLiteral("https://y.org"));
+        QCOMPARE(text(), QStringLiteral("<https://y.org>"));
+    }
+
+    void insertLinkKeepsAutolinkALink()
+    {
+        open(QStringLiteral("<https://x.org>"));
+        place(3);
+        m_editor->insertLink(QString(), QStringLiteral("example.com"));
+        QCOMPARE(text(), QStringLiteral("[example.com](example.com)"));
+        open(QStringLiteral("<https://x.org>"));
+        place(3);
+        m_editor->insertLink(QString(), QStringLiteral("mailto:a@b.c"));
+        QCOMPARE(text(), QStringLiteral("<mailto:a@b.c>"));
+        QCOMPARE(m_edit->property("cursorPosition").toInt(), 14);
+    }
 };
 
 QTEST_MAIN(EditorTest)

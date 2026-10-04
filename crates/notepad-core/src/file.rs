@@ -493,15 +493,17 @@ pub fn save(path: &Path, bytes: &[u8]) -> io::Result<Stamp> {
     };
     if let Some(meta) = &existing {
         if !meta.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not a regular file",
-            ));
+            // Raw errnos, so the app can say why.
+            return Err(io::Error::from_raw_os_error(if meta.is_dir() {
+                libc::EISDIR
+            } else {
+                libc::EINVAL
+            }));
         }
         let c = cstring(&target)?;
         // SAFETY: `c` is a valid C string.
         if unsafe { libc::access(c.as_ptr(), libc::W_OK) } != 0 {
-            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+            return Err(io::Error::from_raw_os_error(libc::EACCES));
         }
         if meta.nlink() > 1 {
             let mut f = OpenOptions::new()

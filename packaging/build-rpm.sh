@@ -22,7 +22,7 @@ main() {
     trap 'rm -rf "$top"' EXIT
     mkdir -p "$top"/{SOURCES,BUILD,RPMS,SRPMS,SPECS}
     tar -C "$src" \
-        --exclude=./.git --exclude=./target --exclude=./out --exclude=./build \
+        --exclude=./.git --exclude=./.claude --exclude=./target --exclude=./out --exclude=./build \
         --transform "s,^\./,atlas-notepad-$version/," \
         -czf "$top/SOURCES/atlas-notepad-$version.tar.gz" .
 

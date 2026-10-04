@@ -7,10 +7,16 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPointer>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -79,6 +85,14 @@ private:
         }
         const bool ok = QTest::qWaitFor([&] { return !doc->isLoading(); });
         return ok ? doc : nullptr;
+    }
+    QString sessionDir() const
+    {
+        return dataDir() + QStringLiteral("/atlas-notepad");
+    }
+    QJsonObject sessionJson() const
+    {
+        return QJsonDocument::fromJson(read(sessionDir() + QStringLiteral("/session.json"))).object();
     }
     QQuickItem *attach(Document *doc)
     {
@@ -224,6 +238,41 @@ private Q_SLOTS:
         QVERIFY(saveAndWait(doc));
         QCOMPARE(doc->banner(), Document::NoBanner);
         QCOMPARE(read(m_dir + QStringLiteral("/m.txt")), QByteArray("a\nb\nc\n"));
+
+        // U+2029 splits a line in the editor, so it is warned about the same way.
+        doc = openFile(newList(), write(QStringLiteral("p.txt"), "a\xE2\x80\xA9" "b\n"));
+        QVERIFY(doc);
+        QCOMPARE(doc->banner(), Document::MixedLineEndings);
+        attach(doc);
+        QVERIFY(saveAndWait(doc));
+        QCOMPARE(read(m_dir + QStringLiteral("/p.txt")), QByteArray("a\nb\n"));
+    }
+
+    void insertTextIsOneUndo()
+    {
+        Document *doc = openFile(newList(), write(QStringLiteral("i.txt"), "ab cd"));
+        QVERIFY(doc);
+        QQuickItem *edit = attach(doc);
+        QMetaObject::invokeMethod(edit, "select", Q_ARG(int, 2), Q_ARG(int, 5));
+        doc->insertText(QStringLiteral("\n12:00\n"));
+        QCOMPARE(doc->text(), QStringLiteral("ab\n12:00\n"));
+        QCOMPARE(edit->property("cursorPosition").toInt(), 9);
+        QMetaObject::invokeMethod(edit, "undo");
+        QCOMPARE(doc->text(), QStringLiteral("ab cd"));
+    }
+
+    // A text with no UTF-8 form must not stop the session from being written.
+    void sessionSurvivesLoneSurrogate()
+    {
+        Document *doc = newList()->newTab();
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("x") + QChar(0xD800) + QStringLiteral("y"));
+        m_app->saveSession();
+        const QJsonArray tabs = sessionJson().value(QStringLiteral("windows")).toArray().first().toObject().value(QStringLiteral("tabs")).toArray();
+        QVERIFY(!tabs.isEmpty());
+        const QString file = tabs.last().toObject().value(QStringLiteral("textFile")).toString();
+        QCOMPARE(QString::fromUtf8(read(sessionDir() + QStringLiteral("/texts/") + file + QStringLiteral(".txt"))), QStringLiteral("x�y"));
     }
 
     void saveWhileTypingStaysModified()
@@ -713,6 +762,204 @@ private Q_SLOTS:
         m_app->settings()->setOpenInNewWindow(true);
         m_app->activate({QStringLiteral("atlas-notepad"), p}, m_dir);
         QCOMPARE(m_app->windows().size(), 2);
+    }
+
+    void saveHasMaxWait()
+    {
+        m_app->setSaveDelays(300, 800);
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        // Typing never pauses for the quiet period, yet the session is written.
+        QElapsedTimer clock;
+        clock.start();
+        int pos = 0;
+        while (clock.elapsed() < 2500 && !QFile::exists(sessionDir() + QStringLiteral("/session.json"))) {
+            insert(doc, pos++, QStringLiteral("x"));
+            QTest::qWait(100);
+        }
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/session.json")));
+        QVERIFY(clock.elapsed() < 2000);
+    }
+
+    void missingTextKeepsTabModified()
+    {
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        insert(doc, 0, QStringLiteral("precious"));
+        m_app->saveSession();
+        const QDir texts(sessionDir() + QStringLiteral("/texts"));
+        QCOMPARE(texts.entryList(QDir::Files).size(), 1);
+        QVERIFY(QFile::remove(texts.filePath(texts.entryList(QDir::Files).first())));
+        restart();
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("text .* is missing")));
+        m_app->start({});
+        QVERIFY(m_app->windows().first()->current()->isModified());
+    }
+
+    void unusableSessionIsBackedUpAndKeepsTexts()
+    {
+        QVERIFY(QDir().mkpath(sessionDir() + QStringLiteral("/texts")));
+        QFile keep(sessionDir() + QStringLiteral("/texts/keep.txt"));
+        QVERIFY(keep.open(QIODevice::WriteOnly));
+        keep.write("kept");
+        keep.close();
+        QFile bad(sessionDir() + QStringLiteral("/session.json"));
+        QVERIFY(bad.open(QIODevice::WriteOnly));
+        bad.write("{ not json");
+        bad.close();
+        restart();
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't use the session file")));
+        m_app->start({});
+        QCOMPARE(read(sessionDir() + QStringLiteral("/session.json.bak")), QByteArray("{ not json"));
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        insert(doc, 0, QStringLiteral("new"));
+        m_app->saveSession();
+        QVERIFY(sessionJson().contains(QStringLiteral("windows")));
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/texts/keep.txt"))); // no orphan cleanup this run
+    }
+
+    void cleanupKeepsTextsTheBackupNames()
+    {
+        QVERIFY(QDir().mkpath(sessionDir() + QStringLiteral("/texts")));
+        for (const char *name : {"named", "orphan"}) {
+            QFile f(sessionDir() + QStringLiteral("/texts/%1.txt").arg(QLatin1String(name)));
+            QVERIFY(f.open(QIODevice::WriteOnly));
+            f.write("x");
+        }
+        QFile bak(sessionDir() + QStringLiteral("/session.json.bak"));
+        QVERIFY(bak.open(QIODevice::WriteOnly));
+        bak.write(R"({"version":1,"windows":[{"tabs":[{"textFile":"named"}]}]})");
+        bak.close();
+        m_app->start({});
+        m_app->saveSession();
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/texts/named.txt")));
+        QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/texts/orphan.txt")));
+    }
+
+    void textWriteFailureRetries()
+    {
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        insert(doc, 0, QStringLiteral("one"));
+        m_app->saveSession();
+        const QDir texts(sessionDir() + QStringLiteral("/texts"));
+        const QString name = texts.entryList(QDir::Files).first();
+        const QString file = texts.filePath(name);
+        const QByteArray before = read(sessionDir() + QStringLiteral("/session.json"));
+        // A directory where the text file goes: the write can't succeed.
+        QVERIFY(QFile::remove(file));
+        QVERIFY(QDir().mkpath(file));
+        insert(doc, 0, QStringLiteral("two"));
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't write the session's text")));
+        m_app->saveSession();
+        QCOMPARE(read(sessionDir() + QStringLiteral("/session.json")), before); // not rewritten
+        QVERIFY(QDir(file).exists()); // the orphan pass didn't run
+        QVERIFY(QDir().rmdir(file));
+        m_app->saveSession(); // the key was dropped: written again
+        const QStringList now = texts.entryList(QDir::Files);
+        QCOMPARE(now.size(), 1);
+        QCOMPARE(QString::fromUtf8(read(texts.filePath(now.first()))), QStringLiteral("twoone"));
+    }
+
+    void sessionDirIsPrivate()
+    {
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        insert(doc, 0, QStringLiteral("x"));
+        m_app->saveSession();
+        const auto mask = QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup | QFileDevice::ReadOther | QFileDevice::WriteOther
+            | QFileDevice::ExeOther;
+        QVERIFY(!(QFileInfo(sessionDir()).permissions() & mask));
+        QVERIFY(!(QFileInfo(sessionDir() + QStringLiteral("/texts")).permissions() & mask));
+    }
+
+    void unloadedTabStoresNoText()
+    {
+        const QString p = write(QStringLiteral("ul.txt"), "disk\n");
+        m_app->start({});
+        DocumentList *list = m_app->windows().first();
+        Document *doc = openFile(list, p);
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("edit "));
+        doc->d->loaded = false;
+        m_app->saveSession();
+        const QJsonObject tab = sessionJson().value(QStringLiteral("windows")).toArray().first().toObject().value(QStringLiteral("tabs")).toArray()[1].toObject();
+        QVERIFY(!tab.contains(QStringLiteral("textFile")));
+    }
+
+    void staleTempFilesRemoved()
+    {
+        const QString texts = sessionDir() + QStringLiteral("/texts");
+        QVERIFY(QDir().mkpath(texts));
+        for (const char *n : {".abc.1f2e.tmp", "plain.txt.keep"}) {
+            QFile f(texts + QLatin1Char('/') + QLatin1String(n));
+            QVERIFY(f.open(QIODevice::WriteOnly));
+        }
+        restart();
+        m_app->start({});
+        QVERIFY(!QFile::exists(texts + QStringLiteral("/.abc.1f2e.tmp")));
+        QVERIFY(QFile::exists(texts + QStringLiteral("/plain.txt.keep")));
+    }
+
+    void recentKeepsMissingFiles()
+    {
+        const QString a = write(QStringLiteral("ra.txt"), "x");
+        const QString b = write(QStringLiteral("rb.txt"), "x");
+        m_app->addRecentFile(a);
+        m_app->addRecentFile(b);
+        QVERIFY(QFile::rename(a, a + QStringLiteral(".away"))); // an unmounted drive
+        QCOMPARE(m_app->recentFiles(), QStringList{b});
+        m_app->addRecentFile(write(QStringLiteral("rc.txt"), "x"));
+        QVERIFY(QFile::rename(a + QStringLiteral(".away"), a)); // mounted again
+        QCOMPARE(m_app->recentFiles().size(), 3);
+        QVERIFY(m_app->recentFiles().contains(a));
+    }
+
+    void closedWindowIsDeleted()
+    {
+        m_app->start({});
+        m_app->newWindow();
+        DocumentList *closing = m_app->windows().first();
+        QPointer<DocumentList> guard(closing);
+        QVERIFY(m_app->closeWindow(closing, true));
+        QTRY_VERIFY(guard.isNull());
+    }
+
+    void quitContinuesToNextWindow()
+    {
+        m_app->settings()->setContinueSession(false);
+        m_app->start({});
+        m_app->newWindow();
+        DocumentList *second = m_app->windows().first();
+        DocumentList *first = m_app->windows().last();
+        attach(second->current());
+        insert(second->current(), 0, QStringLiteral("unsaved"));
+        m_app->quit(); // the modified window refuses
+        QCOMPARE(m_app->windows().size(), 2);
+        QVERIFY(m_app->closeWindow(second, true)); // "discard" in its dialog
+        QTRY_COMPARE(m_app->windows().size(), 0); // the quit went on to the other
+        Q_UNUSED(first)
+    }
+
+    void cancelQuitStopsContinuing()
+    {
+        m_app->settings()->setContinueSession(false);
+        m_app->start({});
+        m_app->newWindow();
+        DocumentList *second = m_app->windows().first();
+        attach(second->current());
+        insert(second->current(), 0, QStringLiteral("unsaved"));
+        m_app->quit();
+        m_app->cancelQuit();
+        QVERIFY(m_app->closeWindow(second, true));
+        QTest::qWait(50);
+        QCOMPARE(m_app->windows().size(), 1);
     }
 };
 

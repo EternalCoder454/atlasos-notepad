@@ -8,7 +8,9 @@
 #include "app.h"
 
 #include <QHash>
+#include <QMutex>
 #include <QRect>
+#include <QSet>
 #include <QThreadPool>
 
 #include <optional>
@@ -44,8 +46,11 @@ public:
     static QString directory();
 
     // The stored windows (those with no tabs dropped); empty if none or the
-    // file is unreadable.
-    QList<WindowState> read() const;
+    // file is unreadable. A session.json that exists but can't be used
+    // (corrupt, unknown version) is copied to session.json.bak, and this run
+    // never deletes text files (they may belong to it). Also removes the
+    // temp files an interrupted write left in texts/.
+    QList<WindowState> read();
     // The text of a tab's text file.
     std::optional<QString> readText(const QString &textFile) const;
     // Makes a tab of `list` from its stored state: modified and untitled tabs
@@ -58,8 +63,10 @@ public:
         bool maximized;
     };
     // Writes the windows' state (most recent window first): the tabs'
-    // texts that changed since last written, then session.json, then deletes
-    // text files nobody refers to. On a worker; wait: until it's done.
+    // texts that changed since last written, then session.json (only if every
+    // text was written; a failed text is written again next time), then
+    // deletes text files nobody refers to (only after session.json was
+    // written). On a worker; wait: until it's done.
     void write(const QList<Live> &windows, bool wait);
     // Forgets everything on disk (Settings.continueSession is off).
     void remove();
@@ -69,6 +76,10 @@ private:
         QString file;
         quint64 key;
     };
+    void dropFailed();
     QHash<quint64, TextState> m_texts; // by Document id
+    bool m_readFailed = false;
+    QMutex m_mutex; // guards m_failed (the worker adds to it)
+    QSet<QString> m_failed; // text files the worker couldn't write
     QThreadPool m_pool;
 };

@@ -241,6 +241,9 @@ public:
     // Replaces every match in one undo step; returns how many. A regular
     // expression's replacement can use \1..\9 (and \0 for the whole match).
     Q_INVOKABLE int replaceAll(const QString &text, const QString &replacement, int flags);
+    // Replaces the selection (or inserts at the caret) as one undo step;
+    // the caret ends after the text. For Time/Date.
+    Q_INVOKABLE void insertText(const QString &text);
     // Replaces the match at start..end (if it still matches) and returns
     // find() from after it.
     Q_INVOKABLE QVariantMap replaceOne(const QString &text, const QString &replacement, int flags, int start, int end);
@@ -443,6 +446,9 @@ public:
     // run with a null engine: windows then have no QML).
     QList<DocumentList *> windows() const;
     QQuickWindow *activeWindow() const; // the most recent window's, or null
+    // The session is written `quietMs` after the last change, and at most
+    // `maxMs` after the first unsaved one (1000 and 5000; tests shorten them).
+    void setSaveDelays(int quietMs, int maxMs);
     // false: nothing is read from or written to the session (--bench).
     void setSessionEnabled(bool enabled);
 
@@ -456,6 +462,9 @@ public:
     // the windows one at a time and stops at the first that refuses (its QML
     // asks about the unsaved tabs, then calls quit() again).
     Q_INVOKABLE void quit();
+    // The user cancelled the unsaved-changes dialog a quit() was waiting on:
+    // the quit is over (closing that window later doesn't continue it).
+    Q_INVOKABLE void cancelQuit();
     Q_INVOKABLE void copyToClipboard(const QString &text);
     // An Action's shortcut (a key sequence string or a StandardKey) as the
     // menus show it.

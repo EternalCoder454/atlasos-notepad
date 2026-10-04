@@ -213,7 +213,8 @@ public:
     Q_INVOKABLE QString linkAt(int position) const;
     // Takes the Markdown out of the selection: bold, italic, code, links
     // (their text stays) and, on its lines, heading, list and quote prefixes.
-    // Code blocks are left alone.
+    // Code blocks are left alone. With no selection it clears the caret's
+    // whole line.
     Q_INVOKABLE void clearFormatting();
     // On a link with no selection: changes its address. Otherwise replaces
     // the selection with [text](url) (text defaults to the url).

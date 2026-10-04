@@ -122,13 +122,7 @@ QQC2.ApplicationWindow {
         text: qsTr("Save All")
         shortcut: "Ctrl+Alt+S"
         enabled: root.documents.anyModified
-        onTriggered: {
-            for (const doc of root.documents.documents()) {
-                if (doc.modified && doc.path.length > 0 && !doc.readOnly) {
-                    doc.save();
-                }
-            }
-        }
+        onTriggered: root.saveAll()
     }
     QQC2.Action {
         id: printAction
@@ -168,48 +162,48 @@ QQC2.ApplicationWindow {
         id: undoAction
         text: qsTr("Undo")
         shortcut: StandardKey.Undo
-        enabled: root.view !== null && root.view.edit.canUndo
+        enabled: (root.view !== null && root.view.edit.canUndo) && !root.settingsOpen
         onTriggered: root.view.edit.undo()
     }
     QQC2.Action {
         id: redoAction
         text: qsTr("Redo")
         shortcut: "Ctrl+Y"
-        enabled: root.view !== null && root.view.edit.canRedo
+        enabled: (root.view !== null && root.view.edit.canRedo) && !root.settingsOpen
         onTriggered: root.view.edit.redo()
     }
     QQC2.Action {
         id: cutAction
         text: qsTr("Cut")
         shortcut: StandardKey.Cut
-        enabled: root.editable && root.view.selectedText.length > 0
+        enabled: (root.editable && root.view.edit.selectionStart !== root.view.edit.selectionEnd) && !root.settingsOpen
         onTriggered: root.view.edit.cut()
     }
     QQC2.Action {
         id: copyAction
         text: qsTr("Copy")
         shortcut: StandardKey.Copy
-        enabled: root.view !== null && root.view.selectedText.length > 0
+        enabled: (root.view !== null && root.view.edit.selectionStart !== root.view.edit.selectionEnd) && !root.settingsOpen
         onTriggered: root.view.edit.copy()
     }
     QQC2.Action {
         id: pasteAction
         text: qsTr("Paste")
         shortcut: StandardKey.Paste
-        enabled: root.editable && root.view.edit.canPaste
+        enabled: (root.editable && root.view.edit.canPaste) && !root.settingsOpen
         onTriggered: root.view.edit.paste()
     }
     QQC2.Action {
         id: deleteAction
         text: qsTr("Delete")
-        enabled: root.editable && root.view.selectedText.length > 0
+        enabled: (root.editable && root.view.edit.selectionStart !== root.view.edit.selectionEnd) && !root.settingsOpen
         onTriggered: root.view.edit.remove(root.view.edit.selectionStart, root.view.edit.selectionEnd)
     }
     QQC2.Action {
         id: selectAllAction
         text: qsTr("Select All")
         shortcut: StandardKey.SelectAll
-        enabled: root.view !== null
+        enabled: (root.view !== null) && !root.settingsOpen
         onTriggered: root.view.edit.selectAll()
     }
     QQC2.Action {
@@ -223,14 +217,14 @@ QQC2.ApplicationWindow {
         id: findNextAction
         text: qsTr("Find Next")
         shortcut: StandardKey.FindNext
-        enabled: root.view !== null && findBar.findText.length > 0
+        enabled: (root.view !== null && findBar.findText.length > 0) && !root.settingsOpen
         onTriggered: root.find(false)
     }
     QQC2.Action {
         id: findPreviousAction
         text: qsTr("Find Previous")
         shortcut: StandardKey.FindPrevious
-        enabled: root.view !== null && findBar.findText.length > 0
+        enabled: (root.view !== null && findBar.findText.length > 0) && !root.settingsOpen
         onTriggered: root.find(true)
     }
     QQC2.Action {
@@ -251,7 +245,7 @@ QQC2.ApplicationWindow {
         id: timeDateAction
         text: qsTr("Time/Date")
         shortcut: "F5"
-        enabled: root.editable
+        enabled: (root.editable) && !root.settingsOpen
         onTriggered: root.view.insertText(App.timeDate())
     }
 
@@ -472,10 +466,19 @@ QQC2.ApplicationWindow {
             onMoved: (from, to) => root.documents.move(from, to)
 
             ToolbarButton {
+                id: menuButton
                 visible: !App.hasGlobalMenu
                 text: qsTr("Menu")
+                shortcutText: "F10"
                 icon.source: Qt.resolvedUrl("../icons/menu.svg")
-                onClicked: fallbackMenu.popup(this, 0, height)
+                onClicked: fallbackMenu.popup(menuButton, 0, menuButton.height)
+
+                // The keyboard way in, as F10 opens a menu bar elsewhere.
+                Shortcut {
+                    sequence: "F10"
+                    enabled: menuButton.visible
+                    onActivated: menuButton.clicked()
+                }
 
                 FallbackMenu {
                     id: fallbackMenu
@@ -521,9 +524,12 @@ QQC2.ApplicationWindow {
             actions: root.bannerActions(kind)
             closable: root.bannerClosable(kind)
             onClosed: {
+                // The close button set `shown` itself, which ended the
+                // binding; without it no banner would show again.
                 if (root.document) {
                     root.document.dismissBanner();
                 }
+                shown = Qt.binding(() => kind !== Document.NoBanner);
             }
         }
 
@@ -646,7 +652,7 @@ QQC2.ApplicationWindow {
             onClicked: goToAction.trigger()
         }
         StatusBarItem {
-            readonly property int selected: root.view ? root.view.selectedText.length : 0
+            readonly property int selected: root.view ? root.view.edit.selectionEnd - root.view.edit.selectionStart : 0
             readonly property int total: root.document ? root.document.characterCount : 0
             text: selected > 0 ? qsTr("%1 of %2 characters").arg(selected.toLocaleString(Qt.locale(), "f", 0)).arg(total.toLocaleString(Qt.locale(), "f", 0))
                 : total === 1 ? qsTr("1 character") : qsTr("%1 characters").arg(total.toLocaleString(Qt.locale(), "f", 0))
@@ -756,16 +762,15 @@ QQC2.ApplicationWindow {
         id: saveDialog
 
         property Document target: null
-        // Run after the target saved, or dropped if it didn't.
-        property var then: null
 
         title: qsTr("Save As")
         fileMode: FileDialog.SaveFile
         nameFilters: target && target.markdown ? [qsTr("Markdown (*.md)"), qsTr("Text documents (*.txt)"), qsTr("All files (*)")] : [qsTr("Text documents (*.txt)"), qsTr("Markdown (*.md)"), qsTr("All files (*)")]
         onAccepted: target.saveAs(selectedFile)
         onRejected: {
-            then = null;
-            root.closing = false;
+            if (root.pendingSave === target) {
+                root.resetSave(); // a close or quit waiting on this save stops
+            }
         }
     }
 
@@ -777,7 +782,7 @@ QQC2.ApplicationWindow {
 
         onSave: root.saveThen(target, then)
         onDiscard: then()
-        onCancel: root.closing = false
+        onCancel: root.resetSave()
     }
 
     ConfirmDialog {
@@ -825,6 +830,7 @@ QQC2.ApplicationWindow {
             Layout.fillWidth: true
             placeholderText: qsTr("Text to show")
             Accessible.name: qsTr("Text")
+            onAccepted: linkUrl.forceActiveFocus()
         }
         QQC2.TextField {
             id: linkUrl
@@ -851,16 +857,15 @@ QQC2.ApplicationWindow {
         if (!formatEnabled) {
             return;
         }
-        const selected = view.selectedText;
+        const selected = view.edit.selectedText;
         const isUrl = /^[a-z][a-z0-9+.-]*:\S+$/i.test(selected);
         linkText.text = isUrl ? "" : selected;
         linkUrl.text = isUrl ? selected : (view.md.linkAt(view.edit.cursorPosition) || "");
         linkDialog.open();
     }
 
-    function saveAs(doc, then) {
+    function saveAs(doc) {
         saveDialog.target = doc;
-        saveDialog.then = then ?? null;
         saveDialog.currentFolder = doc.path.length > 0 ? doc.folder : "";
         saveDialog.selectedFile = (doc.path.length > 0 ? doc.folder + "/" : "") + doc.suggestedFileName();
         saveDialog.open();
@@ -873,25 +878,35 @@ QQC2.ApplicationWindow {
         pendingSave = doc;
         pendingThen = then;
         if (doc.path.length === 0) {
-            saveAs(doc, then);
+            saveAs(doc);
         } else {
             doc.save();
         }
     }
+    // A save that didn't happen (cancelled, failed, refused) ends the whole
+    // close or quit it was part of.
+    function resetSave() {
+        pendingSave = null;
+        pendingThen = null;
+        closing = false;
+        App.cancelQuit();
+    }
     Connections {
         target: root.pendingSave
         function onSaved() {
+            const doc = root.pendingSave;
             const then = root.pendingThen;
             root.pendingSave = null;
             root.pendingThen = null;
-            if (then) {
+            if (doc.modified) {
+                // Typed while it saved: what's on disk isn't all of it.
+                root.askToSave(doc, then);
+            } else if (then) {
                 then();
             }
         }
         function onSaveFailed() {
-            root.pendingSave = null;
-            root.pendingThen = null;
-            root.closing = false;
+            root.resetSave();
         }
     }
     // Any tab: Save on an untitled tab asks where.
@@ -905,16 +920,31 @@ QQC2.ApplicationWindow {
                     root.saveAs(document);
                 }
             }
-            function onSaved() {
-                if (saveDialog.target === document && saveDialog.then) {
-                    const then = saveDialog.then;
-                    saveDialog.then = null;
-                    if (root.pendingSave !== document) {
-                        then();
-                    }
-                }
+        }
+    }
+
+    // Named tabs save at once; untitled ones ask where, one after another.
+    function saveAll() {
+        const untitled = [];
+        for (const doc of documents.documents()) {
+            if (!doc.modified || doc.readOnly) {
+                continue;
+            }
+            if (doc.path.length > 0) {
+                doc.save();
+            } else {
+                untitled.push(doc);
             }
         }
+        saveUntitled(untitled);
+    }
+    function saveUntitled(list) {
+        if (list.length === 0) {
+            return;
+        }
+        const doc = list.shift();
+        documents.currentIndex = documents.indexOf(doc);
+        saveThen(doc, () => saveUntitled(list));
     }
 
     function askToSave(doc, then) {
@@ -935,6 +965,13 @@ QQC2.ApplicationWindow {
         }
         function onEmpty() {
             root.close();
+        }
+        // A tab shown or opened brings the editor back from Settings.
+        function onCurrentIndexChanged() {
+            root.settingsOpen = false;
+        }
+        function onCountChanged() {
+            root.settingsOpen = false;
         }
         function onOpenFailed(message) {
             toast.show(message);
@@ -1003,20 +1040,36 @@ QQC2.ApplicationWindow {
             return;
         }
         const count = document.replaceAll(findBar.findText, findBar.replaceText, findFlags());
-        toast.show(qsTr("Replaced %n match(es)", "", count));
+        if (findBar.error.length === 0) {
+            toast.show(count === 1 ? qsTr("Replaced 1 match") : qsTr("Replaced %1 matches").arg(count));
+        }
         find(false, true);
     }
     function openFind(withReplace) {
-        const selected = view.selectedText;
+        const selected = view.edit.selectedText;
         if (selected.length > 0 && selected.indexOf(" ") < 0 && selected.indexOf("\n") < 0) {
             findBar.findText = selected;
         }
-        findBar.replaceVisible = withReplace;
+        if (withReplace) {
+            findBar.replaceVisible = true;
+        }
         findBar.open(withReplace);
     }
+    // Another tab: recount, but leave its caret and selection alone.
     onDocumentChanged: {
         if (findBar.opened) {
-            Qt.callLater(() => find(false, true));
+            Qt.callLater(() => {
+                if (!view || findBar.findText.length === 0) {
+                    return;
+                }
+                const edit = view.edit;
+                const result = document.find(findBar.findText, findFlags(), edit.selectionStart, false);
+                findBar.error = result.error ?? "";
+                findBar.matchCount = result.count ?? 0;
+                // A match already selected there is the current one.
+                const onMatch = result.start === edit.selectionStart && result.end === edit.selectionEnd;
+                findBar.currentMatch = onMatch ? result.index : 0;
+            });
         }
     }
 
@@ -1121,6 +1174,6 @@ QQC2.ApplicationWindow {
     QQC2.Action {
         id: bannerCloseTab
         text: qsTr("Close Tab")
-        onTriggered: root.documents.close(root.documents.currentIndex)
+        onTriggered: root.closeTab(root.documents.currentIndex) // asks first: the text may be unsaved
     }
 }

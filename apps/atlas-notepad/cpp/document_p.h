@@ -64,7 +64,9 @@ struct Document::Private {
     bool keepMine = false;
     bool saving = false;
     bool resave = false; // save() asked for during a save
-    bool recheck = false; // the file changed during a save: look again after
+    bool recheck = false; // the file changed during a save or load: look again after
+    bool cleanBeforeDelete = false; // unmodified when the Deleted banner came
+    quint64 deleteRevision = 0; // sessionKey() then
     bool settingText = false;
     std::map<Banner, QString> banners;
 
@@ -73,6 +75,7 @@ struct Document::Private {
     QString pending; // text read, not yet in a TextEdit
     bool hasPending = false;
     quint64 editGeneration = 0; // counts the TextEdits this document had
+    quint64 contentVersion = 0; // bumped by every change of the text, never taken back
     int cursor = 0;
     int anchor = 0;
     qreal scrollY = 0;

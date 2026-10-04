@@ -40,6 +40,8 @@ LineNumbers::LineNumbers(QQuickItem *parent)
     : QQuickPaintedItem(parent)
     , d(std::make_unique<Private>())
 {
+    // setAntialiasing(false) only drops the shape render hints: text is
+    // antialiased by the font's own strategy, so the digits stay smooth.
     setAntialiasing(false);
     d->font = QFont();
 }
@@ -78,7 +80,6 @@ void LineNumbers::setTextEdit(QQuickItem *edit)
         if (d->doc) {
             connect(d->doc, &QTextDocument::blockCountChanged, this, &LineNumbers::relayout);
             connect(d->doc->documentLayout(), &QAbstractTextDocumentLayout::documentSizeChanged, this, &LineNumbers::relayout);
-            connect(d->doc->documentLayout(), &QAbstractTextDocumentLayout::update, this, &LineNumbers::relayout);
         }
         caretMoved();
     }

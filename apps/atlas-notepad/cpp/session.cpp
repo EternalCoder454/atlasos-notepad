@@ -12,16 +12,35 @@
 #include <QStandardPaths>
 #include <QUuid>
 
+#include <cstdio>
+
 namespace
 {
 constexpr int formatVersion = 1;
 
 // Atomically, UTF-8 with LF (np_file_save: temp file, fsync, rename).
-bool saveUtf8(const QString &path, const QString &text)
+// A lone surrogate (from a lossy UTF-16 file or a paste) has no UTF-8 form
+// and would fail the write every time, so it is stored as U+FFFD.
+bool saveUtf8(const QString &path, QString text)
 {
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        if (text.at(i).isHighSurrogate() && i + 1 < text.size() && text.at(i + 1).isLowSurrogate()) {
+            ++i;
+        } else if (text.at(i).isSurrogate()) {
+            text[i] = QChar::ReplacementCharacter;
+        }
+    }
     NpStamp stamp = {};
     size_t bad = 0;
     return np_file_save(path.toUtf8().constData(), reinterpret_cast<const uint16_t *>(text.utf16()), size_t(text.size()), NP_UTF8, NP_LF, &stamp, &bad) == 0;
+}
+
+void removeTemps(const QString &path)
+{
+    QDir dir(path);
+    for (const QString &name : dir.entryList({QStringLiteral(".*.tmp")}, QDir::Files | QDir::Hidden)) {
+        dir.remove(name);
+    }
 }
 
 // 64-bit numbers don't survive a JSON double: strings.
@@ -69,14 +88,28 @@ QString Session::directory()
     return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/atlas-notepad");
 }
 
-QList<WindowState> Session::read() const
+QList<WindowState> Session::read()
 {
-    QFile file(directory() + QStringLiteral("/session.json"));
-    if (!file.open(QIODevice::ReadOnly)) {
+    // Interrupted writes leave .<name>.<hex>.tmp behind; nothing is writing yet.
+    removeTemps(directory());
+    removeTemps(directory() + QStringLiteral("/texts"));
+    const QString jsonPath = directory() + QStringLiteral("/session.json");
+    QFile file(jsonPath);
+    if (!QFileInfo::exists(jsonPath)) {
         return {};
     }
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    if (!doc.isObject() || doc.object().value(QStringLiteral("version")).toInt() != formatVersion) {
+    const bool opened = file.open(QIODevice::ReadOnly);
+    const QJsonDocument doc = opened ? QJsonDocument::fromJson(file.readAll()) : QJsonDocument();
+    if (!opened || !doc.isObject() || doc.object().value(QStringLiteral("version")).toInt() != formatVersion) {
+        qWarning("atlas-notepad: can't use the session file, keeping a copy as session.json.bak");
+        m_readFailed = true;
+        file.close();
+        // Copied aside first, so a failed copy keeps an older backup.
+        const QString bak = jsonPath + QStringLiteral(".bak");
+        QFile::remove(bak + QStringLiteral(".new"));
+        if (QFile::copy(jsonPath, bak + QStringLiteral(".new"))) {
+            std::rename(QFile::encodeName(bak + QStringLiteral(".new")).constData(), QFile::encodeName(bak).constData());
+        }
         return {};
     }
     QList<WindowState> windows;
@@ -135,18 +168,41 @@ Document *Session::restoreTab(DocumentList *list, const TabState &tab)
 {
     Document *doc = list->append();
     std::optional<QString> text;
-    if (!tab.textFile.isEmpty() && (tab.modified || tab.path.isEmpty())) {
+    const bool wantsText = !tab.textFile.isEmpty() && (tab.modified || tab.path.isEmpty());
+    if (wantsText) {
         text = readText(tab.textFile);
+        if (!text) {
+            qWarning("atlas-notepad: the session's text %s is missing; the tab's unsaved changes are lost", qPrintable(tab.textFile));
+        }
     }
     doc->d->restore(tab, text);
+    if (wantsText && !text && tab.modified && tab.path.isEmpty()) {
+        doc->d->modified = true; // a named tab shows its file again instead
+    }
     if (text) {
         m_texts.insert(doc->d->id, {tab.textFile, doc->d->sessionKey()});
     }
     return doc;
 }
 
+void Session::dropFailed()
+{
+    QSet<QString> failed;
+    {
+        QMutexLocker lock(&m_mutex);
+        failed.swap(m_failed);
+    }
+    if (failed.isEmpty()) {
+        return;
+    }
+    for (auto it = m_texts.begin(); it != m_texts.end();) {
+        it = failed.contains(it->file) ? m_texts.erase(it) : std::next(it);
+    }
+}
+
 void Session::write(const QList<Live> &windows, bool wait)
 {
+    dropFailed(); // a text that failed last time is written again
     QJsonArray windowsJson;
     QList<TextWrite> writes;
     QSet<QString> referenced;
@@ -170,7 +226,7 @@ void Session::write(const QList<Live> &windows, bool wait)
                 t[QStringLiteral("stamp")] = stampToJson(p->stamp);
             }
 
-            const bool needsText = !p->loading && (p->path.isEmpty() || p->isModified());
+            const bool needsText = !p->loading && p->loaded && (p->path.isEmpty() || p->isModified());
             if (needsText) {
                 const quint64 key = p->sessionKey();
                 auto it = m_texts.find(p->id);
@@ -209,28 +265,64 @@ void Session::write(const QList<Live> &windows, bool wait)
     const QJsonObject root{{QStringLiteral("version"), formatVersion}, {QStringLiteral("windows"), windowsJson}};
     const QString json = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
     const QString dir = directory();
-    m_pool.start([dir, json, writes, referenced] {
+    const bool cleanup = !m_readFailed;
+    m_pool.start([this, dir, json, writes, referenced, cleanup] {
+        auto fail = [this](const QString &file) {
+            QMutexLocker lock(&m_mutex);
+            m_failed.insert(file);
+        };
         if (!QDir().mkpath(dir + QStringLiteral("/texts"))) {
             qWarning("atlas-notepad: can't create %s", qPrintable(dir));
+            for (const TextWrite &w : writes) {
+                fail(w.file);
+            }
             return;
         }
+        const auto ownerOnly = QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner;
+        QFile::setPermissions(dir, ownerOnly);
+        QFile::setPermissions(dir + QStringLiteral("/texts"), ownerOnly);
+        bool allWritten = true;
         for (const TextWrite &w : writes) {
             if (!saveUtf8(textPath(w.file), w.text)) {
                 qWarning("atlas-notepad: can't write the session's text %s", qPrintable(w.file));
+                fail(w.file);
+                allWritten = false;
             }
+        }
+        if (!allWritten) {
+            return; // session.json would point at missing texts
         }
         if (!saveUtf8(dir + QStringLiteral("/session.json"), json)) {
             qWarning("atlas-notepad: can't write the session");
+            return;
+        }
+        if (!cleanup) {
+            return;
+        }
+        // Texts the backup names stay, for whoever recovers it.
+        QSet<QString> keep = referenced;
+        QFile bak(dir + QStringLiteral("/session.json.bak"));
+        if (bak.open(QIODevice::ReadOnly)) {
+            const QJsonDocument doc = QJsonDocument::fromJson(bak.readAll());
+            if (doc.object().value(QStringLiteral("version")).toInt() > formatVersion) {
+                return; // a newer Notepad's; its texts can't be told apart here
+            }
+            for (const QJsonValue &w : doc.object().value(QStringLiteral("windows")).toArray()) {
+                for (const QJsonValue &t : w.toObject().value(QStringLiteral("tabs")).toArray()) {
+                    keep.insert(t.toObject().value(QStringLiteral("textFile")).toString());
+                }
+            }
         }
         QDir texts(dir + QStringLiteral("/texts"));
         for (const QString &name : texts.entryList({QStringLiteral("*.txt")}, QDir::Files)) {
-            if (!referenced.contains(QFileInfo(name).completeBaseName())) {
+            if (!keep.contains(QFileInfo(name).completeBaseName())) {
                 texts.remove(name);
             }
         }
     });
     if (wait) {
         m_pool.waitForDone();
+        dropFailed();
     }
 }
 

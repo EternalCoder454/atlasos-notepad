@@ -12,6 +12,7 @@
 #include <QQuickTextDocument>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QStringDecoder>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -127,7 +128,11 @@ LoadResult readAs(const QByteArray &path, int encoding, LoadResult r)
 {
     QFile file(QString::fromUtf8(path));
     if (!file.open(QIODevice::ReadOnly)) {
-        r.error = file.error() == QFileDevice::PermissionsError ? EACCES : ENOENT;
+        const QFileInfo info(file.fileName());
+        r.error = file.error() == QFileDevice::PermissionsError ? EACCES
+            : !info.exists()                                    ? ENOENT // gone since np_file_stamp
+            : info.isDir()                                      ? EISDIR
+                                                                : EIO;
         return r;
     }
     QByteArray bytes = file.readAll();
@@ -138,8 +143,13 @@ LoadResult readAs(const QByteArray &path, int encoding, LoadResult r)
         if (bytes.startsWith("\xEF\xBB\xBF")) {
             bytes.remove(0, 3);
         }
-        r.binary = bytes.left(8192).contains('\0');
-        r.text = QString::fromUtf8(bytes);
+        r.binary = bytes.left(65536).contains('\0');
+        {
+            // Invalid bytes become U+FFFD; saving would lose the originals.
+            QStringDecoder decoder(QStringConverter::Utf8, QStringConverter::Flag::Stateless);
+            r.text = decoder.decode(bytes);
+            r.lossy = decoder.hasError();
+        }
         break;
     case NP_UTF16_LE:
     case NP_UTF16_BE: {
@@ -156,17 +166,27 @@ LoadResult readAs(const QByteArray &path, int encoding, LoadResult r)
             text[i] = QChar(big ? char16_t(a << 8 | b) : char16_t(b << 8 | a));
         }
         r.lossy = (bytes.size() - from) % 2 != 0;
+        for (qsizetype i = 0; i < units && !r.lossy; ++i) {
+            const QChar c = text.at(i);
+            if (c.isHighSurrogate()) {
+                r.lossy = i + 1 >= units || !text.at(i + 1).isLowSurrogate();
+                ++i;
+            } else if (c.isLowSurrogate()) {
+                r.lossy = true;
+            }
+        }
         r.text = text;
         break;
     }
     default:
-        r.binary = bytes.left(8192).contains('\0');
+        r.binary = bytes.left(65536).contains('\0');
         r.text = decodeWindows1252(bytes);
         break;
     }
     bool mixed = false;
     normalizeEndings(r.text, r.lineEnding, mixed);
-    r.mixed = mixed;
+    // The editor splits lines at U+2029 too, so saving writes it as a line end.
+    r.mixed = mixed || r.text.contains(QChar::ParagraphSeparator);
     r.longLines = hasLongLine(r.text);
     return r;
 }
@@ -197,7 +217,7 @@ LoadResult readFile(const QByteArray &path, int forcedEncoding)
     r.text = QString::fromUtf16(reinterpret_cast<const char16_t *>(file->text), qsizetype(file->len));
     r.encoding = file->encoding;
     r.lineEnding = file->lineEnding;
-    r.mixed = file->mixed;
+    r.mixed = file->mixed || r.text.contains(QChar::ParagraphSeparator);
     r.binary = file->binary;
     r.lossy = file->lossy;
     r.stamp = file->stamp;
@@ -251,7 +271,9 @@ Matcher makeMatcher(const QString &text, int flags)
     }
     QString pattern = (flags & Document::RegularExpression) ? text : QRegularExpression::escape(text);
     if (flags & Document::WholeWords) {
-        pattern = QStringLiteral("\\b(?:") + pattern + QStringLiteral(")\\b");
+        // Not \b: a term that starts or ends with a symbol ("c++") would
+        // then never match before a space.
+        pattern = QStringLiteral("(?<!\\w)(?:") + pattern + QStringLiteral(")(?!\\w)");
     }
     QRegularExpression::PatternOptions options = QRegularExpression::UseUnicodePropertiesOption;
     if (!(flags & Document::MatchCase)) {
@@ -434,18 +456,21 @@ void Document::Private::checkWritable()
 
 quint64 Document::Private::revision() const
 {
-    return qdoc ? quint64(qdoc->revision()) + 1 : 0;
+    // Not QTextDocument::revision(): undo takes that back, so new text
+    // could carry an old number.
+    return contentVersion;
 }
 
 quint64 Document::Private::sessionKey() const
 {
-    return (editGeneration << 32) | (revision() & 0xffffffff);
+    return contentVersion;
 }
 
 void Document::Private::connectTextDocument()
 {
     QObject::connect(qdoc, &QTextDocument::modificationChanged, q, [this] { Q_EMIT q->modifiedChanged(); });
     QObject::connect(qdoc, &QTextDocument::contentsChanged, q, [this] {
+        ++contentVersion;
         if (settingText) {
             return;
         }
@@ -482,7 +507,11 @@ void Document::Private::applyView()
         QPointer<QQuickItem> flick = flickable();
         const qreal y = scrollY;
         if (flick) {
-            QTimer::singleShot(0, flick, [flick, y] { flick->setProperty("contentY", y); });
+            QTimer::singleShot(0, flick, [flick, y] {
+                // Never past the end: a stale or bad value would show nothing.
+                const qreal end = qMax(0.0, flick->property("contentHeight").toReal() - flick->height());
+                flick->setProperty("contentY", qBound(0.0, y, end));
+            });
         }
     }
 }
@@ -490,19 +519,23 @@ void Document::Private::applyView()
 void Document::Private::putText(const QString &text, bool keepView)
 {
     if (textEdit && qdoc) {
-        if (keepView) {
-            cursor = q->cursorPosition();
-            anchor = q->selectionAnchor();
-            scrollY = q->scrollY();
-        }
+        // Setting the text moves the caret to 0, and the view saves that
+        // back through setCursorPosition; restore from copies.
+        const int c = keepView ? q->cursorPosition() : cursor;
+        const int an = keepView ? q->selectionAnchor() : anchor;
+        const qreal y = keepView ? q->scrollY() : scrollY;
         settingText = true;
         textEdit->setProperty("text", text);
         qdoc->setModified(false);
         settingText = false;
+        cursor = c;
+        anchor = an;
+        scrollY = y;
         applyView();
     } else {
         pending = text;
         hasPending = true;
+        ++contentVersion;
         setModified(false);
     }
 }
@@ -601,10 +634,10 @@ void Document::Private::unwatch()
 
 void Document::Private::checkOnDisk()
 {
-    if (path.isEmpty() || loading || !loaded) {
+    if (path.isEmpty() || !loaded) {
         return;
     }
-    if (saving) {
+    if (saving || loading) {
         recheck = true;
         return;
     }
@@ -613,6 +646,8 @@ void Document::Private::checkOnDisk()
     const int err = np_file_stamp(path.toUtf8().constData(), &now);
     if (err == ENOENT || err == ENOTDIR) {
         if (!banners.count(Deleted)) {
+            cleanBeforeDelete = !isModified();
+            deleteRevision = sessionKey();
             setBanner(Deleted);
             setModified(true); // the session must keep the text
         }
@@ -623,6 +658,12 @@ void Document::Private::checkOnDisk()
     }
     if (banners.count(Deleted)) {
         clearBanner(Deleted);
+        // Gone only for a moment (a save by another program, a checkout):
+        // untouched since, it is clean again and may reload silently.
+        if (cleanBeforeDelete && sessionKey() == deleteRevision) {
+            setModified(false);
+        }
+        cleanBeforeDelete = false;
         if (!hasStamp || !sameStamp(now, stamp)) {
             // Back, but not as we knew it: treated as changed below.
             hasStamp = true;
@@ -658,6 +699,10 @@ void Document::Private::startLoad(LoadMode mode, int forcedEncoding)
         watcher->deleteLater();
         if (gen == loadGeneration) {
             finishLoad(result, mode);
+            if (recheck && !saving && !loading) {
+                recheck = false;
+                checkOnDisk();
+            }
         }
     });
     watcher->setFuture(QtConcurrent::run([p = path.toUtf8(), forcedEncoding] { return readFile(p, forcedEncoding); }));
@@ -678,6 +723,9 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
     }
     if (r.error) {
         if (r.error == ENOENT || r.error == ENOTDIR) {
+            if (mode == Initial) {
+                loaded = true; // nothing read to protect: Save recreates it
+            }
             setBanner(Deleted);
             setModified(true);
         } else {
@@ -783,7 +831,9 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
             App::instance()->addRecentFile(snapshot.path);
         }
     } else if (r.rc == -1) {
-        setBanner(Unencodable, QObject::tr("Some characters can't be saved as %1.").arg(q->encodingName()));
+        const QString message = QObject::tr("Some characters can't be saved as %1.").arg(q->encodingName());
+        setBanner(Unencodable, message);
+        Q_EMIT q->saveFailed(message);
     } else {
         const QString message = errnoText(r.rc);
         setBanner(SaveFailed, message);
@@ -1012,6 +1062,7 @@ void Document::setTextEdit(QQuickItem *edit)
     }
     d->textEdit = edit;
     ++d->editGeneration;
+    ++d->contentVersion;
     if (edit) {
         // The text is set as plain text, whatever it looks like (TextEdit.PlainText is Qt::PlainText, 0).
         edit->setProperty("textFormat", int(Qt::PlainText));
@@ -1117,7 +1168,9 @@ void Document::save()
         return;
     }
     if (d->loading || !d->loaded) {
-        return; // nothing of the file's is here to write
+        // Nothing of the file's is here to write.
+        Q_EMIT saveFailed(tr("The file is still being read."));
+        return;
     }
     if (d->saving) {
         d->resave = true;
@@ -1127,6 +1180,7 @@ void Document::save()
     const int err = np_file_stamp(d->path.toUtf8().constData(), &now);
     if (err == 0 && d->hasStamp && !sameStamp(now, d->stamp) && !d->keepMine) {
         d->setBanner(ChangedOnDisk);
+        Q_EMIT saveFailed(tr("The file changed on disk."));
         return;
     }
     d->startSave();
@@ -1136,14 +1190,20 @@ void Document::saveAs(const QUrl &url)
 {
     const QString newPath = url.isLocalFile() ? url.toLocalFile() : url.path();
     if (newPath.isEmpty() || d->saving) {
+        Q_EMIT saveFailed(newPath.isEmpty() ? tr("That isn't a file on this computer.") : tr("A save is already running."));
+        return;
+    }
+    if (d->loading || !d->loaded) {
+        // Writing now would put an empty or partial text under the new name.
+        Q_EMIT saveFailed(d->loading ? tr("The file is still being read.") : tr("The file couldn't be read, so there is nothing to save."));
         return;
     }
     d->unwatch();
+    ++d->loadGeneration; // a silent reload of the old file must not land here
     d->path = QFileInfo(newPath).absoluteFilePath();
     d->untitledNumber = 0;
     d->hasStamp = false;
     d->keepMine = false;
-    d->loaded = true;
     d->banners.erase(ChangedOnDisk);
     d->banners.erase(Deleted);
     d->banners.erase(ReadOnlyFile);
@@ -1160,7 +1220,7 @@ void Document::saveAs(const QUrl &url)
 
 void Document::reload()
 {
-    if (d->path.isEmpty() || d->loading) {
+    if (d->path.isEmpty() || d->loading || d->saving) {
         return;
     }
     d->keepMine = false;
@@ -1169,7 +1229,7 @@ void Document::reload()
 
 void Document::reopenWithEncoding(int encoding)
 {
-    if (d->path.isEmpty() || d->loading || d->isModified() || encoding < NP_UTF8 || encoding > NP_WINDOWS_1252) {
+    if (d->path.isEmpty() || d->loading || d->saving || d->isModified() || encoding < NP_UTF8 || encoding > NP_WINDOWS_1252) {
         return;
     }
     d->startLoad(Private::AsEncoding, encoding);
@@ -1177,7 +1237,14 @@ void Document::reopenWithEncoding(int encoding)
 
 void Document::keepMine()
 {
-    d->keepMine = true;
+    // The disk version seen now is the one overruled: a later change shows
+    // the banner again, and Save checks against this one.
+    NpStamp now = {};
+    if (np_file_stamp(d->path.toUtf8().constData(), &now) == 0) {
+        d->stamp = now;
+        d->hasStamp = true;
+    }
+    d->keepMine = false;
     d->clearBanner(ChangedOnDisk);
     d->setModified(true);
 }
@@ -1280,6 +1347,20 @@ QVariantMap Document::find(const QString &text, int flags, int from, bool backwa
             {QStringLiteral("end"), target.second},
             {QStringLiteral("index"), index + 1},
             {QStringLiteral("count"), int(spans.size())}};
+}
+
+void Document::insertText(const QString &text)
+{
+    if (!d->qdoc || !d->textEdit || d->readOnly || d->loading) {
+        return;
+    }
+    QTextCursor c(d->qdoc);
+    c.setPosition(d->textEdit->property("selectionStart").toInt());
+    c.setPosition(d->textEdit->property("selectionEnd").toInt(), QTextCursor::KeepAnchor);
+    c.beginEditBlock();
+    c.insertText(text);
+    c.endEditBlock();
+    d->textEdit->setProperty("cursorPosition", c.position());
 }
 
 int Document::replaceAll(const QString &text, const QString &replacement, int flags)

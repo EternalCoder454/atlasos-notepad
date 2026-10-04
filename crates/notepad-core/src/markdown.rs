@@ -679,8 +679,9 @@ fn bare_url_end(text: &[u16], at: usize, end: usize) -> Option<usize> {
     (k > at + scheme).then_some(k)
 }
 
-/// The URL of the link at `pos` in the line, as a range, if there is one
-/// (`[text](url)`, `<url>` or a bare URL).
+/// The destination of the link at `pos` in the line, as a range, if there is
+/// one (`[text](url)`, `<url>` or a bare URL). A `<...>` destination is
+/// returned whole, brackets and inner spaces included.
 pub fn link_at(text: &[u16], pos: usize) -> Option<(usize, usize)> {
     let n = text.len();
     let mut j = 0;
@@ -694,11 +695,14 @@ pub fn link_at(text: &[u16], pos: usize) -> Option<(usize, usize)> {
                         a += 1;
                     }
                     let mut b = a;
+                    if a < url_end - 1 && text[a] == b'<' as u16 {
+                        // <...> may hold spaces; the span includes the brackets.
+                        if let Some(gt) = (a + 1..url_end - 1).find(|&k| text[k] == b'>' as u16) {
+                            return Some((a, gt + 1));
+                        }
+                    }
                     while b < url_end - 1 && !is_space(text[b]) {
                         b += 1;
-                    }
-                    if b > a && text[a] == b'<' as u16 && text[b - 1] == b'>' as u16 {
-                        return Some((a + 1, b - 1));
                     }
                     return Some((a, b));
                 }
@@ -708,7 +712,7 @@ pub fn link_at(text: &[u16], pos: usize) -> Option<(usize, usize)> {
         } else if c == b'<' as u16 {
             if let Some(k) = autolink_end(text, j + 1, n) {
                 if pos >= j && pos <= k {
-                    return Some((j + 1, k));
+                    return Some((j, k + 1));
                 }
                 j = k + 1;
                 continue;
@@ -844,8 +848,19 @@ mod tests {
         let url = |p: usize| link_at(&text, p).map(|(a, b)| String::from_utf16_lossy(&text[a..b]));
         assert_eq!(url(3).as_deref(), Some("https://x.org/p"));
         assert_eq!(url(0), None);
-        assert_eq!(url(27).as_deref(), Some("https://y.org"));
+        assert_eq!(url(27).as_deref(), Some("<https://y.org>"));
         assert_eq!(url(text.len() - 3).as_deref(), Some("https://z.org"));
+    }
+
+    #[test]
+    fn link_at_takes_the_whole_angle_destination() {
+        let text = u("[a](<b c>) and [d](<e>  \"t\") [f](<g");
+        let url = |p: usize| link_at(&text, p).map(|(a, b)| String::from_utf16_lossy(&text[a..b]));
+        assert_eq!(url(1).as_deref(), Some("<b c>"));
+        assert_eq!(url(16).as_deref(), Some("<e>"));
+        let plain = u("[a](b \"t\")");
+        let (a, b) = link_at(&plain, 1).unwrap();
+        assert_eq!(String::from_utf16_lossy(&plain[a..b]), "b");
     }
 
     #[test]

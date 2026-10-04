@@ -29,7 +29,6 @@ FocusScope {
         edit.length; // re-read on edits too
         return md.headingAt(edit.cursorPosition);
     }
-    readonly property string selectedText: edit.selectedText
 
     signal linkRequested
 
@@ -43,13 +42,16 @@ FocusScope {
     }
     // Typed text: replaces the selection, one undo step.
     function insertText(text) {
-        if (edit.readOnly) {
-            return;
+        document.insertText(text);
+    }
+    // Web and mail links only: a file:// or smb:// link in a document
+    // shouldn't open or run things on a click.
+    function openLink(url) {
+        if (/^(https?|mailto):/i.test(url)) {
+            Qt.openUrlExternally(url);
+        } else if (/^www\./i.test(url)) {
+            Qt.openUrlExternally("https://" + url);
         }
-        if (edit.selectedText.length > 0) {
-            edit.remove(edit.selectionStart, edit.selectionEnd);
-        }
-        edit.insert(edit.cursorPosition, text);
     }
     function select(start, end) {
         edit.select(start, end);
@@ -125,11 +127,26 @@ FocusScope {
         // Wheel scrolling only: drags select text.
         interactive: false
 
+        // Not interactive, so nothing returns it to bounds by itself: a
+        // scroll made while the view was still small would leave the text
+        // above the top once it grows.
+        function clampScroll() {
+            contentY = Math.max(0, Math.min(contentY, contentHeight - height));
+            contentX = Math.max(0, Math.min(contentX, contentWidth - width));
+        }
+        onHeightChanged: clampScroll()
+        onWidthChanged: clampScroll()
+        onContentHeightChanged: clampScroll()
+        onContentWidthChanged: clampScroll()
+
         function ensureVisible(r) {
+            if (height <= 0 || width <= 0) {
+                return; // not laid out yet (a hidden tab)
+            }
             if (contentY >= r.y) {
                 contentY = r.y;
             } else if (contentY + height <= r.y + r.height) {
-                contentY = r.y + r.height - height;
+                contentY = r.y + r.height - height; // clampScroll bounds it once contentHeight settles
             }
             if (!view.settings.wordWrap) {
                 if (contentX >= r.x) {
@@ -195,6 +212,9 @@ FocusScope {
             bottomPadding: Kirigami.Units.largeSpacing
             onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)
             onCursorPositionChanged: view.saveViewState()
+            Accessible.role: Accessible.EditableText
+            Accessible.name: view.document.title
+            Accessible.multiLine: true
 
             FontMetrics {
                 id: fontInfo
@@ -207,9 +227,7 @@ FocusScope {
                 enabled: view.document.markdown
                 onTapped: (point, button) => {
                     const url = md.linkAt(edit.positionAt(point.position.x, point.position.y));
-                    if (url.length > 0) {
-                        Qt.openUrlExternally(url);
-                    }
+                    view.openLink(url);
                 }
             }
             // The context menu.
@@ -221,7 +239,7 @@ FocusScope {
                         edit.cursorPosition = position;
                     }
                     contextMenu.link = view.document.markdown ? md.linkAt(position) : "";
-                    contextMenu.popup();
+                    contextMenu.popup(edit, point.position.x, point.position.y);
                 }
             }
 
@@ -266,7 +284,7 @@ FocusScope {
             visible: contextMenu.link.length > 0
             text: qsTr("Open Link")
             icon.name: "internet-services"
-            onTriggered: Qt.openUrlExternally(contextMenu.link)
+            onTriggered: view.openLink(contextMenu.link)
         }
         ContextMenuItem {
             visible: contextMenu.link.length > 0
@@ -296,14 +314,14 @@ FocusScope {
             text: qsTr("Cut")
             icon.name: "edit-cut"
             shortcutText: "Ctrl+X"
-            enabled: !edit.readOnly && edit.selectedText.length > 0
+            enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
             onTriggered: edit.cut()
         }
         ContextMenuItem {
             text: qsTr("Copy")
             icon.name: "edit-copy"
             shortcutText: "Ctrl+C"
-            enabled: edit.selectedText.length > 0
+            enabled: edit.selectionStart !== edit.selectionEnd
             onTriggered: edit.copy()
         }
         ContextMenuItem {
@@ -316,7 +334,7 @@ FocusScope {
         ContextMenuItem {
             text: qsTr("Delete")
             icon.name: "edit-delete"
-            enabled: !edit.readOnly && edit.selectedText.length > 0
+            enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
             onTriggered: edit.remove(edit.selectionStart, edit.selectionEnd)
         }
         ContextMenuSeparator {}
@@ -339,7 +357,7 @@ FocusScope {
         }
         ContextMenuItem {
             visible: view.document.markdown
-            enabled: !edit.readOnly && edit.selectedText.length > 0
+            enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
             text: qsTr("Clear Formatting")
             icon.name: "edit-clear-all"
             shortcutText: "Ctrl+Space"

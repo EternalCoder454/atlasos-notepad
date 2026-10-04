@@ -394,13 +394,14 @@ bool MarkdownEditor::deleteForward()
 // Enter in a list item starts the next item; in an empty one it ends the list.
 // Numbers the items of a numbered list from `block` on: `number`, then up,
 // past items nested deeper, until the list ends. Reads the blocks' line info,
-// which still holds for blocks the current edit hasn't touched.
-static void renumber(QTextCursor &c, QTextBlock block, int listStart, qlonglong number)
+// which still holds for blocks the current edit hasn't touched. With `dry`
+// nothing is changed; it tells whether the items are numbered that way already.
+static bool renumber(QTextCursor &c, QTextBlock block, int listStart, qlonglong number, bool dry = false)
 {
     for (; block.isValid(); block = block.next()) {
         const BlockInfo *info = BlockInfo::of(block);
         if (!info) {
-            return;
+            return true;
         }
         const NpLine &l = info->line;
         const bool list = l.kind == Md::Bullet || l.kind == Md::Numbered || l.kind == Md::Task;
@@ -408,16 +409,20 @@ static void renumber(QTextCursor &c, QTextBlock block, int listStart, qlonglong 
             continue;
         }
         if (l.kind != Md::Numbered || info->listStart() != listStart) {
-            return;
+            return true;
         }
         const int digits = int(l.markerLen) - 1;
         const QString want = QString::number(number++);
         if (QStringView(block.text()).mid(l.markerStart, digits) != want) {
+            if (dry) {
+                return false;
+            }
             c.setPosition(block.position() + int(l.markerStart));
             c.setPosition(block.position() + int(l.markerStart) + digits, QTextCursor::KeepAnchor);
             c.insertText(want);
         }
     }
+    return true;
 }
 
 bool MarkdownEditor::newline()
@@ -473,11 +478,15 @@ bool MarkdownEditor::newline()
             prefix += u' ';
         }
     }
+    // The items after this one shift down only if they counted on from it:
+    // a `1. 1. 1.` list stays as it is.
+    const bool shift = l.kind == Md::Numbered
+        && renumber(c, block.next(), info->listStart(), QStringView(text).mid(l.markerStart, int(l.markerLen) - 1).toLongLong() + 1, true);
     c.setPosition(pos);
     c.beginEditBlock();
     c.insertBlock();
     c.insertText(prefix);
-    if (l.kind == Md::Numbered) {
+    if (shift) {
         const qlonglong next = QStringView(prefix).mid(l.markerStart, prefix.size() - l.markerStart - 2).toLongLong();
         renumber(c, c.block().next(), info->listStart(), next + 1);
     }
@@ -853,7 +862,11 @@ QString MarkdownEditor::linkAt(int position) const
     if (!np_md_link_at(reinterpret_cast<const uint16_t *>(text.utf16()), size_t(text.size()), size_t(position - block.position()), &start, &end)) {
         return {};
     }
-    return text.mid(qsizetype(start), qsizetype(end - start));
+    QString url = text.mid(qsizetype(start), qsizetype(end - start));
+    if (url.size() >= 2 && url.startsWith(u'<') && url.endsWith(u'>')) {
+        url = url.mid(1, url.size() - 2); // the address without its <...>
+    }
+    return url;
 }
 
 void MarkdownEditor::clearFormatting()
@@ -864,19 +877,41 @@ void MarkdownEditor::clearFormatting()
     int s = m_edit->property("selectionStart").toInt();
     int e = m_edit->property("selectionEnd").toInt();
     if (s == e) {
-        return;
+        // No selection: the caret's whole line is cleared.
+        const QTextBlock line = m_doc->findBlock(s);
+        s = line.position();
+        e = s + line.text().size();
     }
-    // Take in the markers right outside the selection: selecting a bold
-    // word selects its visible letters only.
-    int edge = 0;
-    if (hiddenEndingAt(s, &edge)) {
-        s = edge;
-    }
-    if (hiddenStartingAt(e, &edge)) {
-        e = edge;
-    }
+    // The affected lines come from the selection as it was, before the
+    // markers outside it are taken in below.
     const QTextBlock first = m_doc->findBlock(s);
     const int last = lastBlock(m_doc, s, e);
+    // Take in the markers right outside the selection: selecting a bold
+    // word selects its visible letters only. Not across a line start: whole
+    // lines selected end where the next line begins, and its markers stay.
+    // Touching hidden ranges are merged (`](u)**b**`), so a link's `[` or
+    // `](url)` is taken alone: the next span's markers must stay paired.
+    int edge = 0;
+    if (hiddenEndingAt(s, &edge)) {
+        s = m_doc->characterAt(s - 1) == u'[' ? s - 1 : edge;
+    }
+    if (e > s && e != m_doc->findBlock(e).position() && hiddenStartingAt(e, &edge)) {
+        if (m_doc->characterAt(e) == u']') {
+            const QTextBlock b = m_doc->findBlock(e);
+            const QString line = b.text();
+            size_t start = 0;
+            size_t end = 0;
+            const size_t at = size_t(e - b.position()) + 2;
+            if (np_md_link_at(reinterpret_cast<const uint16_t *>(line.utf16()), size_t(line.size()), at, &start, &end)) {
+                const qsizetype close = line.indexOf(u')', qsizetype(end));
+                e = close >= 0 ? qMin(edge, b.position() + int(close) + 1) : edge;
+            } else {
+                e = edge;
+            }
+        } else {
+            e = edge;
+        }
+    }
     QTextCursor c(m_doc);
     c.beginEditBlock();
     // From the end, so earlier positions stay put.
@@ -893,9 +928,12 @@ void MarkdownEditor::clearFormatting()
         const int from = qMax(s - b.position(), int(l.contentStart));
         const int to = qMin(e - b.position(), int(text.size()));
         for (qsizetype i = info->hidden.size() - 1; i >= 0; --i) {
-            const auto [hs, he] = info->hidden.at(i);
+            // Touching ranges are merged (`# **A**`): only the part inside
+            // the selection goes, and the line's prefix is handled below.
+            const int hs = qMax(info->hidden.at(i).first, from);
+            const int he = qMin(info->hidden.at(i).second, to);
             // A backslash escape stays: without it the character would format.
-            if (hs < from || he > to || (he - hs == 1 && text.at(hs) == u'\\')) {
+            if (hs >= he || (he - hs == 1 && text.at(hs) == u'\\')) {
                 continue;
             }
             c.setPosition(b.position() + hs);
@@ -923,6 +961,7 @@ void MarkdownEditor::insertLink(const QString &text, const QString &url)
     const QString target = url.contains(awkward) ? u'<' + QString(url).remove(u'<').remove(u'>') + u'>' : url;
     const int s = m_edit->property("selectionStart").toInt();
     const int e = m_edit->property("selectionEnd").toInt();
+    QString label = text.isEmpty() ? url : text;
     QTextCursor c(m_doc);
     if (s == e) {
         const QTextBlock block = m_doc->findBlock(s);
@@ -932,11 +971,27 @@ void MarkdownEditor::insertLink(const QString &text, const QString &url)
         if (np_md_link_at(reinterpret_cast<const uint16_t *>(line.utf16()), size_t(line.size()), size_t(s - block.position()), &start, &end)) {
             c.setPosition(block.position() + int(start));
             c.setPosition(block.position() + int(end), QTextCursor::KeepAnchor);
-            c.insertText(target);
+            QString replacement = target;
+            if (start == 0 || line.at(qsizetype(start) - 1) != u'(') {
+                // An autolink, <url> or a bare address, stays a link only
+                // while the new address still qualifies; else it gets a label.
+                static const QRegularExpression angled(QStringLiteral("^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\\s<>]*$"));
+                static const QRegularExpression bare(QStringLiteral("^(?:https?://|www\\.)[^\\s<>]+$"));
+                const bool wasAngled = line.at(qsizetype(start)) == u'<';
+                if (wasAngled && angled.match(url).hasMatch()) {
+                    replacement = u'<' + url + u'>';
+                } else if (!wasAngled && bare.match(url).hasMatch()) {
+                    replacement = url;
+                } else {
+                    label.replace(u'[', QStringLiteral("\\[")).replace(u']', QStringLiteral("\\]"));
+                    replacement = u'[' + label + QStringLiteral("](") + target + u')';
+                }
+            }
+            c.insertText(replacement);
+            m_edit->setProperty("cursorPosition", c.position());
             return;
         }
     }
-    QString label = text.isEmpty() ? url : text;
     label.replace(u'[', QStringLiteral("\\[")).replace(u']', QStringLiteral("\\]"));
     c.setPosition(s);
     c.setPosition(e, QTextCursor::KeepAnchor);
