@@ -10,6 +10,7 @@
 #include <QFileSystemWatcher>
 #include <QFutureWatcher>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QQuickWindow>
 #include <QQuickTextDocument>
 #include <QRegularExpression>
@@ -645,7 +646,7 @@ void Document::Private::applyView()
 namespace
 {
 // Calls back on the user's own input in a window: a wheel turn, a press, a
-// key, a touch.
+// key (not a modifier alone), a touch, a gesture.
 class InputWatch : public QObject
 {
 public:
@@ -659,10 +660,23 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
         switch (event->type()) {
+        case QEvent::KeyPress:
+            switch (static_cast<QKeyEvent *>(event)->key()) {
+            case Qt::Key_Shift:
+            case Qt::Key_Control:
+            case Qt::Key_Alt:
+            case Qt::Key_Meta:
+            case Qt::Key_AltGr:
+                break;
+            default:
+                m_onInput();
+            }
+            break;
         case QEvent::Wheel:
         case QEvent::MouseButtonPress:
-        case QEvent::KeyPress:
+        case QEvent::MouseButtonDblClick:
         case QEvent::TouchBegin:
+        case QEvent::NativeGesture:
             m_onInput();
             break;
         default:
@@ -682,44 +696,69 @@ void Document::Private::holdScroll(QQuickItem *flick, qreal y)
     heldFlick = flick;
     heldScroll = y;
     heldHeight = -1;
+    heldSteady = 0;
     heldClock.start();
     // The user's input ends the hold: their scroll, click or key wins. The
     // view's own moves (following the caret, clamping to a shorter layout)
-    // don't, as the layout isn't final yet.
-    if (QQuickWindow *window = flick->window()) {
-        auto *watch = new InputWatch(q, [this] { endHeldScroll(); });
+    // don't, as the layout isn't final yet. A view without a window yet
+    // gets the watch once it has one.
+    watchHeldWindow(flick->window());
+    heldWindowChange = QObject::connect(flick, &QQuickItem::windowChanged, q, [this](QQuickWindow *window) { watchHeldWindow(window); });
+    stepHeldScroll(heldGeneration);
+}
+
+void Document::Private::watchHeldWindow(QQuickWindow *window)
+{
+    if (heldWatch) {
+        if (heldWindow) {
+            heldWindow->removeEventFilter(heldWatch);
+        }
+        heldWatch->deleteLater();
+        heldWatch = nullptr;
+    }
+    heldWindow = window;
+    if (window) {
+        auto *watch = new InputWatch(q, [this] {
+            // A hidden tab's view takes no input: what the user does in
+            // the shown one isn't about it.
+            if (heldFlick && heldFlick->isVisible()) {
+                endHeldScroll();
+            }
+        });
         window->installEventFilter(watch);
         heldWatch = watch;
     }
-    stepHeldScroll(heldGeneration);
 }
 
 int Document::Private::endHeldScroll()
 {
+    QObject::disconnect(heldWindowChange);
+    watchHeldWindow(nullptr); // may be inside the watch's own eventFilter: it goes later
     heldFlick = nullptr;
     heldScroll = -1;
-    if (heldWatch) {
-        heldWatch->deleteLater(); // may be inside its own eventFilter
-        heldWatch = nullptr;
-    }
     return ++heldGeneration;
 }
 
 void Document::Private::stepHeldScroll(int generation)
 {
-    if (generation != heldGeneration || !heldFlick || heldScroll < 0) {
-        return; // ended, or the view is gone
+    if (generation != heldGeneration || heldScroll < 0) {
+        return; // ended
+    }
+    if (!heldFlick) {
+        endHeldScroll(); // the view is gone
+        return;
     }
     const qreal height = heldFlick->property("contentHeight").toReal();
     // Never past the end: a stale or bad value would show nothing.
     const qreal end = qMax(0.0, height - heldFlick->height());
     heldFlick->setProperty("contentY", qBound(0.0, heldScroll, end));
-    // Done once the layout has settled (the same height two steps running)
-    // with room for the target; or, when it never makes room (a text
-    // shorter than before), once it settles after a second; and at the
-    // latest after five, for a layout still growing.
-    const bool settled = height == heldHeight;
+    // Done once the layout has settled (the text all in, the same height
+    // for three steps running) with room for the target; or, when it never
+    // makes room (a text shorter than before), once it settles after a
+    // second; and at the latest after five, for a layout still growing.
+    heldSteady = (!isLoading() && qAbs(height - heldHeight) < 0.5) ? heldSteady + 1 : 0;
     heldHeight = height;
+    const bool settled = heldSteady >= 2;
     const qint64 elapsed = heldClock.elapsed();
     if ((settled && (end >= heldScroll || elapsed >= 1000)) || elapsed >= 5000) {
         endHeldScroll();

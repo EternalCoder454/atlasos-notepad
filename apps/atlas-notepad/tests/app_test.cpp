@@ -22,6 +22,8 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QWheelEvent>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSignalSpy>
@@ -2706,7 +2708,82 @@ private Q_SLOTS:
         QTRY_VERIFY(doc->d->heldWatch);
         flick->setProperty("contentY", 5.0); // no input: the view itself
         QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), 800.0, 5000);
-        QTRY_VERIFY(!doc->d->heldWatch); // done once the layout settled
+        QTRY_VERIFY_WITH_TIMEOUT(!doc->d->heldWatch, 7000); // done once the layout settled
+    }
+
+    // A hidden tab's view takes no input: a key in the shown one doesn't
+    // end its restore.
+    void hiddenViewKeepsItsHeldRestore()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        flick->setVisible(false);
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier, QStringLiteral("a"));
+        QCoreApplication::sendEvent(&window, &key);
+        QVERIFY(doc->d->heldFlick);
+        QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), 800.0, 5000);
+    }
+
+    // A modifier alone (the start of a shortcut) isn't the user moving
+    // away; a key is, and a press.
+    void heldRestoreEndsOnAKeyNotAModifier()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        QKeyEvent ctrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+        QCoreApplication::sendEvent(&window, &ctrl);
+        QVERIFY(doc->d->heldFlick);
+        QKeyEvent down(QEvent::KeyPress, Qt::Key_PageDown, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &down);
+        QVERIFY(!doc->d->heldFlick);
+        QVERIFY(!doc->d->heldWatch);
+    }
+
+    // A view that gets its window only after the hold started is watched
+    // from then on.
+    void heldRestoreWatchesALateWindow()
+    {
+        Document *doc = openFile(newList(), write(QStringLiteral("late.txt"), QByteArray("one two three four five six seven eight nine ten\n").repeated(300)));
+        QVERIFY(doc);
+        doc->d->cursor = doc->d->anchor = 0;
+        doc->d->scrollY = 800.0;
+        QQuickItem *flick = attachInLaggingFlickable(doc);
+        QVERIFY(flick);
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldFlick);
+        QVERIFY(!doc->d->heldWatch);
+        QQuickWindow window;
+        flick->setParentItem(window.contentItem());
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(doc->d->heldWatch);
+        QMouseEvent press(QEvent::MouseButtonPress, QPointF(5, 5), QPointF(5, 5), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &press);
+        QVERIFY(!doc->d->heldFlick);
+    }
+
+    // A new TextEdit (the tab's view rebuilt) ends the old view's restore.
+    void newTextEditEndsAHeldRestore()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        doc->setTextEdit(nullptr);
+        QVERIFY(!doc->d->heldFlick);
+        QVERIFY(!doc->d->heldWatch);
     }
 
     // A new view state (a tab switch, a reload at the top) ends a restore

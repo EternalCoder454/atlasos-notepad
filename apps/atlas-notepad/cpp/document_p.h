@@ -16,6 +16,8 @@
 
 class QQuickTextDocument;
 class QWindow;
+class QQuickItem;
+class QQuickWindow;
 class KJob;
 
 struct LoadResult {
@@ -184,11 +186,15 @@ struct Document::Private {
     // types.
     void holdScroll(QQuickItem *flick, qreal y);
     void stepHeldScroll(int generation);
+    void watchHeldWindow(QQuickWindow *window); // nullptr: stop watching
     int endHeldScroll(); // returns the new generation
     QPointer<QQuickItem> heldFlick;
     QPointer<QObject> heldWatch; // the window's input watch while holding
+    QPointer<QQuickWindow> heldWindow; // the window it watches
+    QMetaObject::Connection heldWindowChange;
     qreal heldScroll = -1;
     qreal heldHeight = -1; // the content height at the last step
+    int heldSteady = 0; // steps running with that height
     int heldGeneration = 0;
     QElapsedTimer heldClock;
     QQuickItem *flickable() const;
