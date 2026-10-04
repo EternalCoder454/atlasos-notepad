@@ -8,6 +8,7 @@
 
 #include <QColor>
 #include <QFont>
+#include <QFontMetricsF>
 #include <QHash>
 #include <QList>
 #include <QPointer>
@@ -25,6 +26,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 // Rust, see apps/atlas-notepad/src/lib.rs. Positions count UTF-16 units.
@@ -92,6 +94,9 @@ public:
     QList<int> quoteMarks;
     // [start, end) of each misspelled word, when spell check is on.
     QList<QPair<int, int>> misspelled;
+    // An opening fence line's language, cleaned for drawing (see
+    // MarkdownDecorations::fenceLabel); "" for any other line.
+    QString fenceLabel;
 
     static BlockInfo *of(const QTextBlock &block)
     {
@@ -134,14 +139,27 @@ public:
     {
         return m_style;
     }
+    // Where the caret is (a document position). A fence line keeps its
+    // markers visible in the Formatted view while the caret is on it; the
+    // lines the caret leaves and enters are read again if they are fences.
+    void setCaret(int position);
+    // Where to ask for the caret when the whole document is read again (the
+    // text may have been replaced without the caret's signal firing).
+    void setCaretSource(std::function<int()> source)
+    {
+        m_caretSource = std::move(source);
+    }
+    bool isCaretBlock(const QTextBlock &block) const;
 
 protected:
     void highlightBlock(const QString &text) override;
 
 private:
     const QTextCharFormat &format(uint32_t flags, int heading);
-    int read(const QString &text, int previous, BlockInfo *info);
-    int readBlock(QTextBlock block, int previous);
+    int read(const QString &text, int previous, BlockInfo *info, bool caretHere);
+    int readBlock(QTextBlock block, int previous, int caretPos);
+    void syncCaret();
+    int caretBlockPosition() const;
     void rehighlightSlice();
 
     void addMisspelled(const QString &text, size_t runs, BlockInfo *info);
@@ -151,6 +169,8 @@ private:
     std::vector<NpRun> m_runs;
     QList<QTextLayout::FormatRange> m_ranges;
     QPointer<SpellChecker> m_spell;
+    QTextCursor m_caret; // moves with edits; null until setCaret
+    std::function<int()> m_caretSource;
     bool m_markdown;
     // The slices of rehighlightAll: where the next starts (moves with edits;
     // null when none is due) and how long its reading may take.
@@ -232,6 +252,11 @@ public:
     }
     // Where the TextEdit draws the document (its padding).
     QPointF textOrigin() const;
+    // Whether a fence line shows its markers: the caret is on it.
+    bool fenceRevealed(const QTextBlock &block) const
+    {
+        return m_highlighter && m_highlighter->isCaretBlock(block);
+    }
     // The checkbox of a task item, in document coordinates.
     static QRectF taskBox(QTextDocument *doc, const QTextBlock &block);
 
@@ -270,6 +295,7 @@ protected:
 
 private Q_SLOTS:
     void snapCursor();
+    void syncCaret();
 
 private:
     void applyStyle();
@@ -326,6 +352,15 @@ public:
 
     void paint(QPainter *painter) override;
 
+    // The language shown on an opening fence line ("```rust title=x" gives
+    // "rust"): its first word, after an optional "{" (```{r}), cut at the first
+    // character that isn't a letter, digit or one of + # . _ - /, and at 64
+    // characters, then "…". "" for none.
+    static QString fenceLabel(const QString &fenceLine);
+    // Test-only (editor_test): the labels the visible part would show, top to
+    // bottom. Nothing in the app calls it.
+    QStringList labelsForTest() const;
+
 Q_SIGNALS:
     void editorChanged();
 
@@ -335,14 +370,23 @@ protected:
 
 private:
     struct Shape {
-        enum Type : uint8_t { Bullet, Box, Quote, Rule, Code } type;
+        enum Type : uint8_t { Bullet, Box, Quote, Rule, Code, Label } type;
         uint8_t level; // bullets: nesting; boxes: ticked; code: rounded ends (1 top, 2 bottom)
         QRectF rect;
+        QString text; // labels: what to draw
         bool operator==(const Shape &o) const
         {
-            return type == o.type && level == o.level && rect == o.rect;
+            return type == o.type && level == o.level && rect == o.rect && text == o.text;
         }
     };
+    // Elides a label to `width`, remembering the answer (fonts and widths
+    // change rarely, polish runs on every scroll).
+    struct Elided {
+        int width = -1;
+        QString text;
+        qreal advance = 0;
+    };
+    const Elided &elide(const QString &label, qreal width) const;
     void watch();
     void layOut(std::vector<Shape> &out) const;
     static int afterQuotesOf(const QTextBlock &block);
@@ -351,4 +395,8 @@ private:
     QPointer<QTextDocument> m_doc;
     std::vector<Shape> m_shapes;
     std::vector<Shape> m_scratch;
+    mutable QFont m_labelFont;
+    mutable qreal m_labelDpr = 1;
+    mutable QFontMetricsF m_labelMetrics{QFont()};
+    mutable QHash<QString, Elided> m_elided;
 };

@@ -4,6 +4,17 @@
 
 #include <QElapsedTimer>
 
+namespace
+{
+// A format flag of this file's own (Rust's run from bit 0 up): a fence line
+// whose markers aren't shown. The Formatted view keeps the line (the code
+// block's top and bottom padding, and where the language label goes) but
+// draws and spaces its characters as the hidden ones are. Showing the markers
+// again (caret on the line) can make a very long info string wrap and move the
+// text below by a line; that is accepted.
+constexpr uint32_t FenceHidden = 1u << 31;
+} // namespace
+
 MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document, bool markdown)
     : QSyntaxHighlighter(document)
     , m_markdown(markdown)
@@ -35,12 +46,61 @@ void MarkdownHighlighter::setStyle(const MarkdownStyle &style)
     rehighlightAll();
 }
 
+void MarkdownHighlighter::setCaret(int position)
+{
+    QTextDocument *doc = document();
+    if (!doc) {
+        return;
+    }
+    const QTextBlock before = m_caret.isNull() ? QTextBlock() : m_caret.block();
+    if (m_caret.isNull() || m_caret.document() != doc) {
+        m_caret = QTextCursor(doc);
+    }
+    m_caret.setPosition(qBound(0, position, qMax(0, doc->characterCount() - 1)));
+    const QTextBlock now = m_caret.block();
+    if (before == now || !m_markdown || !m_style.formatted) {
+        return;
+    }
+    for (const QTextBlock &b : {before, now}) {
+        const auto *info = b.isValid() ? static_cast<BlockInfo *>(b.userData()) : nullptr;
+        if (info && info->line.kind == Md::FenceLine) {
+            rehighlightBlock(b);
+        }
+    }
+}
+
+// The caret from its source, without reading any line: for the callers that
+// read every line anyway.
+void MarkdownHighlighter::syncCaret()
+{
+    QTextDocument *doc = document();
+    if (!doc || !m_caretSource) {
+        return;
+    }
+    if (m_caret.isNull() || m_caret.document() != doc) {
+        m_caret = QTextCursor(doc);
+    }
+    m_caret.setPosition(qBound(0, m_caretSource(), qMax(0, doc->characterCount() - 1)));
+}
+
+// Where the caret's block starts, once for a pass over many blocks (-1: none).
+int MarkdownHighlighter::caretBlockPosition() const
+{
+    return m_caret.isNull() ? -1 : m_caret.block().position();
+}
+
+bool MarkdownHighlighter::isCaretBlock(const QTextBlock &block) const
+{
+    return !m_caret.isNull() && m_caret.block() == block;
+}
+
 // Reads one line: fills `info` (the line, its hidden ranges, its quote
 // marks) and m_ranges (the formats), and returns the state for the next line.
-int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info)
+int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info, bool caretHere)
 {
     if (!m_markdown) {
         info->hidden.clear();
+        info->fenceLabel.clear();
         m_ranges.clear();
         addMisspelled(text, 0, info);
         return 0;
@@ -54,15 +114,23 @@ int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info
     }
 
     info->line = line;
+    // Only an opening fence has a language; read a bounded prefix of the line.
+    if (line.kind == Md::FenceLine && line.state != 0) {
+        info->fenceLabel = MarkdownDecorations::fenceLabel(text);
+    } else {
+        info->fenceLabel.clear();
+    }
     info->hidden.clear();
     info->quoteMarks.clear();
     m_ranges.clear();
+    const bool hideFence = m_style.formatted && !caretHere;
     for (size_t i = 0; i < n; ++i) {
         const NpRun &r = m_runs[i];
         const int start = int(r.start);
         const int end = int(r.start + r.len);
         if (r.flags) {
-            m_ranges.append({start, int(r.len), format(r.flags, line.heading)});
+            const uint32_t flags = (hideFence && (r.flags & Md::Fence)) ? (r.flags | FenceHidden) : r.flags;
+            m_ranges.append({start, int(r.len), format(flags, line.heading)});
         }
         if (r.flags & Md::Hidden) {
             if (!info->hidden.isEmpty() && info->hidden.last().second == start) {
@@ -93,7 +161,7 @@ void MarkdownHighlighter::highlightBlock(const QString &text)
         info = new BlockInfo;
         setCurrentBlockUserData(info);
     }
-    const int state = read(text, qMax(0, previousBlockState()), info);
+    const int state = read(text, qMax(0, previousBlockState()), info, isCaretBlock(currentBlock()));
     for (const QTextLayout::FormatRange &r : std::as_const(m_ranges)) {
         setFormat(r.start, r.length, r.format);
     }
@@ -144,14 +212,14 @@ constexpr int sliceFrom = 64 * 1024;
 constexpr qint64 sliceNs = 8'000'000;
 } // namespace
 
-int MarkdownHighlighter::readBlock(QTextBlock block, int previous)
+int MarkdownHighlighter::readBlock(QTextBlock block, int previous, int caretPos)
 {
     auto *info = static_cast<BlockInfo *>(block.userData());
     if (!info) {
         info = new BlockInfo;
         block.setUserData(info);
     }
-    const int state = read(block.text(), previous, info);
+    const int state = read(block.text(), previous, info, block.position() == caretPos);
     block.layout()->setFormats(m_ranges);
     block.setUserState(state);
     return state;
@@ -170,10 +238,12 @@ void MarkdownHighlighter::rehighlightAll(bool now)
     if (!doc) {
         return;
     }
+    syncCaret();
     if (now || doc->characterCount() <= sliceFrom) {
         int state = 0;
+        const int caretPos = caretBlockPosition();
         for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
-            state = readBlock(b, state);
+            state = readBlock(b, state, caretPos);
         }
         doc->markContentsDirty(0, doc->characterCount());
         return;
@@ -194,10 +264,11 @@ void MarkdownHighlighter::rehighlightSlice()
     // The cursor moved with any edits since the last slice; the line before
     // it has its state (typing highlights as it goes).
     QTextBlock b = m_pass.block();
+    const int caretPos = caretBlockPosition();
     const int from = b.position();
     int state = qMax(0, b.previous().userState());
     for (int n = 1; b.isValid(); ++n) {
-        state = readBlock(b, state);
+        state = readBlock(b, state, caretPos);
         b = b.next();
         if (n % 32 == 0 && clock.nsecsElapsed() > m_readBudgetNs) {
             break;
@@ -240,6 +311,14 @@ const QTextCharFormat &MarkdownHighlighter::format(uint32_t flags, int heading)
         // URL, ten), so its advance is cut to 1 % as well (0 % reads as
         // "not set" in QTextEngine).
         f.setProperty(QTextFormat::FontPixelSize, 1);
+        f.setFontLetterSpacingType(QFont::PercentageSpacing);
+        f.setFontLetterSpacing(1);
+        f.setForeground(Qt::transparent);
+        return *m_formats.insert(key, f);
+    }
+    if (formatted && (flags & FenceHidden)) {
+        f.setFontFamilies({m_style.monoFamily});
+        scaled(0.85);
         f.setFontLetterSpacingType(QFont::PercentageSpacing);
         f.setFontLetterSpacing(1);
         f.setForeground(Qt::transparent);
