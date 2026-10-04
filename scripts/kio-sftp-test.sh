@@ -31,8 +31,14 @@ cleanup() {
     [ -n "$sshd_pid" ] && kill "$sshd_pid" 2>/dev/null
     pkill -f "sshd.*$work" 2>/dev/null
     pkill -u np-sftp 2>/dev/null
-    # Whatever still has the work folder open (a KIO worker, kiod, a bus).
-    fuser -km "$work" >/dev/null 2>&1
+    # What the runs left behind (a KIO worker, kiod, a bus): only processes
+    # started with this run's XDG_RUNTIME_DIR, never this shell.
+    local p
+    for p in /proc/[0-9]*; do
+        [ "${p#/proc/}" = "$$" ] && continue
+        grep -qzxF "XDG_RUNTIME_DIR=$work/run" "$p/environ" 2>/dev/null &&
+            kill -KILL "${p#/proc/}" 2>/dev/null
+    done
     sleep 1
     userdel -r np-sftp >/dev/null 2>&1
     local _
