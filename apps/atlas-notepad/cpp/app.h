@@ -38,6 +38,8 @@ class Settings : public QObject
     Q_PROPERTY(QFont font READ font WRITE setFont NOTIFY fontChanged)
     Q_PROPERTY(bool wordWrap READ wordWrap WRITE setWordWrap NOTIFY wordWrapChanged)
     Q_PROPERTY(bool lineNumbers READ lineNumbers WRITE setLineNumbers NOTIFY lineNumbersChanged)
+    // Line numbers in code files (default on), apart from the plain text's.
+    Q_PROPERTY(bool codeLineNumbers READ codeLineNumbers WRITE setCodeLineNumbers NOTIFY codeLineNumbersChanged)
     Q_PROPERTY(bool statusBar READ statusBar WRITE setStatusBar NOTIFY statusBarChanged)
     Q_PROPERTY(bool formattingToolbar READ formattingToolbar WRITE setFormattingToolbar NOTIFY formattingToolbarChanged)
     // Off: .md files are plain text everywhere, no Formatted view.
@@ -68,6 +70,8 @@ public:
     void setWordWrap(bool on);
     bool lineNumbers() const;
     void setLineNumbers(bool on);
+    bool codeLineNumbers() const;
+    void setCodeLineNumbers(bool on);
     bool statusBar() const;
     void setStatusBar(bool on);
     bool formattingToolbar() const;
@@ -99,6 +103,7 @@ Q_SIGNALS:
     void fontChanged();
     void wordWrapChanged();
     void lineNumbersChanged();
+    void codeLineNumbersChanged();
     void statusBarChanged();
     void formattingToolbarChanged();
     void formattingChanged();
@@ -146,6 +151,14 @@ class Document : public QObject
     // Prose, which spell check reads: Markdown, .txt, no extension or untitled,
     // up to the Formatted view's size limit. Not code or config files.
     Q_PROPERTY(bool prose READ isProse NOTIFY proseChanged)
+    // Light coding: not Markdown and has a language. language is detected
+    // from the file name (open, rename, Save As) until the user sets it;
+    // insertSpaces and indentWidth are detected from the text at load until
+    // set. What the user set is kept in the session.
+    Q_PROPERTY(bool code READ isCode NOTIFY codeChanged)
+    Q_PROPERTY(QString language READ language WRITE setLanguage NOTIFY languageChanged)
+    Q_PROPERTY(bool insertSpaces READ insertSpaces WRITE setInsertSpaces NOTIFY indentChanged)
+    Q_PROPERTY(int indentWidth READ indentWidth WRITE setIndentWidth NOTIFY indentChanged)
     // Formatted view (markers hidden) or Syntax view; only for markdown.
     Q_PROPERTY(bool formatted READ isFormatted WRITE setFormatted NOTIFY formattedChanged)
     Q_PROPERTY(bool readOnly READ isReadOnly NOTIFY readOnlyChanged)
@@ -225,6 +238,13 @@ public:
     Q_INVOKABLE void copyLocation();
     bool isMarkdown() const;
     bool isProse() const;
+    bool isCode() const;
+    QString language() const;
+    void setLanguage(const QString &name);
+    bool insertSpaces() const;
+    void setInsertSpaces(bool on);
+    int indentWidth() const;
+    void setIndentWidth(int width);
     bool isFormatted() const;
     void setFormatted(bool on);
     bool isReadOnly() const;
@@ -302,6 +322,9 @@ Q_SIGNALS:
     void savingChanged();
     void markdownChanged();
     void proseChanged();
+    void codeChanged();
+    void languageChanged();
+    void indentChanged();
     void formattedChanged();
     void readOnlyChanged();
     void encodingChanged();

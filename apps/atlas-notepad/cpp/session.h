@@ -27,6 +27,10 @@ struct TabState {
     int cursor = 0;
     int anchor = 0;
     double scrollY = 0;
+    // What the user set for light coding; absent: detected.
+    std::optional<QString> language;
+    std::optional<bool> insertSpaces;
+    std::optional<int> indentWidth;
     bool hasStamp = false;
     NpStamp stamp = {};
     QString textFile; // under texts/, empty: none

@@ -280,6 +280,15 @@ QList<WindowState> Session::read()
             tab.cursor = t.value(QStringLiteral("cursor")).toInt();
             tab.anchor = t.value(QStringLiteral("anchor")).toInt();
             tab.scrollY = t.value(QStringLiteral("scrollY")).toDouble();
+            if (t.value(QStringLiteral("language")).isString()) {
+                tab.language = t.value(QStringLiteral("language")).toString().left(100);
+            }
+            if (t.value(QStringLiteral("insertSpaces")).isBool()) {
+                tab.insertSpaces = t.value(QStringLiteral("insertSpaces")).toBool();
+            }
+            if (t.value(QStringLiteral("indentWidth")).isDouble()) {
+                tab.indentWidth = qBound(1, t.value(QStringLiteral("indentWidth")).toInt(4), 16);
+            }
             if (t.contains(QStringLiteral("stamp"))) {
                 tab.hasStamp = true;
                 tab.stamp = stampFromJson(t.value(QStringLiteral("stamp")).toObject());
@@ -377,6 +386,13 @@ void Session::write(const QList<Live> &windows, bool wait)
             t[QStringLiteral("cursor")] = doc->cursorPosition();
             t[QStringLiteral("anchor")] = doc->selectionAnchor();
             t[QStringLiteral("scrollY")] = double(doc->scrollY());
+            if (p->userLanguage) {
+                t[QStringLiteral("language")] = p->language;
+            }
+            if (p->userIndent) {
+                t[QStringLiteral("insertSpaces")] = p->insertSpaces;
+                t[QStringLiteral("indentWidth")] = p->indentWidth;
+            }
             if (p->hasStamp) {
                 t[QStringLiteral("stamp")] = stampToJson(p->stamp);
             }

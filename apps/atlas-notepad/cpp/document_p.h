@@ -75,7 +75,13 @@ struct Document::Private {
     LineEnding lineEnding = Lf;
     bool markdown = true;
     bool prose = true;
+    bool code = false;
     bool formatted = false;
+    QString language; // a KSyntaxHighlighting definition name; empty: none
+    bool userLanguage = false; // set by the user (or the session): detection leaves it
+    bool insertSpaces = true;
+    int indentWidth = 4;
+    bool userIndent = false; // likewise, for insertSpaces and indentWidth
     bool readOnly = false;
     bool loading = false;
     bool modified = false; // while there is no QTextDocument
@@ -147,6 +153,10 @@ struct Document::Private {
     // Markdown-ness and the FormattingOff banner, from the extension, the
     // setting and the size in bytes.
     void applyMarkdown(qint64 bytes);
+    // The language from the path (unless the user set one) and so whether
+    // this is code; the indent from the start of the text (unless set).
+    void applyLanguage();
+    void detectIndent(const QString &text);
     void checkWritable();
     bool isRemote() const { return !url.isEmpty(); }
     QWindow *window() const; // the one showing this document, or null

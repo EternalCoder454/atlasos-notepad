@@ -13,13 +13,14 @@
 
 #include <vector>
 
+class CodeEditor;
 class MarkdownEditor;
 class QTextDocument;
 
 class Bench : public QObject
 {
 public:
-    Bench(QQuickWindow *window, QQuickItem *edit, QQuickItem *view, MarkdownEditor *editor, const QString &file);
+    Bench(QQuickWindow *window, QQuickItem *edit, QQuickItem *view, MarkdownEditor *editor, CodeEditor *code, const QString &file);
     void start();
 
 private:
@@ -37,7 +38,8 @@ private:
     QPointer<QQuickWindow> m_window;
     QPointer<QQuickItem> m_edit;
     QPointer<QQuickItem> m_view;
-    QPointer<MarkdownEditor> m_editor;
+    QPointer<MarkdownEditor> m_editor; // null for a code file
+    QPointer<CodeEditor> m_code; // null for anything else
     QString m_file;
     QElapsedTimer m_clock;
     QTimer m_timeout;

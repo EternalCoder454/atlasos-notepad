@@ -2,6 +2,7 @@
 // reading is in Rust (src/); this file and the others in cpp/ are the glue.
 #include "app.h"
 #include "bench.h"
+#include "codeeditor.h"
 #include "markdown.h"
 
 #include <KDBusService>
@@ -220,6 +221,7 @@ int main(int argc, char *argv[])
             QQuickWindow *window = edit ? edit->window() : nullptr;
             QQuickItem *view = nullptr;
             MarkdownEditor *editor = nullptr;
+            CodeEditor *code = nullptr;
             for (QQuickItem *item = edit; item; item = item->parentItem()) {
                 if (!view && item->objectName() == QLatin1String("view")) {
                     view = item;
@@ -231,8 +233,17 @@ int main(int argc, char *argv[])
                         editor = candidate;
                     }
                 }
+                for (auto *candidate : item->findChildren<CodeEditor *>(Qt::FindDirectChildrenOnly)) {
+                    if (candidate->textEdit() == edit) {
+                        code = candidate;
+                    }
+                }
             }
-            if (doc->isLoading() || !view || !editor) {
+            const bool isCode = doc->property("code").toBool();
+            if (isCode ? !code : !editor) {
+                editor = nullptr; // not ready: a code file waits for its CodeEditor
+            }
+            if (doc->isLoading() || !view || (!editor && !code)) {
                 if (deadline->elapsed() > 30000) {
                     fprintf(stderr, "atlas-notepad: the window never got its %s\n", !edit ? "TextEdit" : !view ? "view" : "MarkdownEditor");
                     QCoreApplication::exit(1);
@@ -246,9 +257,13 @@ int main(int argc, char *argv[])
             }
             // The baseline: the same TextEdit without Markdown.
             if (qEnvironmentVariableIntValue("NP_BENCH_PLAIN")) {
-                editor->setTextEdit(nullptr);
+                if (isCode) {
+                    code->setTextEdit(nullptr);
+                } else {
+                    editor->setTextEdit(nullptr);
+                }
             }
-            (new Bench(window, edit, view, editor, file))->start();
+            (new Bench(window, edit, view, isCode ? nullptr : editor, isCode ? code : nullptr, file))->start();
         });
         poll->start(20);
     } else {

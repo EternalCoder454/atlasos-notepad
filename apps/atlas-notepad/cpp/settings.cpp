@@ -73,6 +73,7 @@ void Settings::setFont(const QFont &font)
 
 BOOL_SETTING(WordWrap, wordWrap, true)
 BOOL_SETTING(LineNumbers, lineNumbers, false)
+BOOL_SETTING(CodeLineNumbers, codeLineNumbers, true)
 BOOL_SETTING(StatusBar, statusBar, true)
 BOOL_SETTING(FormattingToolbar, formattingToolbar, true)
 BOOL_SETTING(Formatting, formatting, true)

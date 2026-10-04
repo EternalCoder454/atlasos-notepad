@@ -3,6 +3,7 @@
 // lives in the TextEdit's QTextDocument once there is one.
 #include "document_p.h"
 #include "remote.h"
+#include "codeeditor.h"
 
 #include <QDir>
 #include <QFile>
@@ -26,6 +27,8 @@
 #include <KIO/StoredTransferJob>
 #include <KProtocolInfo>
 #include <KProtocolManager>
+#include <KSyntaxHighlighting/Definition>
+#include <KSyntaxHighlighting/Repository>
 
 #include <cerrno>
 #include <cstring>
@@ -546,6 +549,83 @@ void Document::Private::applyMarkdown(qint64 bytes)
     if (!markdown && formatted) {
         formatted = false;
         Q_EMIT q->formattedChanged();
+    }
+    applyLanguage();
+}
+
+void Document::Private::applyLanguage()
+{
+    QString now = language;
+    if (!userLanguage) {
+        now.clear();
+        // Markdown and untitled tabs are never code. A plain .txt has no
+        // language either (the repository isn't even read for it).
+        if (!path.isEmpty() && !isMarkdownName(path)) {
+            const QString name = QFileInfo(path).fileName();
+            const QString suffix = QFileInfo(path).suffix();
+            const bool plainName = suffix.compare(QLatin1String("txt"), Qt::CaseInsensitive) == 0
+                || suffix.compare(QLatin1String("text"), Qt::CaseInsensitive) == 0;
+            if (!plainName || name.compare(QLatin1String("CMakeLists.txt"), Qt::CaseInsensitive) == 0) {
+                const auto def = codeRepository().definitionForFileName(name);
+                if (def.isValid() && !def.isHidden()) {
+                    now = def.name();
+                }
+            }
+        }
+    }
+    const bool wasCode = code;
+    code = !safeMode && !markdown && !now.isEmpty();
+    if (now != language) {
+        language = now;
+        Q_EMIT q->languageChanged();
+    }
+    if (code != wasCode) {
+        Q_EMIT q->codeChanged();
+    }
+}
+
+void Document::Private::detectIndent(const QString &text)
+{
+    if (userIndent) {
+        return;
+    }
+    const QStringView head = QStringView(text).left(64 * 1024);
+    int tabLines = 0, spaceLines = 0, prev = 0;
+    int votes[9] = {};
+    for (const QStringView line : head.tokenize(u'\n')) {
+        if (line.trimmed().isEmpty()) {
+            continue;
+        }
+        int n = 0;
+        if (line[0] == u'\t') {
+            ++tabLines;
+            continue;
+        }
+        while (n < line.size() && line[n] == u' ') {
+            ++n;
+        }
+        if (n > 0) {
+            ++spaceLines;
+            const int step = qAbs(n - prev);
+            if (step == 2 || step == 4 || step == 8) {
+                ++votes[step];
+            }
+        }
+        prev = n;
+    }
+    bool spaces = true;
+    int width = 4;
+    if (tabLines > spaceLines) {
+        spaces = false;
+    } else if (votes[2] > votes[4] && votes[2] >= votes[8]) {
+        width = 2;
+    } else if (votes[8] > votes[4] && votes[8] > votes[2]) {
+        width = 8;
+    }
+    if (spaces != insertSpaces || width != indentWidth) {
+        insertSpaces = spaces;
+        indentWidth = width;
+        Q_EMIT q->indentChanged();
     }
 }
 
@@ -1353,6 +1433,7 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
         banners[MixedLineEndings];
     }
     applyMarkdown(qint64(r.stamp.size));
+    detectIndent(r.text);
     if (mode == Initial) {
         formatted = markdown && restoredFormatted.value_or(settings().openMarkdownFormatted());
         restoredFormatted.reset();
@@ -1477,6 +1558,15 @@ void Document::Private::restore(const TabState &t, const std::optional<QString> 
     cursor = t.cursor;
     anchor = t.anchor;
     scrollY = t.scrollY;
+    if (t.language) {
+        language = *t.language;
+        userLanguage = true;
+    }
+    if (t.insertSpaces || t.indentWidth) {
+        insertSpaces = t.insertSpaces.value_or(true);
+        indentWidth = t.indentWidth.value_or(4);
+        userIndent = true;
+    }
     if (!path.isEmpty() && !text) {
         restoredFormatted = t.formatted;
         startLoad(Initial);
@@ -1484,6 +1574,7 @@ void Document::Private::restore(const TabState &t, const std::optional<QString> 
         pending = text.value_or(QString());
         hasPending = true;
         modified = t.modified;
+        detectIndent(pending);
         if (!path.isEmpty()) {
             hasStamp = t.hasStamp;
             stamp = t.stamp;
@@ -2061,6 +2152,58 @@ bool Document::isMarkdown() const
 bool Document::isProse() const
 {
     return d->prose;
+}
+
+bool Document::isCode() const
+{
+    return d->code;
+}
+
+QString Document::language() const
+{
+    return d->language;
+}
+
+void Document::setLanguage(const QString &name)
+{
+    d->userLanguage = true;
+    if (name != d->language) {
+        d->language = name;
+        Q_EMIT languageChanged();
+    }
+    d->applyLanguage();
+    Q_EMIT viewStateChanged();
+}
+
+bool Document::insertSpaces() const
+{
+    return d->insertSpaces;
+}
+
+void Document::setInsertSpaces(bool on)
+{
+    d->userIndent = true;
+    if (on != d->insertSpaces) {
+        d->insertSpaces = on;
+        Q_EMIT indentChanged();
+    }
+    Q_EMIT viewStateChanged();
+}
+
+int Document::indentWidth() const
+{
+    return d->indentWidth;
+}
+
+void Document::setIndentWidth(int width)
+{
+    width = qBound(1, width, 16);
+    d->userIndent = true;
+    if (width != d->indentWidth) {
+        d->indentWidth = width;
+        Q_EMIT indentChanged();
+    }
+    Q_EMIT viewStateChanged();
 }
 
 bool Document::isFormatted() const

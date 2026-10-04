@@ -62,6 +62,8 @@ public:
     Q_INVOKABLE QPoint bracketPair(int cursor);
     Q_INVOKABLE QString commentMarker() const;
     Q_INVOKABLE static QStringList languages();
+    // Highlights the whole document again, now (the bench times it).
+    void rehighlightNow();
 
 Q_SIGNALS:
     void textEditChanged();

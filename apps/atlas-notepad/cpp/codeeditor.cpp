@@ -139,6 +139,13 @@ void CodeEditor::setIndentWidth(int width)
     }
 }
 
+void CodeEditor::rehighlightNow()
+{
+    if (m_highlighter) {
+        m_highlighter->rehighlight();
+    }
+}
+
 void CodeEditor::applyHighlighting()
 {
     if (!m_doc) {

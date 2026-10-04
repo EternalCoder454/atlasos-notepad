@@ -1379,6 +1379,140 @@ private Q_SLOTS:
         QTRY_COMPARE(list->documents()[1]->banner(), Document::Deleted);
     }
 
+    // ---- Light coding
+
+    void codeLanguageFromName()
+    {
+        DocumentList *list = newList();
+        struct Case { const char *name; const char *language; bool code; };
+        const Case cases[] = {
+            {"a.py", "Python", true},
+            {"a.rs", "Rust", true},
+            {"a.c", "C", true},
+            {"CMakeLists.txt", "CMake", true},
+            {"notes.txt", "", false},
+            {"readme.md", "", false},
+            {"plain.text", "", false},
+        };
+        for (const Case &c : cases) {
+            Document *doc = openFile(list, write(QString::fromLatin1(c.name), "x\n"));
+            QVERIFY2(doc, c.name);
+            QCOMPARE(doc->language(), QString::fromLatin1(c.language));
+            QCOMPARE(doc->property("code").toBool(), c.code);
+        }
+        // Untitled: not code.
+        list->newTab();
+        QCOMPARE(list->current()->language(), QString());
+        QVERIFY(!list->current()->property("code").toBool());
+        // Save As renames the language with the file.
+        Document *doc = openFile(list, write(QStringLiteral("r.txt"), "fn main() {}\n"));
+        QVERIFY(!doc->property("code").toBool());
+        QSignalSpy codeSpy(doc, &Document::codeChanged);
+        doc->saveAs(QUrl::fromLocalFile(m_dir + QStringLiteral("/r.rs")));
+        QTRY_COMPARE(doc->language(), QStringLiteral("Rust"));
+        QVERIFY(doc->property("code").toBool());
+        QVERIFY(codeSpy.count() >= 1);
+    }
+
+    void codeIndentDetection()
+    {
+        DocumentList *list = newList();
+        struct Case { const char *name; QByteArray text; bool spaces; int width; };
+        const Case cases[] = {
+            {"i1.c", "int f() {\n\tif (x) {\n\t\ty();\n\t}\n}\n", false, 4},
+            {"i2.c", "int f() {\n  if (x) {\n    y();\n  }\n}\n", true, 2},
+            {"i3.c", "int f() {\n    if (x) {\n        y();\n    }\n}\n", true, 4},
+            {"i4.c", "int f() {\n        y();\n}\n", true, 8},
+            // More tab lines than space lines: tabs; the reverse: spaces.
+            {"i5.c", "a\n\tb\n\tc\n  d\n", false, 4},
+            {"i6.c", "a\n\tb\n    c\n    d\n", true, 4},
+            {"i7.c", "", true, 4},
+            {"i8.c", "no indent\nat all\n", true, 4},
+        };
+        for (const Case &c : cases) {
+            Document *doc = openFile(list, write(QString::fromLatin1(c.name), c.text));
+            QVERIFY2(doc, c.name);
+            QVERIFY2(doc->insertSpaces() == c.spaces, c.name);
+            QVERIFY2(doc->indentWidth() == c.width, c.name);
+        }
+        // Only the first 64 KB are read: a file that turns to tabs later is spaces.
+        QByteArray big;
+        while (big.size() < 70 * 1024) {
+            big += "    x\n";
+        }
+        for (int i = 0; i < 20000; ++i) {
+            big += "\tx\n";
+        }
+        Document *doc = openFile(list, write(QStringLiteral("big.c"), big));
+        QVERIFY(doc->insertSpaces());
+    }
+
+    void codeUserSettingsPersist()
+    {
+        const QString path = write(QStringLiteral("p.txt"), "\tx\n");
+        m_app->start({});
+        DocumentList *list = m_app->windows().first();
+        Document *doc = openFile(list, path);
+        QVERIFY(doc);
+        QVERIFY(!doc->insertSpaces() && doc->language().isEmpty());
+        doc->setLanguage(QStringLiteral("Python"));
+        doc->setInsertSpaces(true);
+        doc->setIndentWidth(3);
+        QVERIFY(doc->property("code").toBool());
+        Document *other = openFile(list, write(QStringLiteral("q.py"), "def f():\n  pass\n"));
+        other->setIndentWidth(99); // clamped
+        QCOMPARE(other->indentWidth(), 16);
+        const QString detectedPath = write(QStringLiteral("r.py"), "x\n");
+        openFile(list, detectedPath);
+        m_app->saveSession();
+
+        restart();
+        m_app->start({});
+        list = m_app->windows().first();
+        const auto docs = list->documents();
+        auto byPath = [&](const QString &p) -> Document * {
+            for (Document *d : docs) {
+                if (d->path() == p) {
+                    return d;
+                }
+            }
+            return nullptr;
+        };
+        Document *a = byPath(path);
+        Document *b = byPath(m_dir + QStringLiteral("/q.py"));
+        QVERIFY(a && b);
+        QVERIFY(QTest::qWaitFor([&] { return !a->isLoading(); }));
+        QCOMPARE(a->path(), path);
+        QCOMPARE(a->language(), QStringLiteral("Python")); // wins over detection (none)
+        QVERIFY(a->property("code").toBool());
+        QVERIFY(a->insertSpaces()); // wins over the file's tab
+        QCOMPARE(a->indentWidth(), 3);
+        QVERIFY(QTest::qWaitFor([&] { return !b->isLoading(); }));
+        QCOMPARE(b->language(), QStringLiteral("Python"));
+        QCOMPARE(b->indentWidth(), 16);
+        // Not set by the user: not in the session file.
+        const QJsonArray tabs = sessionJson().value(QStringLiteral("windows")).toArray().at(0).toObject().value(QStringLiteral("tabs")).toArray();
+        bool seen = false;
+        for (const QJsonValue &t : tabs) {
+            if (t.toObject().value(QStringLiteral("path")).toString() == detectedPath) {
+                seen = true;
+                QVERIFY(!t.toObject().contains(QStringLiteral("language")));
+                QVERIFY(!t.toObject().contains(QStringLiteral("indentWidth")));
+            }
+        }
+        QVERIFY(seen);
+    }
+
+    void codeLineNumbersSetting()
+    {
+        QVERIFY(m_app->settings()->codeLineNumbers());
+        QSignalSpy spy(m_app->settings(), &Settings::codeLineNumbersChanged);
+        m_app->settings()->setCodeLineNumbers(false);
+        QVERIFY(!m_app->settings()->codeLineNumbers());
+        QCOMPARE(spy.count(), 1);
+        m_app->settings()->setCodeLineNumbers(true);
+    }
+
     void sessionOffStartsEmpty()
     {
         m_app->start({});

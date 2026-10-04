@@ -1,4 +1,5 @@
 #include "bench.h"
+#include "codeeditor.h"
 #include "markdown.h"
 
 #include <QCoreApplication>
@@ -20,12 +21,13 @@ enum Group { Type, Enter, Erase, Arrows, Scroll, Groups };
 constexpr int TextKey = -1;
 }
 
-Bench::Bench(QQuickWindow *window, QQuickItem *edit, QQuickItem *view, MarkdownEditor *editor, const QString &file)
+Bench::Bench(QQuickWindow *window, QQuickItem *edit, QQuickItem *view, MarkdownEditor *editor, CodeEditor *code, const QString &file)
     : QObject(window)
     , m_window(window)
     , m_edit(edit)
     , m_view(view)
     , m_editor(editor)
+    , m_code(code)
     , m_file(file)
     , m_total(Groups)
     , m_handle(Groups)
@@ -37,7 +39,9 @@ Bench::Bench(QQuickWindow *window, QQuickItem *edit, QQuickItem *view, MarkdownE
 
     // A sentence with the usual inline syntax, typed into the middle of the
     // document, four times, a line each; then some erasing and caret moves.
-    const QString sentence = QStringLiteral("The quick **brown** fox jumps over the _lazy_ dog, see `code` and [a link](https://example.org). ");
+    // A code file gets a line of C++ instead.
+    const QString sentence = code ? QStringLiteral("total += compute(values[i], 42) * scale; // keep \"quoted\" text ")
+                                  : QStringLiteral("The quick **brown** fox jumps over the _lazy_ dog, see `code` and [a link](https://example.org). ");
     for (int r = 0; r < 4; ++r) {
         for (const QChar ch : sentence) {
             m_steps.push_back({Type, TextKey, QString(ch)});
@@ -72,7 +76,11 @@ void Bench::start()
     // highlight and layout run, then start.
     QTimer::singleShot(800, this, [this] {
         const qint64 t = m_clock.nsecsElapsed();
-        m_editor->rehighlightNow();
+        if (m_editor) {
+            m_editor->rehighlightNow();
+        } else if (m_code) {
+            m_code->rehighlightNow();
+        }
         m_highlightMs = double(m_clock.nsecsElapsed() - t) / 1e6;
         QTextDocument *doc = document();
         const QTextBlock middle = doc->findBlockByNumber(doc->blockCount() / 2);

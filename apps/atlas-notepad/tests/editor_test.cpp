@@ -1,5 +1,6 @@
 // MarkdownEditor's edits on a real TextEdit: keys go through its event filter
 // and toolbar calls through its invokables, and the test reads back the text.
+#include "codeeditor.h"
 #include "markdown.h"
 
 #include <QClipboard>
@@ -26,6 +27,25 @@ private:
     QQmlEngine m_engine;
     std::unique_ptr<QQuickItem> m_edit;
     std::unique_ptr<MarkdownEditor> m_editor;
+    std::unique_ptr<CodeEditor> m_code;
+
+    // A fresh TextEdit holding `text` with a CodeEditor on it.
+    void openCode(const QString &text, const QString &language = QStringLiteral("C++"), bool spaces = true, int width = 4)
+    {
+        m_code.reset();
+        m_editor.reset();
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nTextEdit { textFormat: TextEdit.PlainText }", QUrl());
+        m_edit.reset(qobject_cast<QQuickItem *>(component.create()));
+        QVERIFY2(m_edit, qPrintable(component.errorString()));
+        m_edit->setProperty("text", text);
+        m_code = std::make_unique<CodeEditor>();
+        m_code->setLanguage(language);
+        m_code->setInsertSpaces(spaces);
+        m_code->setIndentWidth(width);
+        m_code->setTextEdit(m_edit.get());
+        QCoreApplication::processEvents();
+    }
 
     // A fresh TextEdit holding `text`, read and formatted.
     void open(const QString &text)
@@ -883,6 +903,240 @@ private:
         const BlockInfo *info = BlockInfo::of(doc->begin());
         return info ? info->misspelled : QList<QPair<int, int>>{};
     }
+
+private Q_SLOTS:
+    // ---- CodeEditor
+
+    void codeLanguages()
+    {
+        const QStringList names = CodeEditor::languages();
+        QVERIFY(names.contains(QStringLiteral("C++")));
+        QVERIFY(names.contains(QStringLiteral("Python")));
+        QCOMPARE(names.size(), QSet<QString>(names.begin(), names.end()).size());
+    }
+    void codeHighlightsAndDetaches()
+    {
+        openCode(QStringLiteral("int x = 1; // hi\n"));
+        QVERIFY(!blockAt(0).layout()->formats().isEmpty());
+        m_code->setLanguage(QString());
+        QVERIFY(blockAt(0).layout()->formats().isEmpty());
+        m_code->setLanguage(QStringLiteral("C++"));
+        QVERIFY(!blockAt(0).layout()->formats().isEmpty());
+        m_code->setDark(true);
+        QVERIFY(!blockAt(0).layout()->formats().isEmpty());
+        m_code->setTextEdit(nullptr);
+        QVERIFY(blockAt(0).layout()->formats().isEmpty());
+    }
+    void codeToggleComment()
+    {
+        openCode(QStringLiteral("  a\n    b\n\n  c"));
+        QCOMPARE(m_code->commentMarker(), QStringLiteral("//"));
+        m_code->toggleComment(0, text().size());
+        QCOMPARE(text(), QStringLiteral("  // a\n  //   b\n\n  // c"));
+        m_code->toggleComment(0, text().size());
+        QCOMPARE(text(), QStringLiteral("  a\n    b\n\n  c"));
+        // One uncommented line makes the toggle comment all of them.
+        openCode(QStringLiteral("// a\nb"));
+        m_code->toggleComment(0, 6);
+        QCOMPARE(text(), QStringLiteral("// // a\n// b"));
+        // One undo step.
+        QMetaObject::invokeMethod(m_edit.get(), "undo");
+        QCOMPARE(text(), QStringLiteral("// a\nb"));
+        // [from, to) stops before a line the range ends at the start of.
+        openCode(QStringLiteral("a\nb\nc"));
+        m_code->toggleComment(0, 2);
+        QCOMPARE(text(), QStringLiteral("// a\nb\nc"));
+        // No single-line marker: the multi-line pair wraps each line.
+        openCode(QStringLiteral("<a>\n<b>"), QStringLiteral("HTML"));
+        m_code->toggleComment(0, 7);
+        QCOMPARE(text(), QStringLiteral("<!-- <a> -->\n<!-- <b> -->"));
+        m_code->toggleComment(0, text().size());
+        QCOMPARE(text(), QStringLiteral("<a>\n<b>"));
+        // No language: nothing happens.
+        openCode(QStringLiteral("a"), QString());
+        m_code->toggleComment(0, 1);
+        QCOMPARE(text(), QStringLiteral("a"));
+    }
+    void codeIndentOutdent()
+    {
+        openCode(QStringLiteral("a\n\n  b\nc"));
+        m_code->indentLines(0, text().size());
+        QCOMPARE(text(), QStringLiteral("    a\n\n      b\n    c"));
+        m_code->outdentLines(0, text().size());
+        QCOMPARE(text(), QStringLiteral("a\n\n  b\nc"));
+        openCode(QStringLiteral("a\n\tb"), QStringLiteral("C++"), false);
+        m_code->indentLines(0, 5);
+        QCOMPARE(text(), QStringLiteral("\ta\n\t\tb"));
+        m_code->outdentLines(3, 4);
+        QCOMPARE(text(), QStringLiteral("\ta\n\tb"));
+        m_code->outdentLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("a\n\tb"));
+    }
+    void codeSortLines()
+    {
+        openCode(QStringLiteral("pear\nApple\napple\nbanana"));
+        m_code->sortLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("Apple\napple\nbanana\npear")); // stable: Apple stays first
+        openCode(QStringLiteral("z\nc\nb\na"));
+        m_code->sortLines(2, 5); // lines 2..4 only
+        QCOMPARE(text(), QStringLiteral("z\nb\nc\na"));
+    }
+    void codeChangeCase()
+    {
+        openCode(QStringLiteral("hello wORLD foo"));
+        m_code->changeCase(0, 11, 0);
+        QCOMPARE(text(), QStringLiteral("HELLO WORLD foo"));
+        m_code->changeCase(0, 11, 1);
+        QCOMPARE(text(), QStringLiteral("hello world foo"));
+        m_code->changeCase(0, 15, 2);
+        QCOMPARE(text(), QStringLiteral("Hello World Foo"));
+        m_code->changeCase(7, 7, 0); // the word at the caret
+        QCOMPARE(text(), QStringLiteral("Hello WORLD Foo"));
+        m_code->changeCase(0, 5, 7); // a bad mode does nothing
+        QCOMPARE(text(), QStringLiteral("Hello WORLD Foo"));
+    }
+    void codeTrimTrailingSpaces()
+    {
+        openCode(QStringLiteral("a  \n\t\nb\t \nc"));
+        place(1);
+        m_code->trimTrailingSpaces();
+        QCOMPARE(text(), QStringLiteral("a\n\nb\nc"));
+        QCOMPARE(caret(), 1);
+    }
+    void codeBracketPair()
+    {
+        openCode(QStringLiteral("f(a[1], {x})"));
+        QCOMPARE(m_code->bracketPair(2), QPoint(1, 11)); // just after "("
+        QCOMPARE(m_code->bracketPair(1), QPoint(1, 11)); // at "("
+        QCOMPARE(m_code->bracketPair(12), QPoint(11, 1)); // after ")"
+        QCOMPARE(m_code->bracketPair(4), QPoint(3, 5)); // [ ]
+        QCOMPARE(m_code->bracketPair(0), QPoint(-1, -1)); // next to "f" only
+        QCOMPARE(m_code->bracketPair(7), QPoint(-1, -1)); // between ", "
+        openCode(QStringLiteral("a ( b"));
+        QCOMPARE(m_code->bracketPair(3), QPoint(-1, -1)); // unbalanced
+        openCode(QStringLiteral("a ) b"));
+        QCOMPARE(m_code->bracketPair(3), QPoint(-1, -1));
+        openCode(QStringLiteral("(()"));
+        QCOMPARE(m_code->bracketPair(1), QPoint(-1, -1));
+        QCOMPARE(m_code->bracketPair(2), QPoint(1, 2));
+        openCode(QString());
+        QCOMPARE(m_code->bracketPair(0), QPoint(-1, -1));
+        QCOMPARE(m_code->bracketPair(-5), QPoint(-1, -1));
+        // The scan gives up after 20k characters.
+        openCode(u'(' + QString(30'000, u'x') + u')');
+        QCOMPARE(m_code->bracketPair(1), QPoint(-1, -1));
+        openCode(u'(' + QString(1000, u'x') + u')');
+        QCOMPARE(m_code->bracketPair(1), QPoint(0, 1001));
+    }
+    void codeEnterAutoIndent()
+    {
+        openCode(QStringLiteral("  if (x) {"));
+        place(10);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("  if (x) {\n      "));
+        QCOMPARE(caret(), text().size());
+        // Plain line keeps its indent.
+        openCode(QStringLiteral("  foo();"));
+        place(8);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("  foo();\n  "));
+        // Between { and }: the } goes on its own line.
+        openCode(QStringLiteral("  f() {}"));
+        place(7);
+        press(Qt::Key_Enter);
+        QCOMPARE(text(), QStringLiteral("  f() {\n      \n  }"));
+        QCOMPARE(caret(), 14);
+        // Python's colon, with trailing spaces.
+        openCode(QStringLiteral("def f():  "), QStringLiteral("Python"));
+        place(10);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("def f():  \n    "));
+        // Tabs mode.
+        openCode(QStringLiteral("\tx = [\n"), QStringLiteral("C++"), false);
+        place(6);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("\tx = [\n\t\t\n"));
+        // A selection is replaced; one undo step restores it.
+        openCode(QStringLiteral("ab cd"));
+        select(1, 4);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("a\nd"));
+        QMetaObject::invokeMethod(m_edit.get(), "undo");
+        QCOMPARE(text(), QStringLiteral("ab cd"));
+        // Read-only: passes through (and the TextEdit refuses it).
+        openCode(QStringLiteral("x {"));
+        m_edit->setProperty("readOnly", true);
+        place(3);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("x {"));
+    }
+    void codeTabKey()
+    {
+        openCode(QStringLiteral("ab"));
+        place(2);
+        press(Qt::Key_Tab);
+        QCOMPARE(text(), QStringLiteral("ab  ")); // to column 4
+        place(0);
+        press(Qt::Key_Tab);
+        QCOMPARE(text(), QStringLiteral("    ab  "));
+        QCOMPARE(caret(), 4);
+        // Tabs mode.
+        openCode(QStringLiteral("ab"), QStringLiteral("C++"), false);
+        place(1);
+        press(Qt::Key_Tab);
+        QCOMPARE(text(), QStringLiteral("a\tb"));
+        // A selection inside a line is replaced.
+        openCode(QStringLiteral("abcd"), QStringLiteral("C++"), true, 2);
+        select(1, 3);
+        press(Qt::Key_Tab);
+        QCOMPARE(text(), QStringLiteral("a d")); // column 1 to the next multiple of 2
+        // Over several lines: indentLines; Backtab: outdentLines.
+        openCode(QStringLiteral("a\nb\nc"));
+        select(0, 3);
+        press(Qt::Key_Tab);
+        QCOMPARE(text(), QStringLiteral("    a\n    b\nc"));
+        QKeyEvent back(QEvent::KeyPress, Qt::Key_Backtab, Qt::ShiftModifier);
+        QCoreApplication::sendEvent(m_edit.get(), &back);
+        QCOMPARE(text(), QStringLiteral("a\nb\nc"));
+        // Backtab with no selection outdents the caret's line.
+        openCode(QStringLiteral("    a"));
+        place(5);
+        QCoreApplication::sendEvent(m_edit.get(), &back);
+        QCOMPARE(text(), QStringLiteral("a"));
+    }
+    void codeClosingBracketDedents()
+    {
+        openCode(QStringLiteral("if (x) {\n    foo();\n    "));
+        place(text().size());
+        type(QStringLiteral("}"));
+        QCOMPARE(text(), QStringLiteral("if (x) {\n    foo();\n}"));
+        QCOMPARE(caret(), text().size());
+        QMetaObject::invokeMethod(m_edit.get(), "undo");
+        QCOMPARE(text(), QStringLiteral("if (x) {\n    foo();\n    "));
+        // Not the first non-space character: no dedent.
+        openCode(QStringLiteral("    a"));
+        place(5);
+        type(QStringLiteral(")"));
+        QCOMPARE(text(), QStringLiteral("    a)"));
+        // Nothing to dedent: passes through.
+        openCode(QStringLiteral(""));
+        type(QStringLiteral("]"));
+        QCOMPARE(text(), QStringLiteral("]"));
+        // Tabs.
+        openCode(QStringLiteral("\t\t"), QStringLiteral("C++"), false);
+        place(2);
+        type(QStringLiteral("}"));
+        QCOMPARE(text(), QStringLiteral("\t}"));
+    }
+    void codeDetachedPassesKeysThrough()
+    {
+        openCode(QStringLiteral("x {"));
+        m_code->setTextEdit(nullptr);
+        place(3);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("x {\n"));
+    }
+
 };
 
 QTEST_MAIN(EditorTest)
