@@ -732,6 +732,19 @@ private Q_SLOTS:
         QVERIFY(!all.contains(QStringLiteral("secret")));
         QVERIFY(all.contains(QStringLiteral("net.eterneon.atlas.notepad")));
     }
+    void recentDocumentsWrittenOnQuit()
+    {
+        // Quitting before the deferred write still records the file.
+        m_app->addRecentFile(QStringLiteral("sftp://host/dir/opened-then-quit.txt"));
+        delete m_app;
+        m_app = new App(nullptr);
+        QString all;
+        QDirIterator it(QString::fromUtf8(qgetenv("XDG_DATA_HOME")), QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            all += QString::fromUtf8(read(it.next()));
+        }
+        QVERIFY(all.contains(QStringLiteral("host/dir/opened-then-quit.txt")));
+    }
 
     void recentDocumentsFollowKdeSetting()
     {

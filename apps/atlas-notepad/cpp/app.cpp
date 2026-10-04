@@ -33,6 +33,7 @@
 #include <QTimer>
 
 #include <memory>
+#include <utility>
 
 namespace
 {
@@ -104,6 +105,16 @@ struct App::Private {
     QTimer saveTimer; // quiet period
     QTimer maxTimer; // longest an unsaved change waits
     DirNotifyListener *dirNotify = nullptr;
+    QList<QUrl> kdeRecent; // waiting for kdeRecentTimer
+    QTimer kdeRecentTimer;
+    void flushKdeRecent()
+    {
+        kdeRecentTimer.stop();
+        const QList<QUrl> urls = std::exchange(kdeRecent, {});
+        for (const QUrl &url : urls) {
+            KRecentDocument::add(url, QStringLiteral("net.eterneon.atlas.notepad"));
+        }
+    }
     bool hasMenu = false;
     bool restoring = false; // Session::beginRestore() without endRestore() yet
     QString problem; // sessionProblem
@@ -361,6 +372,9 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
     s_instance = this;
     d->q = this;
     QTimer::singleShot(1500, this, &App::startDirNotify); // after the first frames
+    d->kdeRecentTimer.setSingleShot(true);
+    d->kdeRecentTimer.setInterval(kdeRecentDelayMs);
+    connect(&d->kdeRecentTimer, &QTimer::timeout, this, [this] { d->flushKdeRecent(); });
     d->engine = engine;
     d->settings = new Settings(this);
     d->saveTimer.setSingleShot(true);
@@ -391,6 +405,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
                 // active again (below) resets this.
                 d->quitting = true;
                 saveSession();
+                d->flushKdeRecent();
             }, Qt::DirectConnection);
             connect(guiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
                 if (state != Qt::ApplicationActive) {
@@ -420,6 +435,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
 
 App::~App()
 {
+    d->flushKdeRecent(); // a file opened just before quitting still counts
     d->stopTimers();
     d->endRestore();
     // The engine outlives App (main.cpp makes it first); its windows go
@@ -662,9 +678,12 @@ void App::addRecentFile(const QString &path)
     // password, a local file is a file: URL.
     // Writing the file takes ms (and the first time creates it): not before
     // the text is on screen.
-    QTimer::singleShot(kdeRecentDelayMs, this, [absolute] {
-        KRecentDocument::add(Remote::isStoredUrl(absolute) ? QUrl(absolute) : QUrl::fromLocalFile(absolute), QStringLiteral("net.eterneon.atlas.notepad"));
-    });
+    // (Written on quit at the latest.)
+    const QUrl url = Remote::isStoredUrl(absolute) ? QUrl(absolute) : QUrl::fromLocalFile(absolute);
+    if (!d->kdeRecent.contains(url)) {
+        d->kdeRecent.append(url);
+    }
+    d->kdeRecentTimer.start();
 }
 
 void App::renameRecent(const QString &from, const QString &to)
@@ -680,6 +699,8 @@ void App::renameRecent(const QString &from, const QString &to)
     Q_EMIT recentFilesChanged();
     // KDE's list too: the old name goes, the new one comes.
     auto asUrl = [](const QString &p) { return Remote::isStoredUrl(p) ? QUrl(p) : QUrl::fromLocalFile(p); };
+    // The old name may still be waiting to be written: it never is now.
+    d->kdeRecent.removeAll(asUrl(from));
     KRecentDocument::removeFile(asUrl(from));
     KRecentDocument::add(asUrl(to), QStringLiteral("net.eterneon.atlas.notepad"));
 }
