@@ -544,6 +544,30 @@ private Q_SLOTS:
         QCOMPARE(at(9999), 0);
     }
 
+    void formatsAtHeadingStrongOnlyInFormattedView()
+    {
+        open(QStringLiteral("# Head **strong** end"));
+        const int word = text().indexOf(u"strong") + 2;
+        QVERIFY(m_editor->formatsAt(word, word) & MarkdownEditor::FmtBold);
+        QVERIFY(!(m_editor->formatsAt(2, 2) & MarkdownEditor::FmtBold));
+        // The Syntax view draws the whole heading bold: not told apart.
+        m_editor->setFormatted(false);
+        m_editor->rehighlightNow();
+        QVERIFY(!(m_editor->formatsAt(word, word) & MarkdownEditor::FmtBold));
+        QVERIFY(!(m_editor->formatsAt(2, 2) & MarkdownEditor::FmtBold));
+    }
+
+    void formatsAtOnALongLine()
+    {
+        QString line;
+        for (int i = 0; i < 5000; ++i) {
+            line += QStringLiteral("a *b* ");
+        }
+        open(line);
+        QVERIFY(m_editor->formatsAt(line.size() - 2, line.size() - 2) & MarkdownEditor::FmtItalic);
+        QVERIFY(!(m_editor->formatsAt(0, 0) & MarkdownEditor::FmtItalic));
+    }
+
     void clearFormattingKeepsText()
     {
         open(QStringLiteral("# A **b** [c](u) \\*"));

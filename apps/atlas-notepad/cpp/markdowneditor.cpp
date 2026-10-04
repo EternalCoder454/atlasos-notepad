@@ -4,6 +4,8 @@
 // is one step on the document's own undo stack.
 #include "markdown.h"
 
+#include <algorithm>
+
 #include <QAbstractTextDocumentLayout>
 #include <QFontDatabase>
 #include <QKeyEvent>
@@ -902,8 +904,11 @@ int MarkdownEditor::formatsAt(int start, int end) const
     }
     end = qMax(start, end);
     const QTextBlock block = m_doc->findBlock(start);
+    if (!block.isValid()) {
+        return 0;
+    }
     const BlockInfo *info = BlockInfo::of(block);
-    if (!block.isValid() || !info) {
+    if (!info) {
         return 0;
     }
     int bits = 0;
@@ -933,17 +938,18 @@ int MarkdownEditor::formatsAt(int start, int end) const
     const int from = start - block.position();
     const int to = qMin(end, block.position() + block.length() - 1) - block.position();
     const bool caret = start == end;
+    // The ranges are sorted and don't overlap: jump to the first one that
+    // reaches the characters looked at, and stop after the last (a long line
+    // has thousands).
+    const int lo = caret ? (from > 0 ? from - 1 : from) : from;
+    const int hi = caret ? lo + 1 : to;
     const auto formats = block.layout() ? block.layout()->formats() : QList<QTextLayout::FormatRange>();
-    for (const auto &r : formats) {
-        const int rs = r.start;
-        const int re = r.start + r.length;
-        const bool hit = caret ? ((from > 0 ? from - 1 : from) >= rs && (from > 0 ? from - 1 : from) < re) : (rs < to && re > from);
-        if (!hit) {
-            continue;
-        }
-        const QTextCharFormat &f = r.format;
-        // A heading is bold by itself: only its own bold (Strong) counts, and
-        // the Syntax view draws the whole line bold.
+    auto it = std::partition_point(formats.cbegin(), formats.cend(), [lo](const QTextLayout::FormatRange &r) { return r.start + r.length <= lo; });
+    for (; it != formats.cend() && it->start < hi; ++it) {
+        const QTextCharFormat &f = it->format;
+        // A heading is bold by itself: only its own bold (Strong) counts when
+        // it can be told apart. The Syntax view draws the whole heading line
+        // bold, so a **strong** word in a heading is not reported there.
         if (f.fontWeight() >= QFont::Bold && (!heading || formatted())) {
             bits |= FmtBold;
         }
