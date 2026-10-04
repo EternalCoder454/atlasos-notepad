@@ -2,6 +2,9 @@
 // and toolbar calls through its invokables, and the test reads back the text.
 #include "markdown.h"
 
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QInputMethodEvent>
 #include <QKeyEvent>
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -211,6 +214,40 @@ private Q_SLOTS:
         QCOMPARE(text(), QStringLiteral("1. one\n2. two"));
         QMetaObject::invokeMethod(m_edit.get(), "undo");
         QCOMPARE(text(), QStringLiteral("one\ntwo"));
+    }
+
+    // Copy takes the Markdown as written, hidden markers included.
+    void copyGivesMarkdown()
+    {
+        const QString md = QStringLiteral("# Head\n**bold** and [link](https://x.org)\n- [ ] item");
+        open(md);
+        select(0, int(md.size()));
+        QMetaObject::invokeMethod(m_edit.get(), "copy");
+        QCOMPARE(QGuiApplication::clipboard()->text(), md);
+        select(7, 15);
+        QMetaObject::invokeMethod(m_edit.get(), "copy");
+        QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("**bold**"));
+    }
+
+    // An input method's preedit text isn't part of the document until it's
+    // committed, and a commit inside a span keeps the span.
+    void inputMethodCommitsIntoSpans()
+    {
+        open(QStringLiteral("**bold**\n- item"));
+        place(4);
+        QInputMethodEvent preedit(QStringLiteral("ni"), {});
+        QCoreApplication::sendEvent(m_edit.get(), &preedit);
+        QCOMPARE(text(), QStringLiteral("**bold**\n- item"));
+        QInputMethodEvent commit;
+        commit.setCommitString(QStringLiteral("你"));
+        QCoreApplication::sendEvent(m_edit.get(), &commit);
+        QCOMPARE(text(), QStringLiteral("**bo你ld**\n- item"));
+        place(int(text().size()));
+        QInputMethodEvent accent;
+        accent.setCommitString(QStringLiteral("é"));
+        QCoreApplication::sendEvent(m_edit.get(), &accent);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("**bo你ld**\n- itemé\n- "));
     }
 
     void enterRenumbersTheRest()
