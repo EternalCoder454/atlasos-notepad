@@ -18,8 +18,10 @@
 #include <QLocale>
 #include <QPrintDialog>
 #include <QPrinter>
+#include <QPrinterInfo>
 #include <QProcess>
 #include <QScreen>
+#include <QStandardPaths>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QTextDocument>
@@ -511,6 +513,18 @@ void App::print(Document *document, QQuickWindow *parent)
         return;
     }
     QPrinter printer;
+    const QString title = document->title();
+    printer.setDocName(title);
+    // With no printer, Print to File is the choice: suggest <name>.pdf beside
+    // the file (in Documents for a new tab). Qt names the file only on X11;
+    // on Wayland it suggests a bare folder. With a printer, an output file
+    // would make the dialog choose Print to File over it.
+    if (QPrinterInfo::defaultPrinterName().isEmpty()) {
+        const QString path = document->path();
+        const QString base = path.isEmpty() ? title : QFileInfo(path).completeBaseName();
+        const QString dir = path.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : QFileInfo(path).absolutePath();
+        printer.setOutputFileName(QDir(dir).filePath(base + QStringLiteral(".pdf")));
+    }
     QPrintDialog dialog(&printer);
     dialog.setAttribute(Qt::WA_NativeWindow);
     dialog.winId();
