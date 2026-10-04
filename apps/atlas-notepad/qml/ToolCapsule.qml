@@ -34,7 +34,9 @@ Item {
     // Whether the pointer is within `nearDistance` of the capsule: the parent
     // watches it, as a handler on the capsule would only see the capsule.
     property bool pointerNear: false
-    readonly property bool near: pointerNear || headingMenu.visible || moreMenu.visible
+    // A button has the keyboard focus (Tab): full strength, like the pointer.
+    property bool focusInside: false
+    readonly property bool near: pointerNear || focusInside || headingMenu.visible || moreMenu.visible
     readonly property real nearDistance: 80
 
     // `force`: a menu item ran, so the editor takes the focus back; else it
@@ -348,7 +350,8 @@ Item {
             while (item && item !== column) {
                 item = item.parent;
             }
-            if (item && focused) {
+            capsule.focusInside = !!(item && focused);
+            if (capsule.focusInside) {
                 capsule.reveal(focused);
             }
         }
