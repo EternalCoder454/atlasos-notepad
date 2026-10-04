@@ -184,6 +184,7 @@ struct Document::Private {
     void stepHeldScroll(int generation);
     QPointer<QQuickItem> heldFlick;
     qreal heldScroll = -1;
+    qreal heldSet = -1; // what the last step set, to tell a user scroll apart
     int heldGeneration = 0;
     QElapsedTimer heldClock;
     QQuickItem *flickable() const;

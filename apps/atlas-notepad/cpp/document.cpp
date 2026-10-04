@@ -630,7 +630,7 @@ void Document::Private::applyView()
     if (y > 0) {
         QPointer<QQuickItem> flick = flickable();
         if (flick) {
-            QTimer::singleShot(0, flick, [this, flick, y] {
+            QTimer::singleShot(0, q, [this, flick, y] {
                 if (flick) {
                     holdScroll(flick, y);
                 }
@@ -643,6 +643,7 @@ void Document::Private::holdScroll(QQuickItem *flick, qreal y)
 {
     heldFlick = flick;
     heldScroll = y;
+    heldSet = -1;
     heldClock.start();
     stepHeldScroll(++heldGeneration);
 }
@@ -652,9 +653,17 @@ void Document::Private::stepHeldScroll(int generation)
     if (generation != heldGeneration || !heldFlick || heldScroll < 0) {
         return; // a newer hold, or the view is gone
     }
+    // The user scrolled (or the caret moved the view) since the last step:
+    // their position wins.
+    if (heldSet >= 0 && qAbs(heldFlick->property("contentY").toReal() - heldSet) > 0.5) {
+        heldFlick = nullptr;
+        heldScroll = -1;
+        return;
+    }
     // Never past the end: a stale or bad value would show nothing.
     const qreal end = qMax(0.0, heldFlick->property("contentHeight").toReal() - heldFlick->height());
-    heldFlick->setProperty("contentY", qBound(0.0, heldScroll, end));
+    heldSet = qBound(0.0, heldScroll, end);
+    heldFlick->setProperty("contentY", heldSet);
     // Done once the content reaches it; else (a text shorter than it, or a
     // layout that never gets there) after a second.
     if (end >= heldScroll || heldClock.hasExpired(1000)) {

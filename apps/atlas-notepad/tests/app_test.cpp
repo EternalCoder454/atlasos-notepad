@@ -2653,6 +2653,25 @@ private Q_SLOTS:
         QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), scroll, 5000);
     }
 
+    // While the restore waits for the layout, a scroll by the user wins: the
+    // view doesn't jump back to the restored place once the layout arrives.
+    void restoredScrollYieldsToTheUser()
+    {
+        Document *doc = openFile(newList(), write(QStringLiteral("late.txt"), QByteArray("one two three four five six seven eight nine ten\n").repeated(300)));
+        QVERIFY(doc);
+        doc->d->cursor = doc->d->anchor = 0;
+        doc->d->scrollY = 800.0;
+        QQuickItem *flick = attachInLaggingFlickable(doc);
+        QVERIFY(flick);
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldSet >= 0); // the hold has made its first step
+        QVERIFY(doc->d->heldScroll > 0); // and is still waiting
+        flick->setProperty("contentY", 5.0); // the wheel
+        QTest::qWait(1200); // past the hold's second
+        QVERIFY(flick->property("contentHeight").toReal() > 900);
+        QCOMPARE(flick->property("contentY").toReal(), 5.0);
+    }
+
     // A reload of a big text keeps a scroll past the first piece, though the
     // view clamps it to the first piece meanwhile: that isn't the user's.
     void reloadKeepsAScrollPastTheFirstPiece()
