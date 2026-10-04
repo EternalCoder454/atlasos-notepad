@@ -564,6 +564,9 @@ QQC2.ApplicationWindow {
                 onCloseRequested: index => root.closeTab(index)
                 onNewRequested: root.documents.newTab()
                 onMoved: (from, to) => root.documents.move(from, to)
+                // Escape on a tab hands the keyboard back to the editor (the
+                // tab ignores it, so it reaches the bar).
+                Keys.onEscapePressed: if (root.view) root.view.focusEditor()
                 // Right-click, or the Menu key / Shift+F10 on a focused tab.
                 onContextMenuRequested: (index, position) => {
                     tabMenu.tabIndex = index;
@@ -612,6 +615,9 @@ QQC2.ApplicationWindow {
             ContextMenu {
                 id: tabMenu
                 property int tabIndex: -1
+                // Nothing holds the focus once the menu is gone: back to the
+                // editor, unless a dialog (Close Tab on unsaved text) took it.
+                onClosed: if (root.view && !unsavedDialog.visible) root.view.focusEditor()
                 ContextMenuItem {
                     text: qsTr("New Tab")
                     shortcutText: App.shortcutText(newTabAction.keys)
@@ -1115,6 +1121,19 @@ QQC2.ApplicationWindow {
                     linkDialog.close();
                 }
             }
+        }
+    }
+
+    // The focused item went away (a banner's button or the Insert Link
+    // dialog closed, a tab menu is gone): hand the keyboard to the editor
+    // rather than leave it on nothing. Not while the window is inactive.
+    onActiveFocusItemChanged: {
+        if (activeFocusItem === null && active) {
+            Qt.callLater(() => {
+                if (root.active && root.activeFocusItem === null && !root.settingsOpen && root.view && !unsavedDialog.visible) {
+                    root.view.focusEditor();
+                }
+            });
         }
     }
 
