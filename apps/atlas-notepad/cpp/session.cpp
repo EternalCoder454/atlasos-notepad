@@ -10,9 +10,14 @@
 #include <QJsonObject>
 #include <QSet>
 #include <QStandardPaths>
+#include <QScopeGuard>
 #include <QUuid>
 
+#include <cerrno>
 #include <cstdio>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -31,7 +36,7 @@ constexpr int maxCoordinate = 1 << 20;
 // file 0600, fsync, rename, never through a symlink).
 // A lone surrogate (from a lossy UTF-16 file or a paste) has no UTF-8 form
 // and would fail the write every time, so it is stored as U+FFFD.
-bool saveUtf8(const QString &path, QString text)
+int saveUtf8(const QString &path, QString text)
 {
     for (qsizetype i = 0; i < text.size(); ++i) {
         if (text.at(i).isHighSurrogate() && i + 1 < text.size() && text.at(i + 1).isLowSurrogate()) {
@@ -41,7 +46,29 @@ bool saveUtf8(const QString &path, QString text)
         }
     }
     const QByteArray bytes = text.toUtf8();
-    return np_file_save_private(QFile::encodeName(path).constData(), reinterpret_cast<const uint8_t *>(bytes.constData()), size_t(bytes.size())) == 0;
+    return np_file_save_private(QFile::encodeName(path).constData(), reinterpret_cast<const uint8_t *>(bytes.constData()), size_t(bytes.size()));
+}
+
+QString errorText(int error)
+{
+    return QString::fromLocal8Bit(strerror(error));
+}
+
+// session.json moved aside to session.json.bak, replacing an older backup.
+// Copied first, so a failed copy keeps an older backup.
+void backUp(const QString &jsonPath)
+{
+    const QString bak = jsonPath + QStringLiteral(".bak");
+    QFile::remove(bak + QStringLiteral(".new"));
+    const QByteArray to = QFile::encodeName(bak);
+    if (QFileInfo(jsonPath).isFile() && QFile::copy(jsonPath, bak + QStringLiteral(".new"))) {
+        std::rename(QFile::encodeName(bak + QStringLiteral(".new")).constData(), to.constData());
+    } else {
+        // A full disk (or not a file at all): moving it aside needs no
+        // room. It replaces an older backup, so this run's session can
+        // be written without losing the newest unusable one.
+        std::rename(QFile::encodeName(jsonPath).constData(), to.constData());
+    }
 }
 
 // The unsaved text goes here: a directory of ours, 0700. (A link to one,
@@ -120,6 +147,9 @@ Session::Session()
 Session::~Session()
 {
     m_pool.waitForDone();
+    if (m_lockFd >= 0) {
+        ::close(m_lockFd);
+    }
 }
 
 QString Session::directory()
@@ -128,9 +158,70 @@ QString Session::directory()
     return QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation) + QStringLiteral("/atlas-notepad/session");
 }
 
-QList<WindowState> Session::read()
+bool Session::lock()
 {
-    // Before 0.1 the session lived in $XDG_DATA_HOME/atlas-notepad; move it once.
+    if (m_lockFd >= 0) {
+        return true;
+    }
+    // Beside the session folder, not in it: remove() deletes that.
+    const QString parent = QFileInfo(directory()).path();
+    QDir().mkpath(parent);
+    const QByteArray path = QFile::encodeName(parent + QStringLiteral("/session.lock"));
+    const int fd = ::open(path.constData(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+    if (fd < 0) {
+        qWarning("atlas-notepad: can't open %s: %s", path.constData(), strerror(errno));
+        return true;
+    }
+    if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        const bool held = errno == EWOULDBLOCK;
+        ::close(fd);
+        return !held;
+    }
+    m_lockFd = fd;
+    return true;
+}
+
+int Session::restoreDeaths()
+{
+    moveOld();
+    if (const std::optional<QByteArray> bytes = readCapped(directory() + QStringLiteral("/restoring"), 16)) {
+        return qBound(0, bytes->trimmed().toInt(), 1000);
+    }
+    return 0;
+}
+
+void Session::beginRestore(int deaths)
+{
+    const QString dir = directory();
+    const QString path = dir + QStringLiteral("/restoring");
+    // No fsync: it only has to outlive the process, not the machine, and
+    // this is on the way to the first frame.
+    QFile file(path);
+    if (!QDir().mkpath(dir) || !makePrivate(dir) || !file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        || file.write(QByteArray::number(deaths + 1)) <= 0) {
+        qWarning("atlas-notepad: can't write %s; a crash while restoring won't be noticed", qPrintable(path));
+    }
+}
+
+void Session::endRestore()
+{
+    QFile::remove(directory() + QStringLiteral("/restoring"));
+}
+
+void Session::setAside()
+{
+    // Moved, not copied: the session that kills Notepad mustn't stay.
+    const QString jsonPath = directory() + QStringLiteral("/session.json");
+    if (QFileInfo::exists(jsonPath)) {
+        std::rename(QFile::encodeName(jsonPath).constData(), QFile::encodeName(jsonPath + QStringLiteral(".bak")).constData());
+    }
+    m_readFailed = true; // its texts stay
+}
+
+// Before 0.1 the session lived in $XDG_DATA_HOME/atlas-notepad; move it once,
+// before anything makes the new folder.
+void Session::moveOld()
+{
     const QString old = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/atlas-notepad");
     if (!QFileInfo::exists(directory()) && QFileInfo::exists(old + QStringLiteral("/session.json"))) {
         QDir().mkpath(QFileInfo(directory()).path());
@@ -138,6 +229,11 @@ QList<WindowState> Session::read()
             qWarning("atlas-notepad: couldn't move the old session from %s", qUtf8Printable(old));
         }
     }
+}
+
+QList<WindowState> Session::read()
+{
+    moveOld();
     // Interrupted writes leave .<name>.<hex>.tmp behind; nothing is writing yet.
     removeTemps(directory());
     removeTemps(directory() + QStringLiteral("/texts"));
@@ -150,18 +246,7 @@ QList<WindowState> Session::read()
     if (!doc.isObject() || doc.object().value(QStringLiteral("version")).toInt() != formatVersion) {
         qWarning("atlas-notepad: can't use the session file, keeping a copy as session.json.bak");
         m_readFailed = true;
-        // Copied aside first, so a failed copy keeps an older backup.
-        const QString bak = jsonPath + QStringLiteral(".bak");
-        QFile::remove(bak + QStringLiteral(".new"));
-        const QByteArray to = QFile::encodeName(bak);
-        if (QFileInfo(jsonPath).isFile() && QFile::copy(jsonPath, bak + QStringLiteral(".new"))) {
-            std::rename(QFile::encodeName(bak + QStringLiteral(".new")).constData(), to.constData());
-        } else {
-            // A full disk (or not a file at all): moving it aside needs no
-            // room. It replaces an older backup, so this run's session can
-            // be written without losing the newest unusable one.
-            std::rename(QFile::encodeName(jsonPath).constData(), to.constData());
-        }
+        backUp(jsonPath);
         return {};
     }
     QList<WindowState> windows;
@@ -227,9 +312,11 @@ std::optional<QString> Session::readText(const QString &textFile) const
     return QString::fromUtf8(*bytes);
 }
 
-Document *Session::restoreTab(DocumentList *list, const TabState &tab)
+Document *Session::restoreTab(DocumentList *list, const TabState &tab, bool safe)
 {
     Document *doc = list->append();
+    doc->d->safeMode = safe;
+    doc->d->safeFormatted = tab.formatted;
     std::optional<QString> text;
     const bool wantsText = !tab.textFile.isEmpty() && (tab.modified || tab.path.isEmpty());
     if (wantsText) {
@@ -239,8 +326,11 @@ Document *Session::restoreTab(DocumentList *list, const TabState &tab)
         }
     }
     doc->d->restore(tab, text);
-    if (wantsText && !text && tab.modified && tab.path.isEmpty()) {
-        doc->d->modified = true; // a named tab shows its file again instead
+    if (wantsText && !text) {
+        if (tab.modified && tab.path.isEmpty()) {
+            doc->d->modified = true; // a named tab shows its file again instead
+        }
+        doc->d->setBanner(Document::Unrecovered);
     }
     if (text) {
         m_texts.insert(doc->d->id, {tab.textFile, doc->d->sessionKey()});
@@ -280,7 +370,9 @@ void Session::write(const QList<Live> &windows, bool wait)
             t[QStringLiteral("path")] = p->path;
             t[QStringLiteral("encoding")] = int(p->encoding);
             t[QStringLiteral("lineEnding")] = int(p->lineEnding);
-            t[QStringLiteral("formatted")] = p->formatted;
+            // A tab opened plain after a crash keeps its stored view for next
+            // time (a switch made in this plain run isn't kept).
+            t[QStringLiteral("formatted")] = p->safeMode ? p->safeFormatted : p->formatted;
             t[QStringLiteral("modified")] = p->isModified();
             t[QStringLiteral("cursor")] = doc->cursorPosition();
             t[QStringLiteral("anchor")] = doc->selectionAnchor();
@@ -329,31 +421,51 @@ void Session::write(const QList<Live> &windows, bool wait)
     const QString json = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
     const QString dir = directory();
     const bool cleanup = !m_readFailed;
-    m_pool.start([this, dir, json, writes, referenced, cleanup] {
+    QObject *context = m_context.data();
+    const std::function<void()> written = m_written;
+    m_pool.start([this, dir, json, writes, referenced, cleanup, context, written] {
         auto fail = [this](const QString &file) {
             QMutexLocker lock(&m_mutex);
             m_failed.insert(file);
         };
-        if (!QDir().mkpath(dir + QStringLiteral("/texts")) || !makePrivate(dir) || !makePrivate(dir + QStringLiteral("/texts"))) {
+        // Reported once the write is over, however it ends.
+        QString error;
+        const auto report = qScopeGuard([&] {
+            {
+                QMutexLocker lock(&m_mutex);
+                m_lastError = error;
+            }
+            if (context && written) {
+                QMetaObject::invokeMethod(context, written, Qt::QueuedConnection);
+            }
+        });
+        errno = 0;
+        if (!QDir().mkpath(dir + QStringLiteral("/texts"))) {
+            // mkpath doesn't promise errno; without one, the folder message.
+            error = errno ? errorText(errno) : QObject::tr("%1 isn't a folder Notepad can use.").arg(dir);
+        } else if (!makePrivate(dir) || !makePrivate(dir + QStringLiteral("/texts"))) {
+            error = QObject::tr("%1 isn't a folder Notepad can use.").arg(dir);
+        }
+        if (!error.isEmpty()) {
             qWarning("atlas-notepad: can't keep the session private in %s (not a folder of ours, or chmod failed)", qPrintable(dir));
             for (const TextWrite &w : writes) {
                 fail(w.file);
             }
             return;
         }
-        bool allWritten = true;
         for (const TextWrite &w : writes) {
-            if (!saveUtf8(textPath(w.file), w.text)) {
+            if (const int rc = saveUtf8(textPath(w.file), w.text)) {
                 qWarning("atlas-notepad: can't write the session's text %s", qPrintable(w.file));
                 fail(w.file);
-                allWritten = false;
+                error = errorText(rc);
             }
         }
-        if (!allWritten) {
+        if (!error.isEmpty()) {
             return; // session.json would point at missing texts
         }
-        if (!saveUtf8(dir + QStringLiteral("/session.json"), json)) {
+        if (const int rc = saveUtf8(dir + QStringLiteral("/session.json"), json)) {
             qWarning("atlas-notepad: can't write the session");
+            error = errorText(rc);
             return;
         }
         if (!cleanup) {
@@ -390,9 +502,23 @@ void Session::write(const QList<Live> &windows, bool wait)
     }
 }
 
+QString Session::lastError() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_lastError;
+}
+
+void Session::onWritten(QObject *context, std::function<void()> callback)
+{
+    m_context = context;
+    m_written = std::move(callback);
+}
+
 void Session::remove()
 {
     m_pool.waitForDone();
     m_texts.clear();
     QDir(directory()).removeRecursively();
+    QMutexLocker lock(&m_mutex);
+    m_lastError.clear();
 }

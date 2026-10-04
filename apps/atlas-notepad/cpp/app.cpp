@@ -44,6 +44,8 @@ protected:
 };
 
 constexpr int recentLimit = 10;
+// A launch that lives this long after restoring got past it.
+constexpr int restoreSettleMs = 3000;
 constexpr auto menuService = "com.canonical.AppMenu.Registrar";
 App *s_instance = nullptr;
 
@@ -96,6 +98,8 @@ struct App::Private {
     QTimer saveTimer; // quiet period
     QTimer maxTimer; // longest an unsaved change waits
     bool hasMenu = false;
+    bool restoring = false; // Session::beginRestore() without endRestore() yet
+    QString problem; // sessionProblem
 
     std::shared_ptr<Window> windowOf(const DocumentList *list) const
     {
@@ -147,6 +151,7 @@ struct App::Private {
         }
         if (!settings->continueSession()) {
             session.remove();
+            refreshProblem();
             return;
         }
         QList<Session::Live> live;
@@ -154,6 +159,64 @@ struct App::Private {
             live.append({w->list, w->geometry, w->maximized});
         }
         session.write(live, wait);
+        if (wait) {
+            refreshProblem();
+        }
+    }
+
+    // After a write: sessionProblem follows it, and the user hears once
+    // when the session stops working (again after it worked in between).
+    void refreshProblem()
+    {
+        const QString now = session.lastError();
+        if (now == problem) {
+            return;
+        }
+        const bool wasFine = problem.isEmpty();
+        problem = now;
+        Q_EMIT q->sessionProblemChanged();
+        if (wasFine) {
+            Q_EMIT q->message(App::tr("Notepad can't keep your unsaved changes for next time: %1").arg(now));
+        }
+    }
+
+    // The restore is over once the restored tabs are read and have had
+    // time to draw.
+    void settleRestore()
+    {
+        auto *poll = new QTimer(q);
+        poll->setInterval(250);
+        QObject::connect(poll, &QTimer::timeout, q, [this, poll] {
+            for (const auto &w : windows) {
+                for (Document *doc : w->list->documents()) {
+                    if (doc->isLoading()) {
+                        return;
+                    }
+                }
+            }
+            poll->stop();
+            poll->deleteLater();
+            QTimer::singleShot(restoreSettleMs, q, [this] { endRestore(); });
+        });
+        poll->start();
+    }
+
+    void endRestore()
+    {
+        if (restoring) {
+            restoring = false;
+            session.endRestore();
+        }
+    }
+
+    bool anyModified() const
+    {
+        for (const auto &w : windows) {
+            if (w->list->anyModified()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void scheduleSave()
@@ -198,14 +261,14 @@ struct App::Private {
     }
 
     // A window: its tab list (restored from `restore` if given), then its QML.
-    std::shared_ptr<Window> createWindow(const WindowState *restore)
+    std::shared_ptr<Window> createWindow(const WindowState *restore, bool safe = false)
     {
         auto w = std::make_shared<Window>();
         w->list = new DocumentList(q);
         QQmlEngine::setObjectOwnership(w->list, QQmlEngine::CppOwnership);
         if (restore) {
             for (const TabState &tab : restore->tabs) {
-                session.restoreTab(w->list, tab);
+                session.restoreTab(w->list, tab, safe);
             }
             w->list->setCurrentIndex(restore->currentIndex);
             w->geometry = restore->geometry;
@@ -301,6 +364,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
     };
     connect(&d->saveTimer, &QTimer::timeout, this, writeNow);
     connect(&d->maxTimer, &QTimer::timeout, this, writeNow);
+    d->session.onWritten(this, [this] { d->refreshProblem(); });
     connect(d->settings, &Settings::formattingChanged, this, [this] {
         for (const auto &w : d->windows) {
             for (Document *doc : w->list->documents()) {
@@ -337,6 +401,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
             d->quitting = true;
             d->exiting = true;
             saveSession();
+            d->endRestore();
         });
         auto *watcher = new QDBusServiceWatcher(QLatin1String(menuService), QDBusConnection::sessionBus(), QDBusServiceWatcher::WatchForOwnerChange, this);
         connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this, [this] { d->updateMenu(); });
@@ -347,6 +412,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
 App::~App()
 {
     d->stopTimers();
+    d->endRestore();
     // The engine outlives App (main.cpp makes it first); its windows go
     // now, while the App singleton and their documents still exist: those
     // still open and those closed but not yet deleted.
@@ -428,11 +494,37 @@ void App::setSessionEnabled(bool enabled)
 
 void App::start(const QStringList &files)
 {
+    QString notice;
+    if (d->sessionEnabled && !d->session.lock()) {
+        // Another Notepad (on another D-Bus session) has it.
+        d->sessionEnabled = false;
+        notice = tr("Notepad is already running in another session, so these tabs won't come back next time. Closing asks about unsaved changes.");
+    }
     if (d->sessionOn()) {
-        const QList<WindowState> states = d->session.read();
+        const int died = d->session.restoreDeaths();
+        QList<WindowState> states = d->session.read();
+        bool safe = false;
+        if (died >= 2 && !states.isEmpty()) {
+            d->session.setAside();
+            states.clear();
+            notice = tr("Notepad closed unexpectedly while opening your last session, twice, so it starts empty. That session is kept in %1.")
+                         .arg(displayPath(Session::directory() + QStringLiteral("/session.json.bak")));
+        } else if (died == 1 && !states.isEmpty()) {
+            safe = true;
+            notice = tr("Notepad closed unexpectedly while opening your tabs, so this time they open as plain text.");
+        }
+        if (states.isEmpty()) {
+            d->session.endRestore(); // nothing restored: no count to keep
+        } else {
+            d->session.beginRestore(died);
+            d->restoring = true;
+        }
         // Stored most recent first; the first made last is the most recent.
         for (auto it = states.crbegin(); it != states.crend(); ++it) {
-            d->createWindow(&*it);
+            d->createWindow(&*it, safe);
+        }
+        if (d->restoring) {
+            d->settleRestore();
         }
     }
     if (d->windows.isEmpty()) {
@@ -447,6 +539,10 @@ void App::start(const QStringList &files)
     }
     for (const auto &w : d->windows) {
         d->ensureTab(w->list);
+    }
+    if (!notice.isEmpty()) {
+        // Once the windows' QML is listening.
+        QTimer::singleShot(0, this, [this, notice] { Q_EMIT message(notice); });
     }
 }
 
@@ -583,13 +679,21 @@ bool App::closeWindow(DocumentList *documents, bool force)
         return true;
     }
     const bool last = d->windows.size() == 1;
-    if (d->settings->continueSession() && (last || d->quitting)) {
+    if (d->sessionOn() && (last || d->quitting)) {
         // The session keeps this window's tabs.
         d->settings->setWindowGeometry(w->geometry, w->maximized);
         if (!d->quitting) {
             saveSession();
         }
-        return true;
+        if (force && d->quitInProgress && d->quitWaitingOn == documents) {
+            // Asked because the session failed (below); the quit goes on.
+            d->quitWaitingOn = nullptr;
+            QMetaObject::invokeMethod(this, &App::quit, Qt::QueuedConnection);
+        }
+        if (force || d->problem.isEmpty() || !documents->anyModified()) {
+            return true;
+        }
+        // It couldn't keep them: ask, as without a session.
     }
     if (documents->anyModified() && !force) {
         if (d->quitInProgress) {
@@ -630,22 +734,30 @@ bool App::closeWindow(DocumentList *documents, bool force)
 void App::quit()
 {
     const auto windows = d->windows;
-    if (d->settings->continueSession()) {
-        d->quitting = true;
-        d->exiting = true;
+    if (d->sessionOn()) {
         saveSession();
-        for (const auto &w : windows) {
-            if (w->window) {
-                w->window->close();
+        if (d->problem.isEmpty() || !d->anyModified()) {
+            d->quitting = true;
+            d->exiting = true;
+            for (const auto &w : windows) {
+                if (w->window) {
+                    w->window->close();
+                }
             }
+            QCoreApplication::quit();
+            return;
         }
-        QCoreApplication::quit();
-        return;
+        // The session couldn't keep the unsaved tabs: ask, as without one.
     }
     d->quitInProgress = true;
     d->quitWaitingOn = nullptr;
     for (const auto &w : windows) {
         if (w->window) {
+            if (!w->window->isVisible() && w->list->anyModified()) {
+                // A closed last window the session kept, which can't keep
+                // it now: shown, so its QML can ask.
+                w->window->show();
+            }
             w->window->close();
             if (w->window && w->window->isVisible()) {
                 return; // refused: its QML asks, then closeWindow(force) continues
@@ -768,4 +880,9 @@ void App::saveSession()
 {
     d->stopTimers();
     d->write(true);
+}
+
+QString App::sessionProblem() const
+{
+    return d->problem;
 }

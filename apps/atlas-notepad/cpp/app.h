@@ -168,11 +168,13 @@ public:
     enum Banner {
         NoBanner,
         SaveFailed,      // bannerText says why; actions: Save As, Retry
+        ReadFailed,      // bannerText says why; action: Try Again (reload) unless modified
         Unencodable,     // the text has characters `encoding` can't store: Save as UTF-8
         ChangedOnDisk,   // modified here and changed outside: Reload, Keep Mine
                          // (save() refuses to overwrite until Keep Mine)
         Deleted,         // the file is gone: Save (recreates it), Close
         TooLarge,        // over the size limit: nothing loaded, Close
+        Unrecovered,     // the session lost this tab's unsaved text
         Binary,          // NUL bytes: opened read-only
         LongLines,       // a line over the limit: opened read-only
         Lossy,           // malformed UTF-16 replaced: Save would change it
@@ -420,6 +422,9 @@ class App : public QObject
     // session bus); watched, so it can come and go.
     Q_PROPERTY(bool hasGlobalMenu READ hasGlobalMenu NOTIFY hasGlobalMenuChanged)
     Q_PROPERTY(QString version READ version CONSTANT)
+    // Why the session can't keep unsaved text right now ("No space left on
+    // device"), empty when it can. Closing then asks about unsaved tabs.
+    Q_PROPERTY(QString sessionProblem READ sessionProblem NOTIFY sessionProblemChanged)
 
 public:
     // main.cpp makes the one App before loading QML. A null engine makes
@@ -455,22 +460,24 @@ public:
     // The windows' tab lists, most recently used first (also for tests, which
     // run with a null engine: windows then have no QML).
     QList<DocumentList *> windows() const;
-    QQuickWindow *activeWindow() const; // the most recent window's, or null
+    Q_INVOKABLE QQuickWindow *activeWindow() const; // the most recent visible window, or null
     // The session is written `quietMs` after the last change, and at most
     // `maxMs` after the first unsaved one (1000 and 5000; tests shorten them).
     void setSaveDelays(int quietMs, int maxMs);
     // false: nothing is read from or written to the session (--bench).
     void setSessionEnabled(bool enabled);
 
-    // The window asks before closing: true = close now. With
-    // continueSession the tabs go to the session and it closes; without, it
-    // returns false when tabs are modified (QML asks about them, then calls
-    // closeWindow again with force).
+    // The window asks before closing: true = close now. With the session
+    // the tabs go to it and it closes; without (continueSession off, another
+    // Notepad has the session, or writing it just failed), it returns false
+    // when tabs are modified (QML asks about them, then calls closeWindow
+    // again with force).
     Q_INVOKABLE bool closeWindow(DocumentList *documents, bool force = false);
-    // Quits the app. With continueSession: saves the session, closes every
-    // window (closeWindow says yes while quitting) and quits. Without: closes
-    // the windows one at a time and stops at the first that refuses (its QML
-    // asks about the unsaved tabs, then calls quit() again).
+    // Quits the app. With the session: saves it, closes every window
+    // (closeWindow says yes while quitting) and quits. Without, or when the
+    // save failed: closes the windows one at a time and stops at the first
+    // that refuses (its QML asks about the unsaved tabs, then calls quit()
+    // again).
     Q_INVOKABLE void quit();
     // The user cancelled the unsaved-changes dialog a quit() was waiting on:
     // the quit is over (closing that window later doesn't continue it).
@@ -494,10 +501,16 @@ public:
     // Saves the session now (also done a second after any edit stops and at
     // quit).
     Q_INVOKABLE void saveSession();
+    QString sessionProblem() const;
 
 Q_SIGNALS:
     void recentFilesChanged();
     void hasGlobalMenuChanged();
+    void sessionProblemChanged();
+    // Something the user should know that belongs to no tab (the session
+    // can't be written, the last one was set aside): the most recent window
+    // shows it.
+    void message(const QString &text);
 
 private:
     struct Private;

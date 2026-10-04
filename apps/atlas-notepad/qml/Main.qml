@@ -568,6 +568,22 @@ QQC2.ApplicationWindow {
         spacing: 0
         visible: !root.settingsOpen
 
+        // The App's messages (App.message): the session can't be written,
+        // was set aside, belongs to another Notepad. Stays until closed.
+        InfoBanner {
+            id: appBanner
+            Layout.fillWidth: true
+            Layout.margins: shown ? Kirigami.Units.smallSpacing : 0
+            shown: root.appMessage.length > 0
+            type: "warning"
+            text: root.appMessage
+            closable: true
+            onClosed: {
+                root.appMessage = "";
+                shown = Qt.binding(() => root.appMessage.length > 0);
+            }
+        }
+
         InfoBanner {
             id: banner
             Layout.fillWidth: true
@@ -835,6 +851,7 @@ QQC2.ApplicationWindow {
         property Document target: null
         property var then: null
 
+        note: App.sessionProblem.length > 0 ? qsTr("Notepad can't keep your unsaved changes for next time: %1").arg(App.sessionProblem) : ""
         onSave: root.saveThen(target, then)
         onDiscard: then()
         onCancel: root.resetSave()
@@ -1106,6 +1123,25 @@ QQC2.ApplicationWindow {
         }
     }
 
+    property string appMessage
+    property bool appMessageIsSessionProblem: false
+    Connections {
+        target: App
+        function onMessage(text) {
+            if (App.activeWindow() === root) {
+                root.appMessage = text;
+                root.appMessageIsSessionProblem = App.sessionProblem.length > 0;
+            }
+        }
+        // Writing works again: the warning is over.
+        function onSessionProblemChanged() {
+            if (App.sessionProblem.length === 0 && root.appMessageIsSessionProblem) {
+                root.appMessage = "";
+                root.appMessageIsSessionProblem = false;
+            }
+        }
+    }
+
     // Closing the window: the App decides whether to ask (see App.closeWindow);
     // if so, each unsaved tab is asked about in turn.
     property bool closing: false
@@ -1205,12 +1241,14 @@ QQC2.ApplicationWindow {
     function bannerType(kind) {
         switch (kind) {
         case Document.SaveFailed:
+        case Document.ReadFailed:
         case Document.TooLarge:
             return "error";
         case Document.Unencodable:
         case Document.ChangedOnDisk:
         case Document.Deleted:
         case Document.Lossy:
+        case Document.Unrecovered:
             return "warning";
         default:
             return "info";
@@ -1221,6 +1259,10 @@ QQC2.ApplicationWindow {
         switch (kind) {
         case Document.SaveFailed:
             return qsTr("Couldn't save %1: %2").arg(name).arg(document.bannerText);
+        case Document.ReadFailed:
+            return qsTr("Couldn't read %1: %2").arg(name).arg(document.bannerText);
+        case Document.Unrecovered:
+            return document.path.length > 0 ? qsTr("Your unsaved changes to %1 couldn't be recovered; this is the file as saved.").arg(name) : qsTr("The text of %1 couldn't be recovered.").arg(name);
         case Document.Unencodable:
             return qsTr("Some characters can't be saved as %1.").arg(document.encodingName);
         case Document.ChangedOnDisk:
@@ -1246,12 +1288,15 @@ QQC2.ApplicationWindow {
         }
     }
     function bannerClosable(kind) {
-        return kind >= Document.Binary || kind === Document.SaveFailed;
+        return kind >= Document.Unrecovered || kind === Document.SaveFailed || kind === Document.ReadFailed;
     }
     function bannerActions(kind) {
         switch (kind) {
         case Document.SaveFailed:
             return [bannerSaveAs, bannerRetry];
+        case Document.ReadFailed:
+            // Reading again drops what was typed since.
+            return document.modified ? [] : [bannerReadAgain];
         case Document.Unencodable:
             return [bannerSaveUtf8];
         case Document.ChangedOnDisk:
@@ -1275,6 +1320,11 @@ QQC2.ApplicationWindow {
         id: bannerRetry
         text: qsTr("Try Again")
         onTriggered: root.document.save()
+    }
+    KeyedAction {
+        id: bannerReadAgain
+        text: qsTr("Try Again")
+        onTriggered: root.document.reload()
     }
     KeyedAction {
         id: bannerSave

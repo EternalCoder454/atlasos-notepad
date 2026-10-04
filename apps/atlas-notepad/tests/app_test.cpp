@@ -24,7 +24,10 @@
 #include <memory>
 #include <vector>
 
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace
 {
@@ -120,6 +123,40 @@ private:
         QSignalSpy spy(doc, &Document::saved);
         doc->save();
         return spy.wait(5000);
+    }
+
+    // The session folder as a plain file: nothing can be written there.
+    void breakSession()
+    {
+        QDir(sessionDir()).removeRecursively();
+        QVERIFY(QDir().mkpath(QFileInfo(sessionDir()).path()));
+        QFile blocker(sessionDir());
+        QVERIFY(blocker.open(QIODevice::WriteOnly));
+    }
+    void fixSession()
+    {
+        QVERIFY(QFile::remove(sessionDir()));
+    }
+
+    // A session of one Markdown tab, for the restore guard.
+    QString markdownSession()
+    {
+        const QString path = write(QStringLiteral("notes.md"), "# Notes\n");
+        m_app->start({path});
+        Document *doc = m_app->windows().first()->current();
+        [&] {
+            QVERIFY(QTest::qWaitFor([doc] { return !doc->isLoading(); }));
+            QVERIFY(doc->isMarkdown());
+        }();
+        m_app->saveSession();
+        restart();
+        return path;
+    }
+    void setRestoring(int count)
+    {
+        QFile marker(sessionDir() + QStringLiteral("/restoring"));
+        QVERIFY(marker.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        marker.write(QByteArray::number(count));
     }
 
 private Q_SLOTS:
@@ -234,7 +271,7 @@ private Q_SLOTS:
         QVERIFY(QFile::remove(path));
         QVERIFY(QFile::link(QStringLiteral("/dev/zero"), path));
         doc->reload();
-        QTRY_COMPARE(doc->banner(), Document::SaveFailed);
+        QTRY_COMPARE(doc->banner(), Document::ReadFailed);
         QVERIFY(doc->bannerText().contains(QStringLiteral("regular file")));
     }
 
@@ -942,6 +979,29 @@ private Q_SLOTS:
         QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("text .* is missing")));
         m_app->start({});
         QVERIFY(m_app->windows().first()->current()->isModified());
+        QCOMPARE(m_app->windows().first()->current()->banner(), Document::Unrecovered); // said, not only logged
+    }
+
+    void missingTextOfNamedTabShowsFile()
+    {
+        const QString path = write(QStringLiteral("named.txt"), "on disk\n");
+        m_app->start({path});
+        Document *doc = m_app->windows().first()->current();
+        QTRY_VERIFY(!doc->isLoading());
+        attach(doc);
+        insert(doc, 0, QStringLiteral("typed "));
+        m_app->saveSession();
+        const QDir texts(sessionDir() + QStringLiteral("/texts"));
+        QCOMPARE(texts.entryList(QDir::Files).size(), 1);
+        QVERIFY(QFile::remove(texts.filePath(texts.entryList(QDir::Files).first())));
+        restart();
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("text .* is missing")));
+        m_app->start({});
+        Document *back = m_app->windows().first()->current();
+        QTRY_VERIFY(!back->isLoading());
+        QCOMPARE(back->text(), QStringLiteral("on disk\n"));
+        QVERIFY(!back->isModified());
+        QCOMPARE(back->banner(), Document::Unrecovered); // kept through the load
     }
 
     void unusableSessionIsBackedUpAndKeepsTexts()
@@ -1129,6 +1189,315 @@ private Q_SLOTS:
         QVERIFY(QFile::rename(a + QStringLiteral(".away"), a)); // mounted again
         QCOMPARE(m_app->recentFiles().size(), 3);
         QVERIFY(m_app->recentFiles().contains(a));
+    }
+
+    // ------------------------------------------------------------ Reliable
+
+    void closeAsksWhenSessionCantBeWritten()
+    {
+        m_app->start({});
+        DocumentList *list = m_app->windows().first();
+        attach(list->current());
+        insert(list->current(), 0, QStringLiteral("unsaved"));
+        breakSession();
+        QSignalSpy messages(m_app, &App::message);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        QVERIFY(!m_app->closeWindow(list)); // the last window, yet it asks
+        QVERIFY(!m_app->sessionProblem().isEmpty());
+        QCOMPARE(messages.size(), 1);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        m_app->quit(); // asks too: nothing closes
+        QCOMPARE(m_app->windows().size(), 1);
+        QCOMPARE(messages.size(), 1); // said once while it stays broken
+        m_app->cancelQuit();
+        QVERIFY(m_app->closeWindow(list, true)); // the dialog decided
+
+        // Unmodified tabs lose nothing: no question.
+        m_app->windows().first()->current()->d->setModified(false);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        QVERIFY(m_app->closeWindow(list));
+
+        // Working again: the problem is over, and closing doesn't ask.
+        fixSession();
+        insert(list->current(), 0, QStringLiteral("more "));
+        QSignalSpy problem(m_app, &App::sessionProblemChanged);
+        QVERIFY(m_app->closeWindow(list));
+        QVERIFY(m_app->sessionProblem().isEmpty());
+        QCOMPARE(problem.size(), 1);
+        // Broken again after it worked: said again.
+        breakSession();
+        insert(list->current(), 0, QStringLiteral("x"));
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        m_app->saveSession();
+        QCOMPARE(messages.size(), 2);
+        fixSession();
+    }
+
+    void backgroundWriteFailureIsReported()
+    {
+        m_app->setSaveDelays(50, 200);
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        breakSession();
+        QSignalSpy messages(m_app, &App::message);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        insert(doc, 0, QStringLiteral("a"));
+        QTRY_COMPARE(messages.size(), 1); // from the worker, on the main thread
+        QVERIFY(messages.first().first().toString().contains(QStringLiteral("unsaved changes")));
+        fixSession();
+        insert(doc, 0, QStringLiteral("b"));
+        QTRY_VERIFY(m_app->sessionProblem().isEmpty());
+        QCOMPARE(messages.size(), 1);
+    }
+
+    void quitAfterAskingContinues()
+    {
+        m_app->start({});
+        DocumentList *list = m_app->windows().first();
+        attach(list->current());
+        insert(list->current(), 0, QStringLiteral("unsaved"));
+        breakSession();
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        m_app->quit();
+        QCOMPARE(m_app->windows().size(), 1);
+        // "Don't Save" in its dialog: the tab goes, then the window.
+        list->closeDocument(list->current());
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        QVERIFY(m_app->closeWindow(list, true));
+        // quit() runs again (queued): its session write is the second
+        // warning, which ignoreMessage requires.
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't keep the session private")));
+        QTest::qWait(50);
+        fixSession();
+    }
+
+    void unreadableFileGetsReadBanner()
+    {
+        // A session tab whose file is now a FIFO: nothing read, Try Again.
+        const QString path = m_dir + QStringLiteral("/later.txt");
+        QCOMPARE(mkfifo(QFile::encodeName(path).constData(), 0600), 0);
+        QVERIFY(QDir().mkpath(sessionDir()));
+        QJsonObject tab{{QStringLiteral("path"), path}};
+        QJsonObject window{{QStringLiteral("tabs"), QJsonArray{tab}}};
+        QFile json(sessionDir() + QStringLiteral("/session.json"));
+        QVERIFY(json.open(QIODevice::WriteOnly));
+        json.write(QJsonDocument(QJsonObject{{QStringLiteral("version"), 1}, {QStringLiteral("windows"), QJsonArray{window}}}).toJson());
+        json.close();
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        QTRY_COMPARE(doc->banner(), Document::ReadFailed);
+        QVERIFY(!doc->isModified());
+        // A regular file in its place: read without being asked.
+        QVERIFY(QFile::remove(path));
+        write(QStringLiteral("later.txt"), "readable\n");
+        QTRY_COMPARE_WITH_TIMEOUT(doc->text(), QStringLiteral("readable\n"), 10000);
+        QCOMPARE(doc->banner(), Document::NoBanner);
+        QVERIFY(!doc->isModified());
+    }
+
+    void readFailureOfOpenFileKeepsText()
+    {
+        const QString path = write(QStringLiteral("r.txt"), "kept\n");
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        attach(doc);
+        QVERIFY(QFile::remove(path));
+        QCOMPARE(mkfifo(QFile::encodeName(path).constData(), 0600), 0);
+        doc->d->checkOnDisk();
+        QTRY_COMPARE(doc->banner(), Document::ReadFailed);
+        QCOMPARE(doc->text(), QStringLiteral("kept\n"));
+        QVERIFY(QFile::remove(path));
+        write(QStringLiteral("r.txt"), "new\n");
+        doc->d->checkOnDisk();
+        QTRY_COMPARE(doc->text(), QStringLiteral("new\n"));
+        QCOMPARE(doc->banner(), Document::NoBanner);
+
+        // Unreadable, then gone: Deleted shows, not the stale read error.
+        QVERIFY(QFile::remove(path));
+        QCOMPARE(mkfifo(QFile::encodeName(path).constData(), 0600), 0);
+        doc->d->checkOnDisk();
+        QTRY_COMPARE(doc->banner(), Document::ReadFailed);
+        QVERIFY(QFile::remove(path));
+        doc->d->checkOnDisk();
+        QTRY_COMPARE(doc->banner(), Document::Deleted);
+        // A save ends both.
+        QVERIFY(saveAndWait(doc));
+        QCOMPARE(doc->banner(), Document::NoBanner);
+        QCOMPARE(read(path), QByteArray("new\n"));
+    }
+
+    void restoreMarkerLivesWhileRestoring()
+    {
+        markdownSession();
+        m_app->start({});
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/restoring")));
+        restart(); // a clean exit ends it
+        QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/restoring")));
+        m_app->start({});
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(sessionDir() + QStringLiteral("/restoring")), 6000); // so does living long enough
+    }
+
+    void restoreAfterCrashIsPlain()
+    {
+        const QString path = markdownSession();
+        const bool storedFormatted = sessionJson()[QStringLiteral("windows")].toArray()[0].toObject()[QStringLiteral("tabs")].toArray()[0].toObject()[QStringLiteral("formatted")].toBool();
+        QVERIFY(storedFormatted);
+        setRestoring(1); // the last launch died restoring
+        QSignalSpy messages(m_app, &App::message);
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        QCOMPARE(doc->path(), path);
+        QTRY_VERIFY(!doc->isLoading());
+        QVERIFY(!doc->isMarkdown());
+        QVERIFY(!doc->isFormatted());
+        QVERIFY(!doc->isProse());
+        QTRY_COMPARE(messages.size(), 1);
+        // The view it had is what the session keeps.
+        m_app->saveSession();
+        QCOMPARE(sessionJson()[QStringLiteral("windows")].toArray()[0].toObject()[QStringLiteral("tabs")].toArray()[0].toObject()[QStringLiteral("formatted")].toBool(), storedFormatted);
+        // The next launch is normal again.
+        restart();
+        m_app->start({});
+        doc = m_app->windows().first()->current();
+        QTRY_VERIFY(!doc->isLoading());
+        QVERIFY(doc->isMarkdown());
+        QVERIFY(doc->isFormatted());
+    }
+
+    void emptySessionDoesntCountCrashes()
+    {
+        // Launches that restored nothing died: no reason to set anything aside.
+        QVERIFY(QDir().mkpath(sessionDir()));
+        setRestoring(5);
+        QSignalSpy messages(m_app, &App::message);
+        m_app->start({});
+        QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/restoring")));
+        QTest::qWait(20);
+        QCOMPARE(messages.size(), 0);
+        QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/session.json.bak")));
+    }
+
+    void secondCrashSetsSessionAside()
+    {
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        attach(doc);
+        insert(doc, 0, QStringLiteral("precious"));
+        m_app->saveSession();
+        restart();
+        setRestoring(2);
+        // A text no session names: kept too (no clean-up this run).
+        QFile orphan(sessionDir() + QStringLiteral("/texts/orphan.txt"));
+        QVERIFY(orphan.open(QIODevice::WriteOnly));
+        orphan.close();
+        QSignalSpy messages(m_app, &App::message);
+        m_app->start({});
+        QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/session.json"))); // moved, not copied
+        QCOMPARE(m_app->windows().size(), 1);
+        QCOMPARE(m_app->windows().first()->rowCount(), 1);
+        QVERIFY(m_app->windows().first()->current()->text().isEmpty());
+        QTRY_COMPARE(messages.size(), 1);
+        QVERIFY(messages.first().first().toString().contains(QStringLiteral("session.json.bak")));
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/session.json.bak")));
+        // This run's writes keep the old texts.
+        m_app->saveSession();
+        const QDir texts(sessionDir() + QStringLiteral("/texts"));
+        bool found = false;
+        for (const QString &name : texts.entryList(QDir::Files)) {
+            found = found || read(texts.filePath(name)) == "precious";
+        }
+        QVERIFY(found);
+        QVERIFY(QFile::exists(texts.filePath(QStringLiteral("orphan.txt"))));
+    }
+
+    void secondNotepadDoesntTouchSession()
+    {
+        // Another process (here another open file) holds the lock.
+        QVERIFY(QDir().mkpath(QFileInfo(sessionDir()).path()));
+        const QByteArray lockPath = QFile::encodeName(QFileInfo(sessionDir()).path() + QStringLiteral("/session.lock"));
+        const int fd = ::open(lockPath.constData(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        QVERIFY(fd >= 0);
+        QCOMPARE(::flock(fd, LOCK_EX | LOCK_NB), 0);
+        QSignalSpy messages(m_app, &App::message);
+        m_app->start({});
+        QTRY_COMPARE(messages.size(), 1);
+        DocumentList *list = m_app->windows().first();
+        attach(list->current());
+        insert(list->current(), 0, QStringLiteral("mine"));
+        m_app->saveSession();
+        QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/session.json")));
+        QVERIFY(!m_app->closeWindow(list)); // nothing keeps it: ask
+        ::close(fd);
+        // Free again: the next Notepad has the session.
+        restart();
+        m_app->start({});
+        attach(m_app->windows().first()->current());
+        insert(m_app->windows().first()->current(), 0, QStringLiteral("x"));
+        m_app->saveSession();
+        QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/session.json")));
+    }
+
+    void deletedThenRecreatedReloads()
+    {
+        const QString path = write(QStringLiteral("back.txt"), "one\n");
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        attach(doc);
+        QVERIFY(QFile::remove(path));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::Deleted, 10000);
+        QTest::qWait(300); // long after the file's watch went with it
+        write(QStringLiteral("back.txt"), "two two\n");
+        // Seen through the folder: clean before, so it reloads quietly.
+        QTRY_COMPARE_WITH_TIMEOUT(doc->text(), QStringLiteral("two two\n"), 10000);
+        QCOMPARE(doc->banner(), Document::NoBanner);
+        QVERIFY(!doc->isModified());
+        // Watched as a file again: a later change is seen too.
+        write(QStringLiteral("back.txt"), "three three three\n");
+        QTRY_COMPARE_WITH_TIMEOUT(doc->text(), QStringLiteral("three three three\n"), 10000);
+    }
+
+    void movedAwayIsDeleted()
+    {
+        const QString path = write(QStringLiteral("mv.txt"), "one\n");
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        attach(doc);
+        QVERIFY(QFile::rename(path, m_dir + QStringLiteral("/moved.txt")));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::Deleted, 10000);
+        QVERIFY(doc->isModified()); // the session keeps the text
+        QCOMPARE(doc->text(), QStringLiteral("one\n"));
+        // Typed while it was gone, then the same file comes back: no
+        // conflict, the typing stays unsaved.
+        insert(doc, 0, QStringLiteral("mine "));
+        QVERIFY(QFile::rename(m_dir + QStringLiteral("/moved.txt"), path));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::NoBanner, 10000);
+        QCOMPARE(doc->text(), QStringLiteral("mine one\n"));
+        QVERIFY(doc->isModified());
+        // Another file in its place is a conflict.
+        QVERIFY(QFile::remove(path));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::Deleted, 10000);
+        write(QStringLiteral("mv.txt"), "theirs\n");
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::ChangedOnDisk, 10000);
+        QCOMPARE(doc->text(), QStringLiteral("mine one\n"));
+    }
+
+    void closedTabStopsWaiting()
+    {
+        const QString path = write(QStringLiteral("gone.txt"), "one\n");
+        DocumentList *list = newList();
+        Document *doc = openFile(list, path);
+        QVERIFY(doc);
+        QVERIFY(QFile::remove(path));
+        doc->d->checkOnDisk();
+        QCOMPARE(doc->banner(), Document::Deleted);
+        QPointer<Document> guard(doc);
+        doc->d->setModified(false);
+        list->closeDocument(doc);
+        QTRY_VERIFY(guard.isNull());
+        // The folder's events reach no deleted tab (ASan/valgrind would say).
+        write(QStringLiteral("gone.txt"), "two\n");
+        QTest::qWait(300);
     }
 
     void closedWindowIsDeleted()

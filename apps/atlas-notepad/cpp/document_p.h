@@ -66,6 +66,8 @@ struct Document::Private {
     bool saving = false;
     bool resave = false; // save() asked for during a save
     bool recheck = false; // the file changed during a save or load: look again after
+    bool safeMode = false; // no Markdown or spell check: a launch died restoring it
+    bool safeFormatted = false; // the view stored for it then, written back to the session
     bool cleanBeforeDelete = false; // unmodified when the Deleted banner came
     quint64 deleteRevision = 0; // sessionKey() then
     bool settingText = false;

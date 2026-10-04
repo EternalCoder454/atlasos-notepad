@@ -10,6 +10,8 @@ QQC2.Popup {
     id: dialog
 
     property string fileName
+    // Why it asks although the session would keep the changes, if it can't.
+    property string note
 
     signal save
     signal discard
@@ -61,6 +63,14 @@ QQC2.Popup {
             wrapMode: Text.Wrap
             textFormat: Text.PlainText
             Accessible.role: Accessible.Heading
+        }
+        QQC2.Label {
+            Layout.fillWidth: true
+            visible: dialog.note.length > 0
+            text: dialog.note
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            opacity: 0.8
         }
         RowLayout {
             Layout.fillWidth: true

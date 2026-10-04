@@ -288,6 +288,21 @@ QString errnoText(int error)
     }
 }
 
+QString readErrorText(int error)
+{
+    switch (error) {
+    case EACCES:
+    case EPERM:
+        return QObject::tr("You don't have permission to read it.");
+    case EINVAL:
+        return QObject::tr("It isn't a regular file.");
+    case EIO:
+        return QObject::tr("The disk couldn't be read.");
+    default:
+        return QString::fromLocal8Bit(strerror(error));
+    }
+}
+
 // Find: a plain search, or a regular expression for the other flags.
 struct Matcher {
     QRegularExpression re;
@@ -465,7 +480,7 @@ qint64 Document::Private::currentBytes() const
 
 void Document::Private::applyMarkdown(qint64 bytes)
 {
-    const bool nameOk = path.isEmpty() || isMarkdownName(path);
+    const bool nameOk = !safeMode && (path.isEmpty() || isMarkdownName(path));
     const bool formattingOn = settings().formatting();
     const bool tooBig = bytes > Limits::formattedBytes;
     const bool now = nameOk && formattingOn && !tooBig;
@@ -478,7 +493,7 @@ void Document::Private::applyMarkdown(qint64 bytes)
         markdown = now;
         Q_EMIT q->markdownChanged();
     }
-    const bool isProse = isProseName(path) && !tooBig;
+    const bool isProse = !safeMode && isProseName(path) && !tooBig;
     if (isProse != prose) {
         prose = isProse;
         Q_EMIT q->proseChanged();
@@ -625,11 +640,34 @@ QMultiHash<QString, Document *> &watchedDocuments()
     return docs;
 }
 
+// Tabs whose file is missing, by its folder: inotify can't watch a file
+// that isn't there, so the folder says when it comes back.
+QMultiHash<QString, Document *> &waitingDocuments()
+{
+    static QMultiHash<QString, Document *> docs;
+    return docs;
+}
+
 // One watcher for all tabs (each QFileSystemWatcher holds an inotify instance).
 QPointer<QFileSystemWatcher> &sharedWatcher()
 {
     static QPointer<QFileSystemWatcher> watcher;
     return watcher;
+}
+
+void stopWaiting(Document *doc)
+{
+    for (auto it = waitingDocuments().begin(); it != waitingDocuments().end();) {
+        if (it.value() == doc) {
+            const QString dir = it.key();
+            it = waitingDocuments().erase(it);
+            if (!waitingDocuments().contains(dir) && sharedWatcher()) {
+                sharedWatcher()->removePath(dir);
+            }
+        } else {
+            ++it;
+        }
+    }
 }
 }
 
@@ -650,19 +688,38 @@ void Document::Private::watch()
                 doc->d->diskTimer.start();
             }
         });
+        QObject::connect(w, &QFileSystemWatcher::directoryChanged, w, [](const QString &dir) {
+            const auto docs = waitingDocuments().values(dir);
+            for (Document *doc : docs) {
+                doc->d->diskTimer.start();
+            }
+        });
         sharedWatcher() = w;
     }
     QFileSystemWatcher *watcher = sharedWatcher();
     if (!watchedDocuments().contains(path, q)) {
         watchedDocuments().insert(path, q);
     }
-    if (QFileInfo::exists(path) && !watcher->files().contains(path)) {
-        watcher->addPath(path);
+    if (QFileInfo::exists(path)) {
+        stopWaiting(q);
+        if (!watcher->files().contains(path)) {
+            watcher->addPath(path);
+        }
+        return;
+    }
+    const QString dir = QFileInfo(path).absolutePath();
+    if (!waitingDocuments().contains(dir, q)) {
+        stopWaiting(q); // another folder's, before a Save As
+        waitingDocuments().insert(dir, q);
+    }
+    if (QFileInfo(dir).isDir() && !watcher->directories().contains(dir)) {
+        watcher->addPath(dir);
     }
 }
 
 void Document::Private::unwatch()
 {
+    stopWaiting(q);
     for (auto it = watchedDocuments().begin(); it != watchedDocuments().end();) {
         if (it.value() == q) {
             const QString p = it.key();
@@ -678,17 +735,27 @@ void Document::Private::unwatch()
 
 void Document::Private::checkOnDisk()
 {
-    if (path.isEmpty() || !loaded) {
+    if (path.isEmpty()) {
         return;
     }
     if (saving || loading) {
         recheck = true;
         return;
     }
+    if (!loaded) {
+        // Nothing of the file's is shown. One that couldn't be read is read
+        // again when it changes (chmod, a remounted drive); one too large
+        // waits for the user.
+        if (banners.count(ReadFailed) && !isModified()) {
+            startLoad(Initial);
+        }
+        return;
+    }
     watch(); // re-add after an atomic rename
     NpStamp now = {};
     const int err = np_file_stamp(path.toUtf8().constData(), &now);
     if (err == ENOENT || err == ENOTDIR) {
+        banners.erase(ReadFailed); // gone now, which Deleted says
         if (!banners.count(Deleted)) {
             cleanBeforeDelete = !isModified();
             deleteRevision = sessionKey();
@@ -767,21 +834,25 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
     }
     if (r.error) {
         if (r.error == ENOENT || r.error == ENOTDIR) {
+            banners.erase(ReadFailed); // gone now, which Deleted says
             if (mode == Initial) {
                 loaded = true; // nothing read to protect: Save recreates it
             }
             setBanner(Deleted);
             setModified(true);
         } else {
-            const QString why = r.error == EINVAL ? QObject::tr("it isn't a regular file") : QString::fromLocal8Bit(strerror(r.error));
-            setBanner(SaveFailed, QObject::tr("Couldn't read this file: %1").arg(why));
+            setBanner(ReadFailed, readErrorText(r.error));
         }
         return;
     }
     stamp = r.stamp;
     hasStamp = true;
     keepMine = false;
+    const bool unrecovered = banners.count(Unrecovered);
     banners.clear();
+    if (unrecovered) {
+        banners[Unrecovered]; // the file is back, the unsaved changes aren't
+    }
     const bool wasReadOnly = readOnly;
     if (r.tooLarge) {
         loaded = false;
@@ -862,7 +933,7 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
         hasStamp = true;
         keepMine = false;
         loaded = true;
-        for (const Banner b : {ChangedOnDisk, SaveFailed, Unencodable, Deleted, Lossy, MixedLineEndings}) {
+        for (const Banner b : {ChangedOnDisk, SaveFailed, ReadFailed, Unrecovered, Unencodable, Deleted, Lossy, MixedLineEndings}) {
             banners.erase(b);
         }
         Q_EMIT q->bannerChanged();
