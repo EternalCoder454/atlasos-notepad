@@ -7,10 +7,13 @@ built and tested).
 
 ## Rules
 
-- Never touch Kate, and never put Notepad into the AtlasOS image. Develop
-  here and test in the VM with the RPM installed there.
+- Never touch Kate on this machine. The AtlasOS image (Notepad as a
+  protected system app and the default text editor, Kate removed) belongs to
+  the AtlasOS session: hand it the RPM or commit, don't edit the image from
+  here. Develop here and test in the VM with the RPM installed there.
 - Never read the `Financials/*` or `QuickScript/Keys` notes.
-- No GitHub repo or push without the user's go-ahead.
+- Repo: `EternalCoder454/atlasos-notepad` (public). No push without the
+  user's go-ahead.
 - Commits: `EternalHell <77252745+EternalCoder454@users.noreply.github.com>`.
 
 ## Commands
