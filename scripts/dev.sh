@@ -13,6 +13,7 @@ set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=localhost/atlas-notepad-dev:44
+spec_sum=$(sha256sum "$repo/packaging/atlas-notepad.spec" | cut -d' ' -f1)
 
 # The atlas-ui and atlas-symbols-fonts RPMs in $ATLAS_LOCAL_RPMS: exactly one
 # of each, or nothing is changed.
@@ -71,10 +72,23 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
             cd /
             rm -r /rpms
             dnf -y builddep /packaging/atlas-notepad.spec' bash "${files[@]}" >&2
-        podman commit --change "LABEL atlas-ui=$build" "$ctr" "$image" >/dev/null
+        podman commit --change "LABEL atlas-ui=$build" --change "LABEL spec=$spec_sum" \
+            "$ctr" "$image" >/dev/null
         podman rm -f -t 0 "$ctr" >/dev/null
         trap - EXIT
     fi
+fi
+
+# A changed spec (new BuildRequires) installs its build dependencies into the
+# image, keeping its Atlas.Ui.
+if [ "$(podman image inspect --format '{{index .Labels "spec"}}' "$image")" != "$spec_sum" ]; then
+    ctr=$(podman run -d -v "$repo/packaging":/packaging:ro,z \
+        -v atlas-dnf:/var/cache/libdnf5 "$image" sleep infinity)
+    trap 'podman rm -f -t 0 "$ctr" >/dev/null' EXIT
+    podman exec "$ctr" dnf -y builddep /packaging/atlas-notepad.spec >&2
+    podman commit --change "LABEL spec=$spec_sum" "$ctr" "$image" >/dev/null
+    podman rm -f -t 0 "$ctr" >/dev/null
+    trap - EXIT
 fi
 
 tty=()
