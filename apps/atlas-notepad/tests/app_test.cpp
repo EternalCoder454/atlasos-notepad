@@ -2599,6 +2599,60 @@ private Q_SLOTS:
         QCOMPARE(doc->textEdit()->property("cursorPosition").toInt(), 500);
     }
 
+    // As attachInFlickable, but the content height follows the text late (as
+    // a delayed binding does) and the text wraps at the view's width.
+    QQuickItem *attachInLaggingFlickable(Document *doc)
+    {
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nFlickable {\n"
+                          "    id: flick\n"
+                          "    property QtObject doc\n"
+                          "    property alias edit: e\n"
+                          "    width: 200; height: 100\n"
+                          "    onContentHeightChanged: contentY = Math.max(0, Math.min(contentY, contentHeight - height))\n"
+                          "    Timer { interval: 80; running: flick.doc !== null && !flick.doc.loading; repeat: true; onTriggered: flick.contentHeight = e.height }\n"
+                          "    TextEdit {\n"
+                          "        id: e\n"
+                          "        width: flick.width\n"
+                          "        wrapMode: TextEdit.Wrap\n"
+                          "        textFormat: TextEdit.PlainText\n"
+                          "        readOnly: flick.doc !== null && (flick.doc.readOnly || flick.doc.loading)\n"
+                          "    }\n"
+                          "}",
+                          QUrl());
+        auto *flick = qobject_cast<QQuickItem *>(component.createWithInitialProperties({{QStringLiteral("doc"), QVariant::fromValue(doc)}}));
+        if (!flick) {
+            return nullptr;
+        }
+        m_edits.emplace_back(flick);
+        doc->setTextEdit(flick->property("edit").value<QQuickItem *>());
+        return flick;
+    }
+
+    // A restored scroll in a wrapped text survives a content height that is
+    // not final when the text arrives, small or big (filled in pieces).
+    void restoredScrollWaitsForTheLayout_data()
+    {
+        QTest::addColumn<QByteArray>("bytes");
+        QTest::addColumn<qreal>("scroll");
+        QTest::newRow("wrapped") << QByteArray("one two three four five six seven eight nine ten\n").repeated(300) << 800.0;
+        QTest::newRow("over 64K") << bigText(false) << 200'000.0;
+    }
+
+    void restoredScrollWaitsForTheLayout()
+    {
+        QFETCH(QByteArray, bytes);
+        QFETCH(qreal, scroll);
+        Document *doc = openFile(newList(), write(QStringLiteral("late.txt"), bytes));
+        QVERIFY(doc);
+        doc->d->cursor = doc->d->anchor = 0;
+        doc->d->scrollY = scroll;
+        QQuickItem *flick = attachInLaggingFlickable(doc);
+        QVERIFY(flick);
+        QVERIFY(filled(doc));
+        QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), scroll, 5000);
+    }
+
     // A reload of a big text keeps a scroll past the first piece, though the
     // view clamps it to the first piece meanwhile: that isn't the user's.
     void reloadKeepsAScrollPastTheFirstPiece()

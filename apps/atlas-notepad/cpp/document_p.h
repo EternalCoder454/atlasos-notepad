@@ -177,6 +177,15 @@ struct Document::Private {
     int editAnchor() const; // the TextEdit's selection anchor, also mid-fill
     bool isLoading() const { return loading || filling; }
     void applyView();
+    // A restored scroll waits for the layout: the view's content height
+    // may still grow after the text is in (a wrapped text, a delayed
+    // binding), so the target is re-applied every 50 ms for a second, or until it fits.
+    void holdScroll(QQuickItem *flick, qreal y);
+    void stepHeldScroll(int generation);
+    QPointer<QQuickItem> heldFlick;
+    qreal heldScroll = -1;
+    int heldGeneration = 0;
+    QElapsedTimer heldClock;
     QQuickItem *flickable() const;
 
     struct SaveSnapshot {

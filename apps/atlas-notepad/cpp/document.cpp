@@ -630,13 +630,39 @@ void Document::Private::applyView()
     if (y > 0) {
         QPointer<QQuickItem> flick = flickable();
         if (flick) {
-            QTimer::singleShot(0, flick, [flick, y] {
-                // Never past the end: a stale or bad value would show nothing.
-                const qreal end = qMax(0.0, flick->property("contentHeight").toReal() - flick->height());
-                flick->setProperty("contentY", qBound(0.0, y, end));
+            QTimer::singleShot(0, flick, [this, flick, y] {
+                if (flick) {
+                    holdScroll(flick, y);
+                }
             });
         }
     }
+}
+
+void Document::Private::holdScroll(QQuickItem *flick, qreal y)
+{
+    heldFlick = flick;
+    heldScroll = y;
+    heldClock.start();
+    stepHeldScroll(++heldGeneration);
+}
+
+void Document::Private::stepHeldScroll(int generation)
+{
+    if (generation != heldGeneration || !heldFlick || heldScroll < 0) {
+        return; // a newer hold, or the view is gone
+    }
+    // Never past the end: a stale or bad value would show nothing.
+    const qreal end = qMax(0.0, heldFlick->property("contentHeight").toReal() - heldFlick->height());
+    heldFlick->setProperty("contentY", qBound(0.0, heldScroll, end));
+    // Done once the content reaches it; else (a text shorter than it, or a
+    // layout that never gets there) after a second.
+    if (end >= heldScroll || heldClock.hasExpired(1000)) {
+        heldFlick = nullptr;
+        heldScroll = -1;
+        return;
+    }
+    QTimer::singleShot(50, q, [this, generation] { stepHeldScroll(generation); });
 }
 
 void Document::Private::putText(const QString &text, bool keepView)

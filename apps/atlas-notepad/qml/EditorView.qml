@@ -30,7 +30,8 @@ FocusScope {
         return md.headingAt(edit.cursorPosition);
     }
 
-    readonly property real scrollbarWidth: 10 // SlimScrollBar.implicitWidth
+    // The live scrollbar's width, so the text clears it beside the capsule.
+    readonly property real scrollbarWidth: verticalBar.implicitWidth
     // Kept clear at the right edge (the window's tool capsule).
     property real rightInset: 0
 
@@ -87,8 +88,8 @@ FocusScope {
         } else {
             edit.cursorPosition = position;
         }
-        // After the layout has the text.
-        Qt.callLater(() => flick.contentY = Math.max(0, Math.min(document.scrollY, flick.contentHeight - flick.height)));
+        // The scroll is the document's: Document::applyView re-applies it
+        // while the layout still grows.
     }
 
     Connections {
@@ -183,6 +184,7 @@ FocusScope {
 
         // Overlaid on the text, as in Atlas.Ui pages.
         QQC2.ScrollBar.vertical: SlimScrollBar {
+            id: verticalBar
             parent: flick.parent
             x: flick.x + flick.width - width
             y: flick.y
