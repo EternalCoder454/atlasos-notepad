@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>net.eterneon.atlas.notepad</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Notepad</name>
+  <summary>Write and edit text and Markdown files</summary>
+  <description>
+    <p>Notepad is a fast, simple text editor with tabs. It opens and saves plain text files exactly as they are, in UTF-8, UTF-16 or Windows-1252, with Unix or Windows line endings.</p>
+    <p>Markdown files can show their formatting as you write: headings, bold and italic text, lists, checklists, quotes and links, with a toolbar to add them. The file itself stays plain Markdown.</p>
+    <p>Your tabs, unsaved changes included, come back the next time you open Notepad. It collects nothing and needs no account.</p>
+  </description>
+  <launchable type="desktop-id">net.eterneon.atlas.notepad.desktop</launchable>
+  <url type="homepage">https://github.com/EternalCoder454/AtlasOS</url>
+  <url type="vcs-browser">https://github.com/EternalCoder454/atlasos-notepad</url>
+  <url type="bugtracker">https://github.com/EternalCoder454/atlasos-notepad/issues</url>
+  <developer id="net.eterneon">
+    <name>Eterneon</name>
+  </developer>
+  <categories>
+    <category>Utility</category>
+    <category>TextEditor</category>
+  </categories>
+  <provides>
+    <binary>atlas-notepad</binary>
+    <mediatype>text/plain</mediatype>
+    <mediatype>text/markdown</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.1.0" date="2026-10-03"/>
+  </releases>
+</component>

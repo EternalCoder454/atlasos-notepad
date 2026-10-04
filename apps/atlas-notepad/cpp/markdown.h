@@ -211,6 +211,13 @@ public:
     Q_INVOKABLE int headingAt(int position) const;
     // The URL of the link at a position, or "".
     Q_INVOKABLE QString linkAt(int position) const;
+    // Takes the Markdown out of the selection: bold, italic, code, links
+    // (their text stays) and, on its lines, heading, list and quote prefixes.
+    // Code blocks are left alone.
+    Q_INVOKABLE void clearFormatting();
+    // On a link with no selection: changes its address. Otherwise replaces
+    // the selection with [text](url) (text defaults to the url).
+    Q_INVOKABLE void insertLink(const QString &text, const QString &url);
 
 Q_SIGNALS:
     void textEditChanged();

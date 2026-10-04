@@ -1,0 +1,105 @@
+// The menu button's menu, for when there is no global menu: the same
+// actions as GlobalMenu, in submenus.
+pragma ComponentBehavior: Bound
+
+import QtQuick
+import QtQuick.Controls as QQC2
+import Atlas.Ui
+import net.eterneon.atlas.notepad
+
+ContextMenu {
+    id: menu
+
+    required property var actions
+
+    signal openRecent(string path)
+
+    component Item: ContextMenuItem {
+        // The shortcut lives on the action; this only shows it.
+        shortcutText: action && action.shortcut ? String(action.shortcut) : ""
+    }
+
+    Item { action: menu.actions.newTab }
+    Item { action: menu.actions.newWindow }
+    Item { action: menu.actions.open }
+    ContextMenu {
+        id: recent
+        title: qsTr("Open Recent")
+        enabled: App.recentFiles.length > 0
+
+        Instantiator {
+            model: App.recentFiles
+            delegate: ContextMenuItem {
+                required property string modelData
+                text: modelData.replace(/^\/home\/[^\/]+/, "~")
+                onTriggered: menu.openRecent(modelData)
+            }
+            onObjectAdded: (index, object) => recent.insertItem(index, object)
+            onObjectRemoved: (index, object) => recent.removeItem(object)
+        }
+        ContextMenuSeparator {}
+        ContextMenuItem {
+            text: qsTr("Clear List")
+            onTriggered: App.clearRecentFiles()
+        }
+    }
+    Item { action: menu.actions.save }
+    Item { action: menu.actions.saveAs }
+    Item { action: menu.actions.saveAll }
+    Item { action: menu.actions.print }
+    ContextMenuSeparator {}
+    ContextMenu {
+        title: qsTr("Edit")
+        Item { action: menu.actions.undo }
+        Item { action: menu.actions.redo }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.cut }
+        Item { action: menu.actions.copy }
+        Item { action: menu.actions.paste }
+        Item { action: menu.actions.delete }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.find }
+        Item { action: menu.actions.replace }
+        Item { action: menu.actions.goTo }
+        Item { action: menu.actions.selectAll }
+        Item { action: menu.actions.timeDate }
+    }
+    ContextMenu {
+        title: qsTr("Format")
+        enabled: menu.actions.bold.enabled
+        Item { action: menu.actions.heading1 }
+        Item { action: menu.actions.heading2 }
+        Item { action: menu.actions.heading3 }
+        Item { action: menu.actions.bodyText }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.bold }
+        Item { action: menu.actions.italic }
+        Item { action: menu.actions.strikethrough }
+        Item { action: menu.actions.code }
+        Item { action: menu.actions.link }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.bulletList }
+        Item { action: menu.actions.numberedList }
+        Item { action: menu.actions.checklist }
+        Item { action: menu.actions.quote }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.clearFormatting }
+    }
+    ContextMenu {
+        title: qsTr("View")
+        Item { action: menu.actions.zoomIn }
+        Item { action: menu.actions.zoomOut }
+        Item { action: menu.actions.zoomReset }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.toggleFormatted }
+        Item { action: menu.actions.toolbar }
+        Item { action: menu.actions.statusBar }
+        Item { action: menu.actions.lineNumbers }
+        Item { action: menu.actions.wordWrap }
+    }
+    ContextMenuSeparator {}
+    Item { action: menu.actions.closeTab }
+    Item { action: menu.actions.reopenTab }
+    Item { action: menu.actions.closeWindow }
+    Item { action: menu.actions.quit }
+}

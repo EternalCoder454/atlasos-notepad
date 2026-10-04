@@ -45,7 +45,7 @@ FetchContent_MakeAvailable(atlasos_updater)
 
 # The app's QObjects (cpp/app.h), shared with app_test.
 set(APP_SOURCES
-    cpp/app.h cpp/limits.h cpp/notepad_core.h
+    cpp/app.h cpp/sizelimits.h cpp/notepad_core.h
     cpp/settings.cpp cpp/document.cpp cpp/documentlist.cpp cpp/app.cpp
     cpp/session.h cpp/session.cpp cpp/linenumbers.cpp)
 set(APP_LIBS
@@ -68,7 +68,8 @@ qt_add_qml_module(atlas-notepad-app
     # their plugins at run time.
     NO_IMPORT_SCAN
     QML_FILES
-        qml/Main.qml qml/ToolIcon.qml
+        qml/Main.qml qml/EditorView.qml qml/FormatToolbar.qml qml/GlobalMenu.qml
+        qml/FallbackMenu.qml qml/SettingsPage.qml qml/UnsavedDialog.qml
     SOURCES
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
         ${APP_SOURCES}
@@ -77,7 +78,7 @@ qt_add_qml_module(atlas-notepad-app
         icons/chevron-right.svg icons/chevron-up.svg icons/close.svg icons/code.svg
         icons/copy.svg icons/divider.svg icons/find-replace.svg icons/heading1.svg
         icons/heading2.svg icons/image.svg icons/italic.svg icons/link-add.svg
-        icons/link.svg icons/menu.svg icons/paragraph.svg icons/quote.svg
+        icons/link.svg icons/menu.svg icons/numbered-list.svg icons/paragraph.svg icons/quote.svg
         icons/search.svg icons/settings.svg icons/strikethrough.svg icons/table.svg
         icons/task.svg icons/text.svg icons/toolbar.svg
 )
@@ -110,3 +111,11 @@ endif()
 install(TARGETS atlas-notepad-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/net.eterneon.atlas.notepad.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES data/net.eterneon.atlas.notepad.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+install(FILES data/net.eterneon.atlas.notepad.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+# Drawn again for 16 px, where the 128 px lines would blur.
+install(FILES data/net.eterneon.atlas.notepad-16.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/16x16/apps
+        RENAME net.eterneon.atlas.notepad.svg)

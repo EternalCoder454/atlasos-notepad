@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Notepad</title>
+  <!-- The Atlas apps' tile (as Atlas Monitor's icon) with a page of text: a
+       heading in purple and lines in lavender, the corner turned down. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a7af4"/>
+      <stop offset="1" stop-color="#5b4bd8"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="25.5" fill="none" stroke="#ffffff" stroke-opacity="0.18"/>
+  <path fill="#ffffff" d="M 40 24 H 76 L 96 44 V 96 A 8 8 0 0 1 88 104 H 40 A 8 8 0 0 1 32 96 V 32 A 8 8 0 0 1 40 24 Z"/>
+  <path fill="#c9c0ff" d="M 76 24 V 38 A 6 6 0 0 0 82 44 H 96 Z"/>
+  <g fill="none" stroke-linecap="round">
+    <path stroke="#6858e2" stroke-width="7" d="M 44 44 H 64"/>
+    <path stroke="#c9c0ff" stroke-width="4" d="M 44 60 H 84 M 44 72 H 84 M 44 84 H 70"/>
+  </g>
+</svg>

@@ -9,14 +9,20 @@ Atlas Notes (`AtlasOS/Atlas Text Editor/Plan` and `/Roadmap`).
 
 | Path | What |
 | --- | --- |
-| `crates/notepad-core` | Rust, no Qt: the Markdown line reader (`markdown.rs`). Later: files, encodings, saving, session. |
-| `apps/atlas-notepad/src/lib.rs` | The C ABI the C++ side calls (`np_md_line`, `np_md_link_at`). |
-| `apps/atlas-notepad/cpp/` | Qt glue: highlighter, editor behaviour, decorations, bench, `main.cpp`. |
-| `apps/atlas-notepad/qml/` | The window. |
+| `crates/notepad-core` | Rust, no Qt: the Markdown line reader (`markdown.rs`), and reading, decoding, encoding and saving files (`file.rs`). |
+| `apps/atlas-notepad/src/lib.rs` | The C ABI the C++ side calls (`np_md_*`, `np_file_*`). |
+| `apps/atlas-notepad/cpp/` | Qt: the editor (highlighter, editing, decorations), and the app's objects in `app.h`: `App`, `Settings`, `DocumentList`, `Document`, `LineNumbers`, plus the session. |
+| `apps/atlas-notepad/qml/` | The window: tabs, toolbar, editors, find, banners, status bar, menus, settings. |
 | `apps/atlas-notepad/icons/` | Material Symbols from Atlas Notes (Apache-2.0, see `NOTICE`). |
 
-The Rust side is linked as a static library through Corrosion. It exposes a
-plain C ABI for now; CXX-Qt comes in when the app needs Rust-side QObjects.
+The Rust side is linked as a static library through Corrosion and exposes a
+plain C ABI. The QObjects are C++: they mostly wrap Qt (the TextEdit's
+document, file watching, the session bus), and the Rust work behind them is a
+handful of pure functions, so CXX-Qt would add a build step for little.
+
+Find and replace search the document's text (`QString`/`QRegularExpression`
+on a snapshot), not `QTextDocument::find`, which is slower and can't count
+matches cheaply. Replace All is one edit block, so one undo.
 
 ## The WYSIWYG editor (spike S1)
 
@@ -132,7 +138,7 @@ document keeps about 70 bytes per character. A long line is laid out again
 whole on every keystroke. Getting past that means a different text widget,
 which is out of scope for a Notepad.
 
-**Limits** (`cpp/limits.h`):
+**Limits** (`cpp/sizelimits.h`):
 - Formatted view up to 1 MiB. Bigger Markdown opens as plain text with a
   banner ("Large file: formatting is off").
 - Lines up to 100,000 characters stay editable (typing about 15 ms at that

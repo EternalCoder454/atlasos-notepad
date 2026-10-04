@@ -212,6 +212,46 @@ private Q_SLOTS:
         QMetaObject::invokeMethod(m_edit.get(), "undo");
         QCOMPARE(text(), QStringLiteral("one\ntwo"));
     }
+
+    void enterRenumbersTheRest()
+    {
+        open(QStringLiteral("1. a\n2. b\n   - c\n3. d"));
+        place(4);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("1. a\n2. \n3. b\n   - c\n4. d"));
+    }
+
+    void clearFormattingKeepsText()
+    {
+        open(QStringLiteral("# A **b** [c](u) \\*"));
+        select(0, int(text().size()));
+        m_editor->clearFormatting();
+        QCOMPARE(text(), QStringLiteral("A b c \\*"));
+    }
+
+    void clearFormattingTakesMarkersAroundSelection()
+    {
+        open(QStringLiteral("x **bold** y"));
+        select(4, 8); // "bold", the visible letters
+        m_editor->clearFormatting();
+        QCOMPARE(text(), QStringLiteral("x bold y"));
+    }
+
+    void insertLinkWrapsSelection()
+    {
+        open(QStringLiteral("see here"));
+        select(4, 8);
+        m_editor->insertLink(QStringLiteral("here"), QStringLiteral("https://a.b/c d"));
+        QCOMPARE(text(), QStringLiteral("see [here](<https://a.b/c d>)"));
+    }
+
+    void insertLinkOnLinkChangesAddress()
+    {
+        open(QStringLiteral("[t](old)"));
+        place(2); // after the visible "t"
+        m_editor->insertLink(QString(), QStringLiteral("new"));
+        QCOMPARE(text(), QStringLiteral("[t](new)"));
+    }
 };
 
 QTEST_MAIN(EditorTest)

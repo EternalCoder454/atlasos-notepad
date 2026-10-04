@@ -4,10 +4,15 @@ Name=Notepad
 GenericName=Text Editor
 Comment=Write and edit text and Markdown files
 Exec=atlas-notepad %F
-Icon=accessories-text-editor
+Icon=net.eterneon.atlas.notepad
 Terminal=false
 Categories=Qt;KDE;Utility;TextEditor;
 Keywords=text;editor;notepad;markdown;notes;txt;md;
 MimeType=text/plain;text/markdown;
 StartupNotify=true
 X-KDE-StartupNotify=true
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=atlas-notepad --new-window

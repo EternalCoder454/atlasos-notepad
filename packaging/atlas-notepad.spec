@@ -45,9 +45,13 @@ BuildRequires:  kf6-kirigami-devel
 
 Requires:       kf6-kirigami
 Requires:       kf6-qqc2-desktop-style
+# also the file dialogs and Qt.labs.platform's global menu
 Requires:       qt6-qtdeclarative
+Requires:       hicolor-icon-theme
 # the app icon and Breeze's icons are SVG
 Requires:       qt6-qtsvg
+# printing
+Requires:       qt6-qtbase-gui
 
 %description
 Notepad is a fast, simple text editor. It opens and saves plain text files as
@@ -66,7 +70,9 @@ export CARGO_HOME=${CARGO_HOME:-%{_builddir}/cargo-home}
 export RUSTFLAGS="%{build_rustflags}"
 export CARGO_PROFILE_RELEASE_STRIP=none
 %global _vpath_srcdir apps/atlas-notepad
-%cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
+# --define "atlas_ui_dir /path/to/atlasos-updater" builds against a local
+# Atlas.Ui checkout instead of the pinned commit (for testing unpushed work).
+%cmake -G Ninja -DCMAKE_BUILD_TYPE=Release %{?atlas_ui_dir:-DFETCHCONTENT_SOURCE_DIR_ATLASOS_UPDATER=%{atlas_ui_dir}}
 %cmake_build
 
 %install
@@ -74,11 +80,16 @@ export CARGO_PROFILE_RELEASE_STRIP=none
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/net.eterneon.atlas.notepad.desktop
+appstream-util validate-relax --nonet \
+    %{buildroot}%{_datadir}/metainfo/net.eterneon.atlas.notepad.metainfo.xml
 
 %files
 %license LICENSE NOTICE
 %{_bindir}/atlas-notepad
 %{_datadir}/applications/net.eterneon.atlas.notepad.desktop
+%{_datadir}/metainfo/net.eterneon.atlas.notepad.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/net.eterneon.atlas.notepad.svg
+%{_datadir}/icons/hicolor/16x16/apps/net.eterneon.atlas.notepad.svg
 
 %changelog
 * Sat Oct 03 2026 Atlas <atlas@eterneon.net> - 0.1.0-1

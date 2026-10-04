@@ -4,7 +4,7 @@
 // (notepad_core.h) on a worker thread; nothing here blocks on the disk.
 #pragma once
 
-#include "limits.h"
+#include "sizelimits.h"
 #include "notepad_core.h"
 
 #include <QAbstractListModel>
