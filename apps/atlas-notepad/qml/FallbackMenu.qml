@@ -28,11 +28,21 @@ ContextMenu {
     ContextMenu {
         id: recent
         title: qsTr("Open Recent")
-        // Items before the recent files: Reopen Closed Tab and its separator.
-        readonly property int recentLead: 2
+        // Where the recent files go: just after the separator that ends the
+        // lead items (Reopen Closed Tab), wherever that is in the menu.
+        function recentLead(): int {
+            for (let i = 0; i < count; ++i) {
+                if (itemAt(i) === leadEnd) {
+                    return i + 1;
+                }
+            }
+            return 0;
+        }
 
         Item { action: menu.actions.reopenTab }
-        ContextMenuSeparator {}
+        ContextMenuSeparator {
+            id: leadEnd
+        }
         Instantiator {
             model: App.recentFiles
             delegate: ContextMenuItem {
@@ -40,10 +50,14 @@ ContextMenu {
                 text: App.displayPath(modelData)
                 onTriggered: menu.openRecent(modelData)
             }
-            onObjectAdded: (index, object) => recent.insertItem(index + recentLead, object)
+            onObjectAdded: (index, object) => recent.insertItem(index + recent.recentLead(), object)
             onObjectRemoved: (index, object) => recent.removeItem(object)
         }
-        ContextMenuSeparator {}
+        // Only with files to separate from the rest: else it would sit
+        // directly under the first separator.
+        ContextMenuSeparator {
+            visible: App.recentFiles.length > 0
+        }
         ContextMenuItem {
             text: qsTr("Clear List")
             enabled: App.recentFiles.length > 0
