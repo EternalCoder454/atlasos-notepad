@@ -79,6 +79,7 @@ BOOL_SETTING(Formatting, formatting, true)
 BOOL_SETTING(OpenMarkdownFormatted, openMarkdownFormatted, true)
 BOOL_SETTING(ContinueSession, continueSession, true)
 BOOL_SETTING(OpenInNewWindow, openInNewWindow, false)
+BOOL_SETTING(SpellCheck, spellCheck, true)
 BOOL_SETTING(GpuRendering, gpuRendering, false)
 
 int Settings::zoom() const

@@ -239,8 +239,18 @@ FocusScope {
                         edit.cursorPosition = position;
                     }
                     contextMenu.link = view.document.markdown ? md.linkAt(position) : "";
+                    contextMenu.spelling = spell.wordAt(position);
                     contextMenu.popup(edit, point.position.x, point.position.y);
                 }
+            }
+
+            // Over the text, the visible part only.
+            SpellUnderlines {
+                visible: spell.active
+                spellChecker: spell
+                y: flick.contentY
+                width: edit.width
+                height: flick.height
             }
 
             // Behind the text, over the visible part only.
@@ -263,9 +273,18 @@ FocusScope {
         onTriggered: view.saveViewState()
     }
 
+    SpellChecker {
+        id: spell
+        textEdit: edit
+        active: view.settings.spellCheck && view.document.prose && !edit.readOnly
+        plainText: !view.document.markdown
+        underlineColor: Kirigami.Theme.negativeTextColor
+    }
+
     MarkdownEditor {
         id: md
         textEdit: view.document.markdown ? edit : null
+        spellChecker: spell
         formatted: view.document.formatted
         font: edit.font
         textColor: Kirigami.Theme.textColor
@@ -279,6 +298,41 @@ FocusScope {
         id: contextMenu
 
         property string link
+        // The misspelled word under the click: {start, end, word, suggestions}.
+        property var spelling: ({})
+        readonly property bool misspelled: spelling.word !== undefined
+        readonly property var suggestions: misspelled ? spelling.suggestions : []
+
+        component Suggestion: ContextMenuItem {
+            required property int index
+            visible: contextMenu.suggestions.length > index
+            text: visible ? contextMenu.suggestions[index] : ""
+            onTriggered: spell.replace(contextMenu.spelling.start, contextMenu.spelling.end, contextMenu.spelling.word, text)
+        }
+
+        Suggestion { index: 0 }
+        Suggestion { index: 1 }
+        Suggestion { index: 2 }
+        Suggestion { index: 3 }
+        Suggestion { index: 4 }
+        ContextMenuItem {
+            visible: contextMenu.misspelled && contextMenu.suggestions.length === 0
+            enabled: false
+            text: qsTr("No Suggestions")
+        }
+        ContextMenuItem {
+            visible: contextMenu.misspelled
+            text: qsTr("Add to Dictionary")
+            onTriggered: spell.addToDictionary(contextMenu.spelling.word)
+        }
+        ContextMenuItem {
+            visible: contextMenu.misspelled
+            text: qsTr("Ignore")
+            onTriggered: spell.ignore(contextMenu.spelling.word)
+        }
+        ContextMenuSeparator {
+            visible: contextMenu.misspelled
+        }
 
         ContextMenuItem {
             visible: contextMenu.link.length > 0

@@ -83,6 +83,13 @@ AtlasPage {
             switchChecked: page.settings.statusBar
             onSwitchToggled: checked => page.settings.statusBar = checked
         }
+        SectionRow {
+            title: qsTr("Check spelling")
+            subtitle: qsTr("Underlines misspelled words in Markdown and text files, not in code")
+            showSwitch: true
+            switchChecked: page.settings.spellCheck
+            onSwitchToggled: checked => page.settings.spellCheck = checked
+        }
     }
 
     Section {

@@ -15,6 +15,7 @@ qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
 find_package(KF6DBusAddons REQUIRED)
 find_package(KF6WindowSystem REQUIRED)
+find_package(KF6Sonnet REQUIRED)
 find_package(Corrosion REQUIRED)
 
 set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
@@ -51,7 +52,7 @@ set(APP_SOURCES
 set(APP_LIBS
     atlas_notepad
     Qt6::Core Qt6::Concurrent Qt6::DBus Qt6::Gui Qt6::PrintSupport Qt6::Qml Qt6::Quick
-    Qt6::QuickControls2 Qt6::Widgets KF6::DBusAddons KF6::WindowSystem)
+    Qt6::QuickControls2 Qt6::Widgets KF6::DBusAddons KF6::WindowSystem KF6::SonnetCore)
 
 qt_add_executable(atlas-notepad-app cpp/main.cpp cpp/bench.h cpp/bench.cpp)
 set_target_properties(atlas-notepad-app PROPERTIES OUTPUT_NAME atlas-notepad)
@@ -72,6 +73,7 @@ qt_add_qml_module(atlas-notepad-app
         qml/FallbackMenu.qml qml/SettingsPage.qml qml/UnsavedDialog.qml qml/SlimScrollBar.qml
     SOURCES
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
+        cpp/spellcheck.h cpp/spellcheck.cpp
         ${APP_SOURCES}
     RESOURCES
         icons/bold.svg icons/bullet-list.svg icons/checklist.svg icons/chevron-down.svg
@@ -95,15 +97,17 @@ if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     # Plain add_executable: Qt's finalizer would scan for QML imports it doesn't need.
     add_executable(editor_test tests/editor_test.cpp
-        cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp)
+        cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
+        cpp/spellcheck.h cpp/spellcheck.cpp)
     target_include_directories(editor_test PRIVATE cpp)
-    target_link_libraries(editor_test PRIVATE atlas_notepad Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test)
+    target_link_libraries(editor_test PRIVATE atlas_notepad Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test KF6::SonnetCore)
     add_test(NAME editor_test COMMAND editor_test)
     set_tests_properties(editor_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     # Documents, tabs, the session and settings, with XDG dirs in a temp dir.
     add_executable(app_test tests/app_test.cpp
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
+        cpp/spellcheck.h cpp/spellcheck.cpp
         ${APP_SOURCES})
     target_include_directories(app_test PRIVATE cpp)
     target_link_libraries(app_test PRIVATE ${APP_LIBS} Qt6::Test)

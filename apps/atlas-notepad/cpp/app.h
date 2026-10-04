@@ -47,6 +47,8 @@ class Settings : public QObject
     Q_PROPERTY(bool continueSession READ continueSession WRITE setContinueSession NOTIFY continueSessionChanged)
     // true: files opened from outside go to a new window instead of a tab.
     Q_PROPERTY(bool openInNewWindow READ openInNewWindow WRITE setOpenInNewWindow NOTIFY openInNewWindowChanged)
+    // Underlines misspelled words in prose (Markdown, .txt, untitled tabs).
+    Q_PROPERTY(bool spellCheck READ spellCheck WRITE setSpellCheck NOTIFY spellCheckChanged)
     // Takes effect at the next start (main.cpp reads it before Qt starts).
     Q_PROPERTY(bool gpuRendering READ gpuRendering WRITE setGpuRendering NOTIFY gpuRenderingChanged)
     // Percent, 50..400, steps of 10. Shared by all windows.
@@ -77,6 +79,8 @@ public:
     void setContinueSession(bool on);
     bool openInNewWindow() const;
     void setOpenInNewWindow(bool on);
+    bool spellCheck() const;
+    void setSpellCheck(bool on);
     bool gpuRendering() const;
     void setGpuRendering(bool on);
     int zoom() const;
@@ -100,6 +104,7 @@ Q_SIGNALS:
     void openMarkdownFormattedChanged();
     void continueSessionChanged();
     void openInNewWindowChanged();
+    void spellCheckChanged();
     void gpuRenderingChanged();
     void zoomChanged();
 
@@ -127,6 +132,9 @@ class Document : public QObject
     // False when Settings.formatting is off or the text is over the
     // Formatted view's size limit.
     Q_PROPERTY(bool markdown READ isMarkdown NOTIFY markdownChanged)
+    // Prose, which spell check reads: Markdown, .txt, no extension or untitled,
+    // up to the Formatted view's size limit. Not code or config files.
+    Q_PROPERTY(bool prose READ isProse NOTIFY proseChanged)
     // Formatted view (markers hidden) or Syntax view; only for markdown.
     Q_PROPERTY(bool formatted READ isFormatted WRITE setFormatted NOTIFY formattedChanged)
     Q_PROPERTY(bool readOnly READ isReadOnly NOTIFY readOnlyChanged)
@@ -184,6 +192,7 @@ public:
     bool isModified() const;
     bool isLoading() const;
     bool isMarkdown() const;
+    bool isProse() const;
     bool isFormatted() const;
     void setFormatted(bool on);
     bool isReadOnly() const;
@@ -258,6 +267,7 @@ Q_SIGNALS:
     void modifiedChanged();
     void loadingChanged();
     void markdownChanged();
+    void proseChanged();
     void formattedChanged();
     void readOnlyChanged();
     void encodingChanged();

@@ -1,9 +1,16 @@
 // Formats for each line's Markdown, from what Rust reads in it.
 #include "markdown.h"
+#include "spellcheck.h"
 
-MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document)
+MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document, bool markdown)
     : QSyntaxHighlighter(document)
+    , m_markdown(markdown)
 {
+}
+
+void MarkdownHighlighter::setSpellChecker(SpellChecker *spell)
+{
+    m_spell = spell;
 }
 
 void MarkdownHighlighter::setStyle(const MarkdownStyle &style)
@@ -17,6 +24,12 @@ void MarkdownHighlighter::setStyle(const MarkdownStyle &style)
 // marks) and m_ranges (the formats), and returns the state for the next line.
 int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info)
 {
+    if (!m_markdown) {
+        info->hidden.clear();
+        m_ranges.clear();
+        addMisspelled(text, 0, info);
+        return 0;
+    }
     const auto *utf16 = reinterpret_cast<const uint16_t *>(text.utf16());
     NpLine line{};
     size_t n = np_md_line(utf16, size_t(text.size()), previous, m_runs.data(), m_runs.size(), &line);
@@ -51,6 +64,7 @@ int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info
             }
         }
     }
+    addMisspelled(text, n, info);
     return line.state;
 }
 
@@ -66,6 +80,36 @@ void MarkdownHighlighter::highlightBlock(const QString &text)
         setFormat(r.start, r.length, r.format);
     }
     setCurrentBlockState(state);
+}
+
+// Notes the line's misspelled words in `info` for SpellUnderlines (Qt Quick
+// draws an underline format in the text colour only). Code, links and URLs
+// aren't checked; hidden markers inside a word (**bo**ld) don't split it.
+// `runs` is how many of m_runs belong to this line.
+void MarkdownHighlighter::addMisspelled(const QString &text, size_t runs, BlockInfo *info)
+{
+    info->misspelled.clear();
+    if (!m_spell || !m_spell->isActive()) {
+        return;
+    }
+    QList<SpellChecker::CharClass> classes;
+    if (runs) {
+        classes.resize(text.size(), SpellChecker::Normal);
+        for (size_t i = 0; i < runs; ++i) {
+            const NpRun &r = m_runs[i];
+            const auto cls = (r.flags & (Md::Code | Md::CodeBlock | Md::Fence | Md::Link)) ? SpellChecker::Break
+                : (r.flags & Md::Hidden)                                                 ? SpellChecker::Skip
+                                                                                         : SpellChecker::Normal;
+            const qsizetype from = qMin<qsizetype>(r.start, text.size());
+            const qsizetype to = qMin<qsizetype>(qsizetype(r.start) + r.len, text.size());
+            if (cls != SpellChecker::Normal && from < to) {
+                std::fill(classes.begin() + from, classes.begin() + to, cls);
+            }
+        }
+    }
+    for (const SpellChecker::Word &w : m_spell->misspelled(text, classes)) {
+        info->misspelled.append({w.start, w.end});
+    }
 }
 
 // QSyntaxHighlighter::rehighlight() tells the layout about each block on its

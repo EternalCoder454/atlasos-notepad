@@ -353,6 +353,26 @@ private Q_SLOTS:
         QVERIFY(!doc->isMarkdown());
     }
 
+    void proseIsWhatSpellCheckReads()
+    {
+        DocumentList *list = newList();
+        QVERIFY(list->newTab()->isProse()); // untitled
+        for (const char *name : {"a.md", "b.txt", "README", "c.TXT"}) {
+            Document *doc = openFile(list, write(QLatin1String(name), "words\n"));
+            QVERIFY2(doc && doc->isProse(), name);
+        }
+        for (const char *name : {"d.json", "e.js", "f.conf", "g.py"}) {
+            Document *doc = openFile(list, write(QLatin1String(name), "{}\n"));
+            QVERIFY2(doc && !doc->isProse(), name);
+        }
+        // Renamed to code by Save As: no longer prose.
+        Document *doc = openFile(list, write(QStringLiteral("h.txt"), "x\n"));
+        QSignalSpy saved(doc, &Document::saved);
+        doc->saveAs(QUrl::fromLocalFile(m_dir + QStringLiteral("/h.rs")));
+        QVERIFY(saved.wait(5000));
+        QVERIFY(!doc->isProse());
+    }
+
     void externalChangeWhileUnmodifiedReloads()
     {
         const QString path = write(QStringLiteral("x.txt"), "one\n");

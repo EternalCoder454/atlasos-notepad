@@ -333,6 +333,115 @@ private Q_SLOTS:
         QCOMPARE(text(), QStringLiteral("<mailto:a@b.c>"));
         QCOMPARE(m_edit->property("cursorPosition").toInt(), 14);
     }
+
+    void spellWordsSkipCodeLikeTokens()
+    {
+        auto texts = [](const QList<SpellChecker::Word> &words) {
+            QStringList out;
+            for (const auto &w : words) {
+                out.append(w.text);
+            }
+            return out;
+        };
+        const QString line = QStringLiteral("Don't stop: NASA x2 foo_bar iPhone https://x.org/abc a@b.org www.foo.com it’s a");
+        QCOMPARE(texts(SpellChecker::words(line)), (QStringList{QStringLiteral("Don't"), QStringLiteral("stop"), QStringLiteral("it's")}));
+        // A hidden marker inside a word doesn't split it; a Break ends it.
+        const QString md = QStringLiteral("**bo**ld `code`");
+        QList<SpellChecker::CharClass> classes(md.size(), SpellChecker::Normal);
+        for (int i : {0, 1, 4, 5}) {
+            classes[i] = SpellChecker::Skip;
+        }
+        for (int i = 9; i < md.size(); ++i) {
+            classes[i] = SpellChecker::Break;
+        }
+        const auto words = SpellChecker::words(md, classes);
+        QCOMPARE(texts(words), QStringList{QStringLiteral("bold")});
+        QCOMPARE(words.first().start, 2);
+        QCOMPARE(words.first().end, 8);
+        // An emoji is not a letter: it ends the word and isn't one.
+        QCOMPARE(texts(SpellChecker::words(QStringLiteral("hello\U0001F600world \U0001F600\U0001F600"))),
+                 (QStringList{QStringLiteral("hello"), QStringLiteral("world")}));
+    }
+
+    void spellCheckSkipsOtherScripts()
+    {
+        SpellChecker::setLanguage(QStringLiteral("en_US"));
+        if (SpellChecker::language().isEmpty()) {
+            QSKIP("no en_US dictionary");
+        }
+        SpellChecker spell;
+        QVERIFY(spell.misspelled(QStringLiteral("привет мир καλημέρα 你好世界")).isEmpty());
+        QCOMPARE(spell.misspelled(QStringLiteral("привет wrold")).size(), 1);
+    }
+
+    void spellCheckUnderlinesProseOnly()
+    {
+        SpellChecker::setLanguage(QStringLiteral("en_US"));
+        if (SpellChecker::language().isEmpty()) {
+            QSKIP("no en_US dictionary");
+        }
+        SpellChecker spell;
+        open(QStringLiteral("Helo **wrold** `helo` [helo](https://helo.org) fine"));
+        spell.setTextEdit(m_edit.get());
+        spell.setActive(true);
+        m_editor->setSpellChecker(&spell);
+        QCoreApplication::processEvents();
+        QCOMPARE(underlined(), (QList<QPair<int, int>>{{0, 4}, {7, 12}}));
+        // The context menu's word, without its markers, and a fix.
+        const QVariantMap at = spell.wordAt(9);
+        QCOMPARE(at.value(QStringLiteral("word")).toString(), QStringLiteral("wrold"));
+        QVERIFY(at.value(QStringLiteral("suggestions")).toStringList().contains(QStringLiteral("world")));
+        spell.replace(at.value(QStringLiteral("start")).toInt(), at.value(QStringLiteral("end")).toInt(), at.value(QStringLiteral("word")).toString(), QStringLiteral("world"));
+        QCOMPARE(text(), QStringLiteral("Helo **world** `helo` [helo](https://helo.org) fine"));
+        QCoreApplication::processEvents();
+        QCOMPARE(underlined(), (QList<QPair<int, int>>{{0, 4}}));
+        spell.ignore(QStringLiteral("Helo"));
+        QCoreApplication::processEvents();
+        QVERIFY(underlined().isEmpty());
+        // Off: no underlines, no word.
+        open(QStringLiteral("Thsi"));
+        m_editor->setSpellChecker(&spell);
+        spell.setTextEdit(m_edit.get());
+        QCoreApplication::processEvents();
+        QCOMPARE(underlined().size(), 1);
+        spell.setActive(false);
+        QCoreApplication::processEvents();
+        QVERIFY(underlined().isEmpty());
+        QVERIFY(spell.wordAt(1).isEmpty());
+        m_editor->setSpellChecker(nullptr);
+    }
+
+    void spellCheckPlainText()
+    {
+        SpellChecker::setLanguage(QStringLiteral("en_US"));
+        if (SpellChecker::language().isEmpty()) {
+            QSKIP("no en_US dictionary");
+        }
+        open(QStringLiteral("plain **wrold** text"));
+        m_editor->setTextEdit(nullptr); // no Markdown: the checker's own highlighter
+        SpellChecker spell;
+        spell.setTextEdit(m_edit.get());
+        spell.setPlainText(true);
+        spell.setActive(true);
+        QCoreApplication::processEvents();
+        QCOMPARE(underlined(), (QList<QPair<int, int>>{{8, 13}}));
+        // Markdown takes over the document: its highlighter underlines.
+        spell.setPlainText(false);
+        m_editor->setSpellChecker(&spell);
+        m_editor->setTextEdit(m_edit.get());
+        QCoreApplication::processEvents();
+        QCOMPARE(underlined(), (QList<QPair<int, int>>{{8, 13}}));
+        m_editor->setSpellChecker(nullptr);
+    }
+
+private:
+    // The misspelled words of the first line, as the underlines get them.
+    QList<QPair<int, int>> underlined() const
+    {
+        auto *doc = qobject_cast<QQuickTextDocument *>(m_edit->property("textDocument").value<QObject *>())->textDocument();
+        const BlockInfo *info = BlockInfo::of(doc->begin());
+        return info ? info->misspelled : QList<QPair<int, int>>{};
+    }
 };
 
 QTEST_MAIN(EditorTest)

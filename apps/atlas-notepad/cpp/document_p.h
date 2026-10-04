@@ -56,6 +56,7 @@ struct Document::Private {
     Encoding encoding = Utf8;
     LineEnding lineEnding = Lf;
     bool markdown = true;
+    bool prose = true;
     bool formatted = false;
     bool readOnly = false;
     bool loading = false;

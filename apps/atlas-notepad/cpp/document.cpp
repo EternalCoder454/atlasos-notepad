@@ -37,6 +37,14 @@ bool isMarkdownName(const QString &path)
     return extensions.contains(QFileInfo(path).suffix(), Qt::CaseInsensitive);
 }
 
+// Text for people, not code or config: spell check reads it.
+bool isProseName(const QString &path)
+{
+    static const QStringList extensions = {QStringLiteral("txt"), QStringLiteral("text")};
+    const QString suffix = QFileInfo(path).suffix();
+    return path.isEmpty() || suffix.isEmpty() || isMarkdownName(path) || extensions.contains(suffix, Qt::CaseInsensitive);
+}
+
 Counts countText(const QString &text)
 {
     Counts c;
@@ -438,6 +446,11 @@ void Document::Private::applyMarkdown(qint64 bytes)
     if (now != markdown) {
         markdown = now;
         Q_EMIT q->markdownChanged();
+    }
+    const bool isProse = isProseName(path) && !tooBig;
+    if (isProse != prose) {
+        prose = isProse;
+        Q_EMIT q->proseChanged();
     }
     if (!markdown && formatted) {
         formatted = false;
@@ -948,6 +961,11 @@ bool Document::isLoading() const
 bool Document::isMarkdown() const
 {
     return d->markdown;
+}
+
+bool Document::isProse() const
+{
+    return d->prose;
 }
 
 bool Document::isFormatted() const

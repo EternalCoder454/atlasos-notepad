@@ -32,7 +32,14 @@ void MarkdownEditor::setTextEdit(QQuickItem *edit)
         m_edit->removeEventFilter(this);
         disconnect(m_edit, nullptr, this, nullptr);
     }
-    delete m_highlighter;
+    if (m_highlighter) {
+        delete m_highlighter;
+        // That cleared every line's formats: a plain-text spell highlighter
+        // on the same document draws its underlines again.
+        if (m_spell) {
+            QMetaObject::invokeMethod(m_spell, &SpellChecker::rehighlight, Qt::QueuedConnection);
+        }
+    }
     m_edit = edit;
     m_doc = nullptr;
     if (edit) {
@@ -42,6 +49,7 @@ void MarkdownEditor::setTextEdit(QQuickItem *edit)
         connect(edit, SIGNAL(cursorPositionChanged()), this, SLOT(snapCursor()));
         if (m_doc) {
             m_highlighter = new MarkdownHighlighter(m_doc);
+            m_highlighter->setSpellChecker(m_spell);
             m_highlighter->setStyle(m_style);
         }
     }
@@ -95,10 +103,30 @@ void MarkdownEditor::applyStyle()
         [this] {
             m_stylePending = false;
             if (m_highlighter) {
-                m_highlighter->setStyle(m_style);
+                    m_highlighter->setStyle(m_style);
             }
         },
         Qt::QueuedConnection);
+}
+
+void MarkdownEditor::setSpellChecker(SpellChecker *spell)
+{
+    if (spell == m_spell) {
+        return;
+    }
+    if (m_spell) {
+        disconnect(m_spell, nullptr, this, nullptr);
+    }
+    m_spell = spell;
+    if (spell) {
+        // On, off, a word added: highlight again (once).
+        connect(spell, &SpellChecker::changed, this, &MarkdownEditor::applyStyle);
+    }
+    if (m_highlighter) {
+        m_highlighter->setSpellChecker(spell);
+        applyStyle();
+    }
+    Q_EMIT spellCheckerChanged();
 }
 
 void MarkdownEditor::rehighlightNow()

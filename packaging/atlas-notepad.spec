@@ -40,11 +40,16 @@ BuildRequires:  qt6-qtbase-devel
 BuildRequires:  qt6-qtbase-private-devel
 BuildRequires:  cmake(KF6DBusAddons)
 BuildRequires:  cmake(KF6WindowSystem)
+BuildRequires:  cmake(KF6Sonnet)
+# the spell check tests
+BuildRequires:  hunspell-en-US
 # QML modules qmlcachegen resolves at build time (not linked)
 BuildRequires:  kf6-kirigami-devel
 
 Requires:       kf6-kirigami
 Requires:       kf6-qqc2-desktop-style
+# spell check (dictionaries come from the system's langpacks)
+Requires:       kf6-sonnet
 # also the file dialogs and Qt.labs.platform's global menu
 Requires:       qt6-qtdeclarative
 Requires:       hicolor-icon-theme

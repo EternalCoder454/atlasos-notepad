@@ -19,6 +19,8 @@
 #include <QTextBlockUserData>
 #include <QtQml/qqmlregistration.h>
 
+#include "spellcheck.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -86,6 +88,8 @@ public:
     QList<QPair<int, int>> hidden;
     // Where each `>` of a block quote is.
     QList<int> quoteMarks;
+    // [start, end) of each misspelled word, when spell check is on.
+    QList<QPair<int, int>> misspelled;
 
     static BlockInfo *of(const QTextBlock &block)
     {
@@ -108,12 +112,19 @@ struct MarkdownStyle {
     QColor code;
 };
 
+class SpellChecker;
+
+// Formats a document's lines. With `markdown` off it only notes
+// misspelled words (SpellChecker's highlighter for plain text).
 class MarkdownHighlighter : public QSyntaxHighlighter
 {
 public:
-    explicit MarkdownHighlighter(QTextDocument *document);
+    explicit MarkdownHighlighter(QTextDocument *document, bool markdown = true);
 
     void setStyle(const MarkdownStyle &style);
+    // Notes misspelled words (BlockInfo::misspelled) while it is active.
+    // Call rehighlightAll after it changes.
+    void setSpellChecker(SpellChecker *spell);
     void rehighlightAll();
     const MarkdownStyle &style() const
     {
@@ -127,10 +138,14 @@ private:
     const QTextCharFormat &format(uint32_t flags, int heading);
     int read(const QString &text, int previous, BlockInfo *info);
 
+    void addMisspelled(const QString &text, size_t runs, BlockInfo *info);
+
     MarkdownStyle m_style;
     QHash<quint64, QTextCharFormat> m_formats;
     std::vector<NpRun> m_runs;
     QList<QTextLayout::FormatRange> m_ranges;
+    QPointer<SpellChecker> m_spell;
+    bool m_markdown;
 };
 
 // Attach to a TextEdit (textEdit) to edit Markdown in it.
@@ -147,9 +162,17 @@ class MarkdownEditor : public QObject
     Q_PROPERTY(QColor linkColor READ linkColor WRITE setLinkColor NOTIFY styleChanged)
     Q_PROPERTY(QColor codeColor READ codeColor WRITE setCodeColor NOTIFY styleChanged)
     Q_PROPERTY(QColor accentColor MEMBER m_accent NOTIFY styleChanged)
+    // Notes misspelled words for SpellUnderlines while it is active.
+    Q_PROPERTY(SpellChecker *spellChecker READ spellChecker WRITE setSpellChecker NOTIFY spellCheckerChanged)
 
 public:
     explicit MarkdownEditor(QObject *parent = nullptr);
+
+    SpellChecker *spellChecker() const
+    {
+        return m_spell;
+    }
+    void setSpellChecker(SpellChecker *spell);
 
     QQuickItem *textEdit() const
     {
@@ -224,6 +247,7 @@ Q_SIGNALS:
     void textEditChanged();
     void formattedChanged();
     void styleChanged();
+    void spellCheckerChanged();
 
 public:
     // For the bench: highlights the whole document now.
@@ -262,6 +286,7 @@ private:
     QPointer<QQuickItem> m_edit;
     QPointer<QTextDocument> m_doc;
     QPointer<MarkdownHighlighter> m_highlighter;
+    QPointer<SpellChecker> m_spell;
     MarkdownStyle m_style;
     QColor m_accent;
     bool m_snapping = false;

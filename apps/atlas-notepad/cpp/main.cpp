@@ -148,35 +148,37 @@ int main(int argc, char *argv[])
         if (!doc) {
             return 2;
         }
-        // The window is ready when the file is read and its TextEdit exists.
         auto *poll = new QTimer(&app);
         auto *deadline = new QElapsedTimer;
         deadline->start();
         const QString file = parser.value(benchOption);
         QObject::connect(poll, &QTimer::timeout, &app, [&, poll, deadline, doc, file] {
-            if (deadline->elapsed() > 30000) {
-                fprintf(stderr, "atlas-notepad: the window never got its editor\n");
-                QCoreApplication::exit(1);
-                return;
-            }
+            // The window is ready when the file is read and its TextEdit, view
+            // and MarkdownEditor exist. They are found up from the TextEdit:
+            // what a Loader makes isn't a QObject child of the window.
             QQuickItem *edit = doc->textEdit();
-            QQuickWindow *window = notepad.activeWindow();
-            if (doc->isLoading() || !edit || !window) {
+            QQuickWindow *window = edit ? edit->window() : nullptr;
+            QQuickItem *view = nullptr;
+            MarkdownEditor *editor = nullptr;
+            for (QQuickItem *item = edit; item; item = item->parentItem()) {
+                if (!view && item->objectName() == QLatin1String("view")) {
+                    view = item;
+                }
+                for (auto *candidate : item->findChildren<MarkdownEditor *>(Qt::FindDirectChildrenOnly)) {
+                    if (candidate->textEdit() == edit) {
+                        editor = candidate;
+                    }
+                }
+            }
+            if (doc->isLoading() || !view || !editor) {
+                if (deadline->elapsed() > 30000) {
+                    fprintf(stderr, "atlas-notepad: the window never got its %s\n", !edit ? "TextEdit" : !view ? "view" : "MarkdownEditor");
+                    QCoreApplication::exit(1);
+                    poll->stop();
+                }
                 return;
             }
             poll->stop();
-            auto *view = window->findChild<QQuickItem *>(QStringLiteral("view"));
-            MarkdownEditor *editor = nullptr;
-            for (auto *candidate : window->findChildren<MarkdownEditor *>()) {
-                if (candidate->textEdit() == edit) {
-                    editor = candidate;
-                }
-            }
-            if (!view || !editor) {
-                fprintf(stderr, "atlas-notepad: the window has no editor\n");
-                QCoreApplication::exit(1);
-                return;
-            }
             // The baseline: the same TextEdit without Markdown.
             if (qEnvironmentVariableIntValue("NP_BENCH_PLAIN")) {
                 editor->setTextEdit(nullptr);
