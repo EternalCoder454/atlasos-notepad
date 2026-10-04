@@ -36,7 +36,8 @@ ContextMenu {
                     return i + 1;
                 }
             }
-            return 0;
+            console.warn("FallbackMenu: the Open Recent lead separator is missing");
+            return count; // after everything, never above Reopen Closed Tab
         }
 
         Item { action: menu.actions.reopenTab }

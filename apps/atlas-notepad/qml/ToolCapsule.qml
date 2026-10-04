@@ -64,8 +64,16 @@ Item {
             console.warn("ToolCapsule: fullHeight", fullHeight, "differs from the layout's", column.implicitHeight + inset * 2);
         }
     }
-    onFullHeightChanged: checkFullHeight()
-    Component.onCompleted: checkFullHeight()
+    // Later: the layout has not polished yet when a size has just changed,
+    // and a callLater would still run before it.
+    Timer {
+        id: heightCheck
+        interval: 250
+        onTriggered: capsule.checkFullHeight()
+    }
+    onFullHeightChanged: heightCheck.restart()
+    onScrollsChanged: heightCheck.restart()
+    Component.onCompleted: heightCheck.restart()
 
     width: Math.round(Kirigami.Units.gridUnit * 2.2)
     height: scrolls ? shown * pitch - gap + edge * 2 : fullHeight
@@ -89,6 +97,7 @@ Item {
         // Not `action`: AbstractButton's own would trigger it a second time.
         property QQC2.Action command
         round: true
+        keyboardFocus: true
         tipSide: "left"
         implicitWidth: capsule.buttonSize
         implicitHeight: capsule.buttonSize
@@ -196,6 +205,7 @@ Item {
             Divider {}
             SymbolButton {
                 id: headingButton
+                keyboardFocus: true
                 Layout.alignment: Qt.AlignHCenter
                 round: true
                 tipSide: "left"
@@ -253,6 +263,7 @@ Item {
             Divider {}
             SymbolButton {
                 id: moreButton
+                keyboardFocus: true
                 Layout.alignment: Qt.AlignHCenter
                 round: true
                 tipSide: "left"
@@ -283,27 +294,62 @@ Item {
                 }
             }
         }
+    }
 
-        WheelHandler {
-            enabled: capsule.scrolls
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-            // A mouse notch is 120 units and one button; a touchpad sends
-            // small deltas, which add up to a button each 120.
-            property real carried: 0
-            onWheel: event => {
-                const dy = event.angleDelta.y;
-                if (dy === 0) {
-                    return;
-                }
-                if (carried * dy < 0) {
-                    carried = 0; // the other way
-                }
-                carried += dy;
-                const steps = Math.trunc(carried / 120);
-                if (steps !== 0) {
-                    carried -= steps * 120;
-                    flick.scrollBy(-steps);
-                }
+    // A mouse notch is 120 units and one button; a touchpad sends small
+    // deltas, which add up to a button each 120 and are forgotten after a
+    // pause. On the capsule, so the margins with the chevrons take it too.
+    property real carried: 0
+    Timer {
+        id: wheelIdle
+        interval: 300
+        onTriggered: capsule.carried = 0
+    }
+    WheelHandler {
+        enabled: capsule.scrolls
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        onWheel: event => {
+            const dy = event.angleDelta.y;
+            if (dy === 0) {
+                return;
+            }
+            if (capsule.carried * dy < 0 || event.phase === Qt.ScrollBegin) {
+                capsule.carried = 0; // the other way, or a new swipe
+            }
+            capsule.carried += dy;
+            wheelIdle.restart();
+            const steps = Math.trunc(capsule.carried / 120);
+            if (steps !== 0) {
+                capsule.carried -= steps * 120;
+                flick.scrollBy(-steps);
+            }
+        }
+    }
+
+    // Tab onto a button that is scrolled out: the strip follows, a whole
+    // button at a time.
+    function reveal(item) {
+        if (!scrolls) {
+            return;
+        }
+        const i = Math.round(item.mapToItem(column, 0, 0).y / pitch);
+        const first = Math.round(flick.contentY / pitch);
+        if (i < first) {
+            flick.scrollBy(i - first);
+        } else if (i > first + shown - 1) {
+            flick.scrollBy(i - (first + shown - 1));
+        }
+    }
+    Connections {
+        target: capsule.Window.window
+        function onActiveFocusItemChanged() {
+            let item = capsule.Window.window.activeFocusItem;
+            const focused = item;
+            while (item && item !== column) {
+                item = item.parent;
+            }
+            if (item && focused) {
+                capsule.reveal(focused);
             }
         }
     }
@@ -318,7 +364,12 @@ Item {
         anchors.right: parent.right
         anchors.top: atTop ? parent.top : undefined
         anchors.bottom: atTop ? undefined : parent.bottom
-        height: capsule.edge
+        // The tap area reaches out past the capsule's end, so it is wider
+        // than the margin without covering the first or last button.
+        readonly property real reach: Math.round(capsule.buttonSize * 0.4)
+        height: capsule.edge + reach
+        anchors.topMargin: atTop ? -reach : 0
+        anchors.bottomMargin: atTop ? 0 : -reach
         visible: capsule.scrolls && (atTop ? flick.contentY > 1 : flick.contentY < flick.contentHeight - flick.height - 1)
         Accessible.ignored: true
 
@@ -326,8 +377,8 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: hint.atTop ? parent.top : undefined
             anchors.bottom: hint.atTop ? undefined : parent.bottom
-            anchors.topMargin: hint.atTop ? 1 : 0
-            anchors.bottomMargin: hint.atTop ? 0 : 1
+            anchors.topMargin: hint.atTop ? hint.reach + 1 : 0
+            anchors.bottomMargin: hint.atTop ? 0 : hint.reach + 1
             name: hint.atTop ? "keyboard_arrow_up" : "keyboard_arrow_down"
             // Inside the margin: it never covers the first or last button.
             size: Math.max(1, capsule.edge - 2)
