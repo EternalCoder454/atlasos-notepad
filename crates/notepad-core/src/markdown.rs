@@ -13,6 +13,8 @@
 //! (`~~`), links, autolinks, bare URLs and backslash escapes. Tables, HTML,
 //! setext headings and indented code are left as text.
 
+use std::collections::HashSet;
+
 /// What a character is. A character can be several (bold inside a heading).
 pub mod flags {
     /// Markdown syntax that takes no room in the Formatted view (`**`, `# `).
@@ -239,7 +241,129 @@ pub fn runs(flags: &[u32], out: &mut Vec<Run>) {
     }
 }
 
+/// Cells the scan reaches later: a count per position (a difference array),
+/// summed as the scan advances. Ranges that overlap (nested links) then cost
+/// nothing extra, where painting each one would be quadratic.
+struct Ahead {
+    base: usize,
+    /// Empty until the first range.
+    diff: Vec<i32>,
+    at: usize,
+    sum: i32,
+}
+
+impl Ahead {
+    fn new(base: usize) -> Self {
+        Self {
+            base,
+            diff: Vec::new(),
+            at: base,
+            sum: 0,
+        }
+    }
+
+    /// `a` must not be behind what [`Ahead::advance`] has passed.
+    fn add(&mut self, a: usize, b: usize, end: usize) {
+        if self.diff.is_empty() {
+            self.diff.resize(end - self.base + 1, 0);
+        }
+        self.diff[a - self.base] += 1;
+        self.diff[b - self.base] -= 1;
+    }
+
+    /// Hides and makes opaque every covered cell before `upto`.
+    fn advance(&mut self, upto: usize, opaque: &mut [bool], flags: &mut [u32]) {
+        if self.diff.is_empty() {
+            return;
+        }
+        while self.at < upto {
+            self.sum += self.diff[self.at - self.base];
+            if self.sum > 0 {
+                opaque[self.at - self.base] = true;
+                flags[self.at] |= flags::HIDDEN;
+            }
+            self.at += 1;
+        }
+    }
+}
+
+const NONE: u32 = u32::MAX;
+
+/// For every position `p` of `text[base..end]`: where the first unmatched
+/// `close` is when scanning from `p` (a backslash skips the next unit). Right
+/// to left, so each position is one step instead of a scan to the line's end.
+fn unmatched(text: &[u16], base: usize, end: usize, open: u8, close: u8) -> Vec<u32> {
+    let mut u = vec![NONE; end - base];
+    let get = |u: &[u32], p: usize| if p >= end { NONE } else { u[p - base] };
+    for p in (base..end).rev() {
+        let c = text[p];
+        u[p - base] = if c == b'\\' as u16 {
+            get(&u, p + 2)
+        } else if c == close as u16 {
+            p as u32
+        } else if c == open as u16 {
+            // The group opened here ends at its own unmatched `close`.
+            match get(&u, p + 1) {
+                NONE => NONE,
+                q => get(&u, q as usize + 1),
+            }
+        } else {
+            get(&u, p + 1)
+        };
+    }
+    u
+}
+
+/// Bracket and parenthesis matches for `text[base..end]`, found once, on the
+/// first link.
+struct Brackets {
+    base: usize,
+    end: usize,
+    square: Vec<u32>,
+    round: Vec<u32>,
+}
+
+impl Brackets {
+    fn new(base: usize, end: usize) -> Self {
+        Self {
+            base,
+            end,
+            square: Vec::new(),
+            round: Vec::new(),
+        }
+    }
+
+    fn lookup(&self, table: &[u32], p: usize) -> Option<usize> {
+        if p >= self.end {
+            return None;
+        }
+        match table[p - self.base] {
+            NONE => None,
+            q => Some(q as usize),
+        }
+    }
+
+    /// `[text](url)` starting at the `[`: where the `]` is, and the end of `)`.
+    fn link_parts(&mut self, text: &[u16], open: usize) -> Option<(usize, usize)> {
+        if self.square.is_empty() {
+            self.square = unmatched(text, self.base, self.end, b'[', b']');
+        }
+        let close = self.lookup(&self.square, open + 1)?;
+        if close + 1 >= self.end || text[close + 1] != b'(' as u16 {
+            return None;
+        }
+        if self.round.is_empty() {
+            self.round = unmatched(text, self.base, self.end, b'(', b')');
+        }
+        let last = self.lookup(&self.round, close + 2)?;
+        Some((close, last + 1))
+    }
+}
+
 /// Inline syntax in `text[start..end]`; every character there gets `base` too.
+///
+/// Every step here is linear in the line: a hostile line (100,000 `[`) must
+/// not freeze the editor, so nothing rescans the rest of the line per position.
 fn inline(text: &[u16], start: usize, end: usize, base: u32, flags: &mut [u32]) {
     if start >= end {
         return;
@@ -257,9 +381,17 @@ fn inline(text: &[u16], start: usize, end: usize, base: u32, flags: &mut [u32]) 
             *x = true;
         }
     };
+    // Link destinations: hidden and opaque, found ahead of the scan.
+    let mut ahead = Ahead::new(start);
+    let mut brackets = Brackets::new(start, end);
+    // Link text is painted up to here; link texts start in order.
+    let mut link_to = start;
+    // Lengths of backtick runs known to have no partner later in the line.
+    let mut unpaired: HashSet<usize> = HashSet::new();
 
     let mut j = start;
     while j < end {
+        ahead.advance(j + 1, &mut opaque, flags);
         if opaque[j - start] {
             j += 1;
             continue;
@@ -271,7 +403,12 @@ fn inline(text: &[u16], start: usize, end: usize, base: u32, flags: &mut [u32]) 
             j += 2;
         } else if c == b'`' as u16 {
             let r = run_len(text, j, c).min(end - j);
-            match find_backtick_run(text, j + r, end, r) {
+            let partner = if unpaired.contains(&r) {
+                None
+            } else {
+                find_backtick_run(text, j + r, end, r)
+            };
+            match partner {
                 Some(k) => {
                     set(flags, j, j + r, flags::HIDDEN);
                     set(flags, k, k + r, flags::HIDDEN);
@@ -280,6 +417,7 @@ fn inline(text: &[u16], start: usize, end: usize, base: u32, flags: &mut [u32]) 
                     j = k + r;
                 }
                 None => {
+                    unpaired.insert(r);
                     op(&mut opaque, j, j + r);
                     j += r;
                 }
@@ -299,13 +437,16 @@ fn inline(text: &[u16], start: usize, end: usize, base: u32, flags: &mut [u32]) 
             || (c == b'!' as u16 && j + 1 < end && text[j + 1] == b'[' as u16)
         {
             let open = if c == b'!' as u16 { j + 1 } else { j };
-            match link_parts(text, open, end) {
+            match brackets.link_parts(text, open) {
                 Some((close, url_end)) => {
                     set(flags, j, open + 1, flags::HIDDEN);
-                    set(flags, close, url_end, flags::HIDDEN);
-                    set(flags, open + 1, close, flags::LINK);
                     op(&mut opaque, j, open + 1);
-                    op(&mut opaque, close, url_end);
+                    ahead.add(close, url_end, end);
+                    let from = (open + 1).max(link_to);
+                    if from < close {
+                        set(flags, from, close, flags::LINK);
+                    }
+                    link_to = link_to.max(close);
                     j = open + 1;
                 }
                 None => j += 1,
@@ -325,6 +466,7 @@ fn inline(text: &[u16], start: usize, end: usize, base: u32, flags: &mut [u32]) 
             j += 1;
         }
     }
+    ahead.advance(end, &mut opaque, flags);
 
     emphasis(text, start, end, &opaque, flags);
 }
@@ -339,7 +481,9 @@ struct Delim {
 }
 
 /// CommonMark's delimiter runs, simplified: no links in the stack (they were
-/// done before), the rule of three kept.
+/// done before), the rule of three kept. The stack of openers and the
+/// "nothing below here fits" marks per kind of closer (as in cmark's
+/// `openers_bottom`) keep it linear.
 fn emphasis(text: &[u16], start: usize, end: usize, opaque: &[bool], flags: &mut [u32]) {
     let mut delims: Vec<Delim> = Vec::new();
     let mut j = start;
@@ -385,46 +529,94 @@ fn emphasis(text: &[u16], start: usize, end: usize, opaque: &[bool], flags: &mut
         j = k;
     }
 
+    // Openers that can still pair, innermost last.
+    let mut stack: Vec<usize> = Vec::new();
+    // Per (character, closer can open, closer's length mod 3): openers below
+    // this height are known not to fit such a closer.
+    let mut bottoms = [0usize; 18];
+    // Strong, emphasis and strikethrough spans, as difference arrays.
+    let mut spans: [Vec<i32>; 3] = Default::default();
+    let mut any_span = false;
+
     for ci in 0..delims.len() {
-        if !delims[ci].close {
-            continue;
-        }
-        while delims[ci].len > 0 {
-            let closer = &delims[ci];
-            let found = (0..ci).rev().find(|&oi| {
-                let o = &delims[oi];
-                o.open
-                    && o.len > 0
-                    && o.ch == closer.ch
-                    && !((o.close || closer.open)
-                        && (o.orig + closer.orig).is_multiple_of(3)
-                        && !(o.orig.is_multiple_of(3) && closer.orig.is_multiple_of(3)))
-            });
-            let Some(oi) = found else { break };
+        if delims[ci].close {
             let ch = delims[ci].ch;
-            let used = if ch == b'~' as u16 || (delims[oi].len >= 2 && delims[ci].len >= 2) {
-                2
-            } else {
+            let kind = if ch == b'*' as u16 {
+                0
+            } else if ch == b'_' as u16 {
                 1
-            };
-            let style = if ch == b'~' as u16 {
-                flags::STRIKE
-            } else if used == 2 {
-                flags::STRONG
             } else {
-                flags::EMPH
+                2
             };
-            let o_end = delims[oi].pos + delims[oi].len;
-            let c_pos = delims[ci].pos;
-            set(flags, o_end - used, o_end, flags::HIDDEN);
-            set(flags, c_pos, c_pos + used, flags::HIDDEN);
-            set(flags, o_end, c_pos, style);
-            delims[oi].len -= used;
-            delims[ci].pos += used;
-            delims[ci].len -= used;
-            // Openers between the pair can no longer open.
-            for d in &mut delims[oi + 1..ci] {
-                d.open = false;
+            let key = (kind * 2 + delims[ci].open as usize) * 3 + delims[ci].orig % 3;
+            while delims[ci].len > 0 {
+                let closer = &delims[ci];
+                let found = (bottoms[key]..stack.len()).rev().find(|&si| {
+                    let o = &delims[stack[si]];
+                    o.ch == closer.ch
+                        && !((o.close || closer.open)
+                            && (o.orig + closer.orig).is_multiple_of(3)
+                            && !(o.orig.is_multiple_of(3) && closer.orig.is_multiple_of(3)))
+                });
+                let Some(si) = found else {
+                    bottoms[key] = stack.len();
+                    break;
+                };
+                let oi = stack[si];
+                let used = if ch == b'~' as u16 || (delims[oi].len >= 2 && delims[ci].len >= 2) {
+                    2
+                } else {
+                    1
+                };
+                let slot = if ch == b'~' as u16 {
+                    2
+                } else if used == 2 {
+                    0
+                } else {
+                    1
+                };
+                let o_end = delims[oi].pos + delims[oi].len;
+                let c_pos = delims[ci].pos;
+                set(flags, o_end - used, o_end, flags::HIDDEN);
+                set(flags, c_pos, c_pos + used, flags::HIDDEN);
+                if spans[slot].is_empty() {
+                    spans[slot].resize(end - start + 1, 0);
+                }
+                spans[slot][o_end - start] += 1;
+                spans[slot][c_pos - start] -= 1;
+                any_span = true;
+                delims[oi].len -= used;
+                delims[ci].pos += used;
+                delims[ci].len -= used;
+                // Openers between the pair can no longer open; the opener
+                // itself stays while it has characters left.
+                let keep = if delims[oi].len > 0 { si + 1 } else { si };
+                stack.truncate(keep);
+                for b in &mut bottoms {
+                    *b = (*b).min(keep);
+                }
+            }
+        }
+        if delims[ci].open && delims[ci].len > 0 {
+            stack.push(ci);
+        }
+    }
+
+    if any_span {
+        for (slot, bit) in [flags::STRONG, flags::EMPH, flags::STRIKE]
+            .into_iter()
+            .enumerate()
+        {
+            let diff = &spans[slot];
+            if diff.is_empty() {
+                continue;
+            }
+            let mut sum = 0;
+            for (p, f) in flags[start..end].iter_mut().enumerate() {
+                sum += diff[p];
+                if sum > 0 {
+                    *f |= bit;
+                }
             }
         }
     }
@@ -594,56 +786,13 @@ fn autolink_end(text: &[u16], from: usize, end: usize) -> Option<usize> {
     {
         return None;
     }
+    // The first of `>`, whitespace or `<` decides; no look past it.
     (from..end)
-        .find(|&k| text[k] == b'>' as u16)
-        .filter(|&k| !text[from..k].iter().any(|&c| is_ws(c) || c == b'<' as u16))
-}
-
-/// `[text](url)` starting at the `[`: where the `]` is, and the end of `)`.
-fn link_parts(text: &[u16], open: usize, end: usize) -> Option<(usize, usize)> {
-    let mut depth = 0;
-    let mut k = open;
-    let close = loop {
-        if k >= end {
-            return None;
-        }
-        let c = text[k];
-        if c == b'\\' as u16 {
-            k += 2;
-            continue;
-        }
-        if c == b'[' as u16 {
-            depth += 1;
-        } else if c == b']' as u16 {
-            depth -= 1;
-            if depth == 0 {
-                break k;
-            }
-        }
-        k += 1;
-    };
-    if close + 1 >= end || text[close + 1] != b'(' as u16 {
-        return None;
-    }
-    let mut parens = 0;
-    let mut k = close + 1;
-    while k < end {
-        let c = text[k];
-        if c == b'\\' as u16 {
-            k += 2;
-            continue;
-        }
-        if c == b'(' as u16 {
-            parens += 1;
-        } else if c == b')' as u16 {
-            parens -= 1;
-            if parens == 0 {
-                return Some((close, k + 1));
-            }
-        }
-        k += 1;
-    }
-    None
+        .find(|&k| {
+            let c = text[k];
+            c == b'>' as u16 || c == b'<' as u16 || is_ws(c)
+        })
+        .filter(|&k| text[k] == b'>' as u16)
 }
 
 /// A bare `https://…` or `http://…`: where it ends, without the punctuation
@@ -660,6 +809,7 @@ fn bare_url_end(text: &[u16], at: usize, end: usize) -> Option<usize> {
     while k < end && !is_ws(text[k]) && text[k] != b'<' as u16 {
         k += 1;
     }
+    let mut counts: Option<(usize, usize)> = None;
     while k > at + scheme
         && matches!(
             text[k - 1],
@@ -668,11 +818,17 @@ fn bare_url_end(text: &[u16], at: usize, end: usize) -> Option<usize> {
     {
         // A ")" closes the URL only if the URL didn't open one.
         if text[k - 1] == b')' as u16 {
-            let opens = text[at..k].iter().filter(|&&c| c == b'(' as u16).count();
-            let closes = text[at..k].iter().filter(|&&c| c == b')' as u16).count();
-            if closes <= opens {
+            // Counted once, then kept up to date as the tail is trimmed.
+            let (opens, closes) = counts.get_or_insert_with(|| {
+                (
+                    text[at..k].iter().filter(|&&c| c == b'(' as u16).count(),
+                    text[at..k].iter().filter(|&&c| c == b')' as u16).count(),
+                )
+            });
+            if *closes <= *opens {
                 break;
             }
+            *closes -= 1;
         }
         k -= 1;
     }
@@ -684,11 +840,12 @@ fn bare_url_end(text: &[u16], at: usize, end: usize) -> Option<usize> {
 /// returned whole, brackets and inner spaces included.
 pub fn link_at(text: &[u16], pos: usize) -> Option<(usize, usize)> {
     let n = text.len();
+    let mut brackets = Brackets::new(0, n);
     let mut j = 0;
     while j < n {
         let c = text[j];
         if c == b'[' as u16 {
-            if let Some((close, url_end)) = link_parts(text, j, n) {
+            if let Some((close, url_end)) = brackets.link_parts(text, j) {
                 if pos >= j && pos < url_end {
                     let mut a = close + 2;
                     while a < url_end && is_space(text[a]) {
@@ -1021,6 +1178,488 @@ mod tests {
                 for p in 0..=text.len() {
                     link_at(&text, p);
                 }
+            }
+        }
+    }
+
+    // ---- Hostile lines: nothing may take time quadratic in the line. ----
+
+    fn within_budget(what: &str, text: &[u16]) {
+        let limit = if cfg!(debug_assertions) {
+            std::time::Duration::from_millis(5000)
+        } else {
+            std::time::Duration::from_millis(250)
+        };
+        let mut f = Vec::new();
+        let t = std::time::Instant::now();
+        parse_line(text, 0, &mut f);
+        let n = text.len();
+        for p in [0, 1, n / 3, n / 2, n - 1, n] {
+            link_at(text, p);
+        }
+        let took = t.elapsed();
+        assert!(took < limit, "{what}: {took:?} for {n} units");
+    }
+
+    #[test]
+    fn hostile_lines_stay_linear() {
+        let big = 100_000;
+        let lines: Vec<(&str, String)> = vec![
+            ("open brackets", "[".repeat(big)),
+            ("open links", "[a](".repeat(big / 4)),
+            ("closing brackets", "]".repeat(big)),
+            (
+                "nested links",
+                format!(
+                    "{}{}{}",
+                    "[".repeat(big / 4),
+                    "](".repeat(big / 4),
+                    ")".repeat(big / 4)
+                ),
+            ),
+            (
+                "escaped brackets",
+                format!("[{}{}]", "\\[".repeat(big / 4), "[]".repeat(big / 4)),
+            ),
+            ("images", "![a](".repeat(big / 5)),
+            (
+                "nested emphasis",
+                format!("{}{}", "*a ".repeat(big / 6), "a* ".repeat(big / 6)),
+            ),
+            ("alternating", "*_".repeat(big / 2)),
+            ("alternating spaced", "*_ ".repeat(big / 3)),
+            (
+                "underscores",
+                format!("{}{}", "_a ".repeat(big / 6), "a_ ".repeat(big / 6)),
+            ),
+            ("strike", "~~a ".repeat(big / 8) + &"a~~ ".repeat(big / 8)),
+            (
+                "rule of three",
+                "**a ".repeat(big / 8) + &"a* ".repeat(big / 6),
+            ),
+            (
+                "openers then closers",
+                format!("{}{}", "*a".repeat(big / 4), "a* ".repeat(big / 6)),
+            ),
+            ("url parens", format!("http://a{}", ")".repeat(big))),
+            ("url openers", "(http://".repeat(big / 8)),
+            ("angle autolinks", "<http://".repeat(big / 8)),
+            ("angle no close", format!("<http://{}", "a".repeat(big))),
+            ("fence", format!("```{}", "`".repeat(big))),
+            ("backticks", "` ".repeat(big / 2)),
+            (
+                "backtick lengths",
+                (1..450).map(|n| format!("{} ", "`".repeat(n))).collect(),
+            ),
+            ("escapes", "\\*".repeat(big / 2)),
+            ("backslashes", "\\".repeat(big)),
+            ("headings", format!("# {}", "*a ".repeat(big / 3))),
+        ];
+        for (what, s) in &lines {
+            within_budget(what, &u(s));
+        }
+    }
+
+    // ---- The old, simple implementation, kept to compare against. ----
+
+    mod reference {
+        #![allow(clippy::all)]
+        use crate::markdown::*;
+
+        /// Inline syntax in `text[start..end]`; every character there gets `base` too.
+        pub fn inline(text: &[u16], start: usize, end: usize, base: u32, flags: &mut [u32]) {
+            if start >= end {
+                return;
+            }
+            if base != 0 {
+                for f in &mut flags[start..end] {
+                    *f |= base;
+                }
+            }
+            // Characters that can't be emphasis delimiters: escapes, code spans,
+            // link syntax, URLs.
+            let mut opaque = vec![false; end - start];
+            let op = |o: &mut Vec<bool>, a: usize, b: usize| {
+                for x in &mut o[a - start..b - start] {
+                    *x = true;
+                }
+            };
+
+            let mut j = start;
+            while j < end {
+                if opaque[j - start] {
+                    j += 1;
+                    continue;
+                }
+                let c = text[j];
+                if c == b'\\' as u16 && j + 1 < end && is_ascii_punct(text[j + 1]) {
+                    flags[j] |= flags::HIDDEN;
+                    op(&mut opaque, j, j + 2);
+                    j += 2;
+                } else if c == b'`' as u16 {
+                    let r = run_len(text, j, c).min(end - j);
+                    match find_backtick_run(text, j + r, end, r) {
+                        Some(k) => {
+                            set(flags, j, j + r, flags::HIDDEN);
+                            set(flags, k, k + r, flags::HIDDEN);
+                            set(flags, j + r, k, flags::CODE);
+                            op(&mut opaque, j, k + r);
+                            j = k + r;
+                        }
+                        None => {
+                            op(&mut opaque, j, j + r);
+                            j += r;
+                        }
+                    }
+                } else if c == b'<' as u16 {
+                    match autolink_end(text, j + 1, end) {
+                        Some(k) => {
+                            flags[j] |= flags::HIDDEN;
+                            flags[k] |= flags::HIDDEN;
+                            set(flags, j + 1, k, flags::LINK);
+                            op(&mut opaque, j, k + 1);
+                            j = k + 1;
+                        }
+                        None => j += 1,
+                    }
+                } else if c == b'[' as u16
+                    || (c == b'!' as u16 && j + 1 < end && text[j + 1] == b'[' as u16)
+                {
+                    let open = if c == b'!' as u16 { j + 1 } else { j };
+                    match link_parts(text, open, end) {
+                        Some((close, url_end)) => {
+                            set(flags, j, open + 1, flags::HIDDEN);
+                            set(flags, close, url_end, flags::HIDDEN);
+                            set(flags, open + 1, close, flags::LINK);
+                            op(&mut opaque, j, open + 1);
+                            op(&mut opaque, close, url_end);
+                            j = open + 1;
+                        }
+                        None => j += 1,
+                    }
+                } else if (c == b'h' as u16 || c == b'H' as u16)
+                    && (j == start || is_space(text[j - 1]) || text[j - 1] == b'(' as u16)
+                {
+                    match bare_url_end(text, j, end) {
+                        Some(k) => {
+                            set(flags, j, k, flags::LINK);
+                            op(&mut opaque, j, k);
+                            j = k;
+                        }
+                        None => j += 1,
+                    }
+                } else {
+                    j += 1;
+                }
+            }
+
+            emphasis(text, start, end, &opaque, flags);
+        }
+
+        struct Delim {
+            pos: usize,
+            len: usize,
+            orig: usize,
+            ch: u16,
+            open: bool,
+            close: bool,
+        }
+
+        /// CommonMark's delimiter runs, simplified: no links in the stack (they were
+        /// done before), the rule of three kept.
+        pub fn emphasis(
+            text: &[u16],
+            start: usize,
+            end: usize,
+            opaque: &[bool],
+            flags: &mut [u32],
+        ) {
+            let mut delims: Vec<Delim> = Vec::new();
+            let mut j = start;
+            while j < end {
+                let c = text[j];
+                if opaque[j - start] || !(c == b'*' as u16 || c == b'_' as u16 || c == b'~' as u16)
+                {
+                    j += 1;
+                    continue;
+                }
+                let mut k = j;
+                while k < end && text[k] == c && !opaque[k - start] {
+                    k += 1;
+                }
+                let len = k - j;
+                let before = if j == start { b' ' as u16 } else { text[j - 1] };
+                let after = if k == end { b' ' as u16 } else { text[k] };
+                let left = !is_ws(after) && (!is_punct(after) || is_ws(before) || is_punct(before));
+                let right =
+                    !is_ws(before) && (!is_punct(before) || is_ws(after) || is_punct(after));
+                let (open, close) = if c == b'_' as u16 {
+                    (
+                        left && (!right || is_punct(before)),
+                        right && (!left || is_punct(after)),
+                    )
+                } else if c == b'~' as u16 {
+                    if len == 2 {
+                        (left, right)
+                    } else {
+                        (false, false)
+                    }
+                } else {
+                    (left, right)
+                };
+                if open || close {
+                    delims.push(Delim {
+                        pos: j,
+                        len,
+                        orig: len,
+                        ch: c,
+                        open,
+                        close,
+                    });
+                }
+                j = k;
+            }
+
+            for ci in 0..delims.len() {
+                if !delims[ci].close {
+                    continue;
+                }
+                while delims[ci].len > 0 {
+                    let closer = &delims[ci];
+                    let found = (0..ci).rev().find(|&oi| {
+                        let o = &delims[oi];
+                        o.open
+                            && o.len > 0
+                            && o.ch == closer.ch
+                            && !((o.close || closer.open)
+                                && (o.orig + closer.orig).is_multiple_of(3)
+                                && !(o.orig.is_multiple_of(3) && closer.orig.is_multiple_of(3)))
+                    });
+                    let Some(oi) = found else { break };
+                    let ch = delims[ci].ch;
+                    let used = if ch == b'~' as u16 || (delims[oi].len >= 2 && delims[ci].len >= 2)
+                    {
+                        2
+                    } else {
+                        1
+                    };
+                    let style = if ch == b'~' as u16 {
+                        flags::STRIKE
+                    } else if used == 2 {
+                        flags::STRONG
+                    } else {
+                        flags::EMPH
+                    };
+                    let o_end = delims[oi].pos + delims[oi].len;
+                    let c_pos = delims[ci].pos;
+                    set(flags, o_end - used, o_end, flags::HIDDEN);
+                    set(flags, c_pos, c_pos + used, flags::HIDDEN);
+                    set(flags, o_end, c_pos, style);
+                    delims[oi].len -= used;
+                    delims[ci].pos += used;
+                    delims[ci].len -= used;
+                    // Openers between the pair can no longer open.
+                    for d in &mut delims[oi + 1..ci] {
+                        d.open = false;
+                    }
+                }
+            }
+        }
+        pub fn autolink_end(text: &[u16], from: usize, end: usize) -> Option<usize> {
+            if !(starts_with_ascii(text, from, end, "https://")
+                || starts_with_ascii(text, from, end, "http://")
+                || starts_with_ascii(text, from, end, "mailto:"))
+            {
+                return None;
+            }
+            (from..end)
+                .find(|&k| text[k] == b'>' as u16)
+                .filter(|&k| !text[from..k].iter().any(|&c| is_ws(c) || c == b'<' as u16))
+        }
+
+        /// `[text](url)` starting at the `[`: where the `]` is, and the end of `)`.
+        pub fn link_parts(text: &[u16], open: usize, end: usize) -> Option<(usize, usize)> {
+            let mut depth = 0;
+            let mut k = open;
+            let close = loop {
+                if k >= end {
+                    return None;
+                }
+                let c = text[k];
+                if c == b'\\' as u16 {
+                    k += 2;
+                    continue;
+                }
+                if c == b'[' as u16 {
+                    depth += 1;
+                } else if c == b']' as u16 {
+                    depth -= 1;
+                    if depth == 0 {
+                        break k;
+                    }
+                }
+                k += 1;
+            };
+            if close + 1 >= end || text[close + 1] != b'(' as u16 {
+                return None;
+            }
+            let mut parens = 0;
+            let mut k = close + 1;
+            while k < end {
+                let c = text[k];
+                if c == b'\\' as u16 {
+                    k += 2;
+                    continue;
+                }
+                if c == b'(' as u16 {
+                    parens += 1;
+                } else if c == b')' as u16 {
+                    parens -= 1;
+                    if parens == 0 {
+                        return Some((close, k + 1));
+                    }
+                }
+                k += 1;
+            }
+            None
+        }
+
+        /// A bare `https://…` or `http://…`: where it ends, without the punctuation
+        /// that usually follows a URL in a sentence.
+        pub fn bare_url_end(text: &[u16], at: usize, end: usize) -> Option<usize> {
+            let scheme = if starts_with_ascii(text, at, end, "https://") {
+                8
+            } else if starts_with_ascii(text, at, end, "http://") {
+                7
+            } else {
+                return None;
+            };
+            let mut k = at + scheme;
+            while k < end && !is_ws(text[k]) && text[k] != b'<' as u16 {
+                k += 1;
+            }
+            while k > at + scheme
+                && matches!(
+                    text[k - 1],
+                    0x2e | 0x2c | 0x3b | 0x3a | 0x21 | 0x3f | 0x27 | 0x22 | 0x29
+                )
+            {
+                // A ")" closes the URL only if the URL didn't open one.
+                if text[k - 1] == b')' as u16 {
+                    let opens = text[at..k].iter().filter(|&&c| c == b'(' as u16).count();
+                    let closes = text[at..k].iter().filter(|&&c| c == b')' as u16).count();
+                    if closes <= opens {
+                        break;
+                    }
+                }
+                k -= 1;
+            }
+            (k > at + scheme).then_some(k)
+        }
+        pub fn link_at(text: &[u16], pos: usize) -> Option<(usize, usize)> {
+            let n = text.len();
+            let mut j = 0;
+            while j < n {
+                let c = text[j];
+                if c == b'[' as u16 {
+                    if let Some((close, url_end)) = link_parts(text, j, n) {
+                        if pos >= j && pos < url_end {
+                            let mut a = close + 2;
+                            while a < url_end && is_space(text[a]) {
+                                a += 1;
+                            }
+                            let mut b = a;
+                            if a < url_end - 1 && text[a] == b'<' as u16 {
+                                // <...> may hold spaces; the span includes the brackets.
+                                if let Some(gt) =
+                                    (a + 1..url_end - 1).find(|&k| text[k] == b'>' as u16)
+                                {
+                                    return Some((a, gt + 1));
+                                }
+                            }
+                            while b < url_end - 1 && !is_space(text[b]) {
+                                b += 1;
+                            }
+                            return Some((a, b));
+                        }
+                        j = url_end;
+                        continue;
+                    }
+                } else if c == b'<' as u16 {
+                    if let Some(k) = autolink_end(text, j + 1, n) {
+                        if pos >= j && pos <= k {
+                            return Some((j, k + 1));
+                        }
+                        j = k + 1;
+                        continue;
+                    }
+                } else if (c == b'h' as u16 || c == b'H' as u16)
+                    && (j == 0 || is_space(text[j - 1]) || text[j - 1] == b'(' as u16)
+                    && let Some(k) = bare_url_end(text, j, n)
+                {
+                    if pos >= j && pos < k {
+                        return Some((j, k));
+                    }
+                    j = k;
+                    continue;
+                }
+                j += 1;
+            }
+            None
+        }
+    }
+
+    /// A small deterministic generator, as for the other property tests.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 33) as usize
+        }
+    }
+
+    #[test]
+    fn matches_the_simple_implementation() {
+        const PIECES: [&str; 40] = [
+            "*", "**", "***", "_", "__", "~~", "~", "[", "]", "(", ")", "![", "](", "\\", "`",
+            "``", "<", ">", "<http://", "http://", "https://", "h", " ", "a", "a", ".", "x.org",
+            "\\*", "😀", "“", "\u{a0}", "\t", "mailto:a", "a*b", "~~~", "[x]", "(a)", "_c_",
+            "www.", "!",
+        ];
+        let mut rng = Rng(0x5eed);
+        let mut mine = Vec::new();
+        let mut theirs = Vec::new();
+        for round in 0..60_000 {
+            let pieces = 1 + rng.next() % if round % 10 == 0 { 80 } else { 12 };
+            let mut s = String::new();
+            for _ in 0..pieces {
+                s.push_str(PIECES[rng.next() % PIECES.len()]);
+            }
+            let text = u(&s);
+            let n = text.len();
+            let start = if n > 0 {
+                rng.next() % (n.min(8) + 1)
+            } else {
+                0
+            };
+            let base = [0, flags::HEADING, flags::QUOTE][rng.next() % 3];
+            mine.clear();
+            mine.resize(n, 0);
+            theirs.clear();
+            theirs.resize(n, 0);
+            inline(&text, start, n, base, &mut mine);
+            reference::inline(&text, start, n, base, &mut theirs);
+            assert_eq!(mine, theirs, "inline of {s:?} from {start}");
+            for p in 0..=n {
+                assert_eq!(
+                    link_at(&text, p),
+                    reference::link_at(&text, p),
+                    "link_at {p} of {s:?}"
+                );
             }
         }
     }
