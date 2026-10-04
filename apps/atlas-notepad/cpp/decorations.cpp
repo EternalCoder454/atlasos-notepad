@@ -24,10 +24,11 @@ QFont labelFont(const QFont &base)
 }
 } // namespace
 
-QString MarkdownDecorations::fenceLabel(const QString &line)
+QString MarkdownDecorations::fenceLabel(const QString &fenceLine)
 {
-    constexpr qsizetype maxScan = 256;
+    constexpr qsizetype maxScan = 256; // of the line, in UTF-16 units
     constexpr qsizetype maxChars = 64;
+    const QStringView line = QStringView(fenceLine).left(maxScan);
     qsizetype i = 0;
     while (i < line.size() && line.at(i) != u'`' && line.at(i) != u'~') {
         ++i;
@@ -42,36 +43,78 @@ QString MarkdownDecorations::fenceLabel(const QString &line)
     while (i < line.size() && line.at(i).isSpace()) {
         ++i;
     }
-    qsizetype j = i;
-    while (j < line.size() && j - i < maxScan && !line.at(j).isSpace()) {
-        ++j;
-    }
-    // Only what can be seen: no controls, no bidi or other format
-    // characters, no separators, no unpaired surrogates (they come out as
-    // U+FFFD), private use or unassigned code points.
+    // Only letters, digits and + # . _ - / (c++, objective-c, f#, text/x-foo):
+    // the word ends at anything else. That leaves out controls, bidi and other
+    // format characters, combining marks, symbols and the letters that draw
+    // blank (U+3164, U+115F...), none of which a language name needs.
     QList<char32_t> kept;
-    for (const char32_t c : line.mid(i, j - i).toUcs4()) {
-        if (c == 0xFFFD) {
-            continue;
+    bool cut = false;
+    for (const char32_t c : line.mid(i).toUcs4()) {
+        bool ok = c == u'+' || c == u'#' || c == u'.' || c == u'_' || c == u'-' || c == u'/';
+        if (!ok && c != 0xFFFD) {
+            switch (QChar::category(c)) {
+            case QChar::Letter_Uppercase:
+            case QChar::Letter_Lowercase:
+            case QChar::Letter_Titlecase:
+            case QChar::Letter_Modifier:
+            case QChar::Letter_Other:
+            case QChar::Number_DecimalDigit:
+            case QChar::Number_Letter:
+            case QChar::Number_Other:
+                ok = true;
+                break;
+            default:
+                break;
+            }
         }
-        switch (QChar::category(c)) {
-        case QChar::Other_Control:
-        case QChar::Other_Format:
-        case QChar::Other_Surrogate:
-        case QChar::Other_PrivateUse:
-        case QChar::Other_NotAssigned:
-        case QChar::Separator_Line:
-        case QChar::Separator_Paragraph:
-        case QChar::Separator_Space:
-            continue;
-        default:
+        // The Hangul and Braille fillers are letters that draw nothing.
+        if (c == 0x115F || c == 0x1160 || c == 0x3164 || c == 0xFFA0 || c == 0x2800) {
+            ok = false;
+        }
+        if (!ok) {
             break;
         }
-        if (kept.size() < maxChars) {
-            kept.append(c);
+        if (kept.size() == maxChars) {
+            cut = true;
+            break;
+        }
+        kept.append(c);
+    }
+    QString out = QString::fromUcs4(kept.constData(), kept.size());
+    if (cut) {
+        out += QChar(0x2026);
+    }
+    return out;
+}
+
+QStringList MarkdownDecorations::labelsForTest() const
+{
+    std::vector<Shape> shapes;
+    layOut(shapes);
+    QStringList out;
+    for (const Shape &s : shapes) {
+        if (s.type == Shape::Label) {
+            out.append(s.text);
         }
     }
-    return QString::fromUcs4(kept.constData(), kept.size());
+    return out;
+}
+
+const MarkdownDecorations::Elided &MarkdownDecorations::elide(const QString &label, qreal width) const
+{
+    const QFont font = labelFont(m_editor->font());
+    if (font != m_labelFont || m_elided.size() > 64) {
+        m_labelFont = font;
+        m_labelMetrics = QFontMetricsF(font);
+        m_elided.clear();
+    }
+    Elided &e = m_elided[label];
+    if (e.width != qRound(width)) {
+        e.width = qRound(width);
+        e.text = m_labelMetrics.elidedText(label, Qt::ElideRight, width);
+        e.advance = m_labelMetrics.horizontalAdvance(e.text);
+    }
+    return e;
 }
 
 MarkdownDecorations::MarkdownDecorations(QQuickItem *parent)
@@ -199,13 +242,10 @@ void MarkdownDecorations::layOut(std::vector<Shape> &out) const
             // The language, small at the top right of an opening fence. While
             // the caret is on the line its own text shows instead.
             if (l.kind == Md::FenceLine && l.state != 0 && !m_editor->fenceRevealed(block)) {
-                const QString label = fenceLabel(block.text());
-                if (!label.isEmpty()) {
-                    const QFontMetricsF fm(labelFont(m_editor->font()));
+                if (!info->fenceLabel.isEmpty()) {
                     const qreal inset = 10;
-                    const QString shown = fm.elidedText(label, Qt::ElideRight, qMax<qreal>(24, box.width() * 0.4));
-                    const qreal w = fm.horizontalAdvance(shown);
-                    out.push_back({Shape::Label, 0, QRectF(box.right() - inset - w, box.top(), w, box.height()), shown});
+                    const Elided &e = elide(info->fenceLabel, qMax<qreal>(24, box.width() * 0.4));
+                    out.push_back({Shape::Label, 0, QRectF(box.right() - inset - e.advance - 1, box.top(), e.advance + 2, box.height()), e.text});
                 }
             }
             break;
@@ -285,6 +325,7 @@ void MarkdownDecorations::paint(QPainter *painter)
             break;
         case Shape::Label:
             painter->save();
+            painter->setClipRect(s.rect);
             painter->setFont(labelFont(m_editor->font()));
             painter->setPen(dim);
             painter->drawText(s.rect, Qt::AlignRight | Qt::AlignVCenter | Qt::TextSingleLine, s.text);

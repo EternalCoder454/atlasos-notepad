@@ -7,9 +7,11 @@
 namespace
 {
 // A format flag of this file's own (Rust's run from bit 0 up): a fence line
-// whose markers aren't shown. The Formatted view keeps its height (the code
+// whose markers aren't shown. The Formatted view keeps the line (the code
 // block's top and bottom padding, and where the language label goes) but
-// draws and spaces its characters as the hidden ones are.
+// draws and spaces its characters as the hidden ones are. Showing the markers
+// again (caret on the line) can make a very long info string wrap and move the
+// text below by a line; that is accepted.
 constexpr uint32_t FenceHidden = 1u << 31;
 } // namespace
 
@@ -67,6 +69,26 @@ void MarkdownHighlighter::setCaret(int position)
     }
 }
 
+// The caret from its source, without reading any line: for the callers that
+// read every line anyway.
+void MarkdownHighlighter::syncCaret()
+{
+    QTextDocument *doc = document();
+    if (!doc || !m_caretSource) {
+        return;
+    }
+    if (m_caret.isNull() || m_caret.document() != doc) {
+        m_caret = QTextCursor(doc);
+    }
+    m_caret.setPosition(qBound(0, m_caretSource(), qMax(0, doc->characterCount() - 1)));
+}
+
+// Where the caret's block starts, once for a pass over many blocks (-1: none).
+int MarkdownHighlighter::caretBlockPosition() const
+{
+    return m_caret.isNull() ? -1 : m_caret.block().position();
+}
+
 bool MarkdownHighlighter::isCaretBlock(const QTextBlock &block) const
 {
     return !m_caret.isNull() && m_caret.block() == block;
@@ -78,6 +100,7 @@ int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info
 {
     if (!m_markdown) {
         info->hidden.clear();
+        info->fenceLabel.clear();
         m_ranges.clear();
         addMisspelled(text, 0, info);
         return 0;
@@ -91,6 +114,12 @@ int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info
     }
 
     info->line = line;
+    // Only an opening fence has a language; read a bounded prefix of the line.
+    if (line.kind == Md::FenceLine && line.state != 0) {
+        info->fenceLabel = MarkdownDecorations::fenceLabel(text);
+    } else {
+        info->fenceLabel.clear();
+    }
     info->hidden.clear();
     info->quoteMarks.clear();
     m_ranges.clear();
@@ -183,14 +212,14 @@ constexpr int sliceFrom = 64 * 1024;
 constexpr qint64 sliceNs = 8'000'000;
 } // namespace
 
-int MarkdownHighlighter::readBlock(QTextBlock block, int previous)
+int MarkdownHighlighter::readBlock(QTextBlock block, int previous, int caretPos)
 {
     auto *info = static_cast<BlockInfo *>(block.userData());
     if (!info) {
         info = new BlockInfo;
         block.setUserData(info);
     }
-    const int state = read(block.text(), previous, info, isCaretBlock(block));
+    const int state = read(block.text(), previous, info, block.position() == caretPos);
     block.layout()->setFormats(m_ranges);
     block.setUserState(state);
     return state;
@@ -209,10 +238,12 @@ void MarkdownHighlighter::rehighlightAll(bool now)
     if (!doc) {
         return;
     }
+    syncCaret();
     if (now || doc->characterCount() <= sliceFrom) {
         int state = 0;
+        const int caretPos = caretBlockPosition();
         for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
-            state = readBlock(b, state);
+            state = readBlock(b, state, caretPos);
         }
         doc->markContentsDirty(0, doc->characterCount());
         return;
@@ -233,10 +264,11 @@ void MarkdownHighlighter::rehighlightSlice()
     // The cursor moved with any edits since the last slice; the line before
     // it has its state (typing highlights as it goes).
     QTextBlock b = m_pass.block();
+    const int caretPos = caretBlockPosition();
     const int from = b.position();
     int state = qMax(0, b.previous().userState());
     for (int n = 1; b.isValid(); ++n) {
-        state = readBlock(b, state);
+        state = readBlock(b, state, caretPos);
         b = b.next();
         if (n % 32 == 0 && clock.nsecsElapsed() > m_readBudgetNs) {
             break;

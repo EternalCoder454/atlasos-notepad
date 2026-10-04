@@ -47,9 +47,15 @@ void MarkdownEditor::setTextEdit(QQuickItem *edit)
         m_doc = textDocument ? textDocument->textDocument() : nullptr;
         edit->installEventFilter(this);
         connect(edit, SIGNAL(cursorPositionChanged()), this, SLOT(snapCursor()));
+        // Replacing the whole text (load, reload) can move the caret without
+        // its signal: the fence lines' reveal follows it again.
+        connect(edit, SIGNAL(textChanged()), this, SLOT(syncCaret()));
         if (m_doc) {
             m_highlighter = new MarkdownHighlighter(m_doc);
             m_highlighter->setSpellChecker(m_spell);
+            m_highlighter->setCaretSource([edit = QPointer<QQuickItem>(edit)] {
+                return edit ? edit->property("cursorPosition").toInt() : 0;
+            });
             m_highlighter->setCaret(cursor());
             m_highlighter->setStyle(m_style);
         }
@@ -321,6 +327,13 @@ bool MarkdownEditor::moveCaret(int direction, bool extend)
     const int to = direction > 0 ? stepRight(from) : stepLeft(from);
     select(extend ? anchor() : to, to);
     return true;
+}
+
+void MarkdownEditor::syncCaret()
+{
+    if (m_highlighter && m_edit) {
+        m_highlighter->setCaret(cursor());
+    }
 }
 
 // After a click, Up, Down, Home or End: out of hidden syntax.
