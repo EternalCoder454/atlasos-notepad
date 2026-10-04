@@ -109,6 +109,7 @@ Item {
         shortcutText: command ? App.shortcutText(command.keys ?? command.shortcut) : ""
         enabled: command ? command.enabled : false
         onClicked: command.trigger()
+        Keys.onEscapePressed: capsule.editorFocusRequested(true) // the editor keeps Tab
     }
     component Divider: Rectangle {
         Layout.alignment: Qt.AlignHCenter
@@ -141,8 +142,31 @@ Item {
             }
         }
     }
+    property Item menuOpener: null
+    // A menu closed: an item ran (the editor takes the focus), else the
+    // button that had the focus gets it back, else as for a click.
+    function menuClosed() {
+        const opener = menuOpener;
+        const ran = menuTriggered;
+        menuOpener = null;
+        menuTriggered = false;
+        if (!ran && opener && opener.visible && opener.enabled) {
+            // The popup gives its own focus back (as a popup reason, which
+            // SymbolButton still draws as a ring); if it didn't, take it.
+            Qt.callLater(() => {
+                if (!opener.activeFocus) {
+                    opener.forceActiveFocus(Qt.TabFocusReason);
+                }
+            });
+        } else {
+            editorFocusRequested(ran);
+        }
+    }
     // Opens `menu` to the left of `button`, clear of the capsule.
     function popupLeft(menu, button) {
+        // A menu opened from the keyboard returns to its button when it
+        // closes unused; one opened by a click behaves as before.
+        menuOpener = button.activeFocus ? button : null;
         menu.popup(button, 0, 0);
         // Bound: the menu's width settles after it opens.
         menu.x = Qt.binding(() => -menu.width - Kirigami.Units.smallSpacing);
@@ -214,6 +238,7 @@ Item {
                 implicitWidth: capsule.buttonSize
                 implicitHeight: capsule.buttonSize
                 symbol: "format_h1"
+                Keys.onEscapePressed: capsule.editorFocusRequested(true)
                 text: qsTr("Heading")
                 tipEnabled: !headingMenu.visible
                 checked: capsule.heading > 0
@@ -223,10 +248,7 @@ Item {
                 }
                 ContextMenu {
                     id: headingMenu
-                    onClosed: {
-                        capsule.editorFocusRequested(capsule.menuTriggered);
-                        capsule.menuTriggered = false;
-                    }
+                    onClosed: capsule.menuClosed()
                     Entry {
                         command: capsule.actions.heading1
                         showMark: true
@@ -272,15 +294,13 @@ Item {
                 implicitWidth: capsule.buttonSize
                 implicitHeight: capsule.buttonSize
                 symbol: "add"
+                Keys.onEscapePressed: capsule.editorFocusRequested(true)
                 text: qsTr("More")
                 tipEnabled: !moreMenu.visible
                 onClicked: capsule.popupLeft(moreMenu, moreButton)
                 ContextMenu {
                     id: moreMenu
-                    onClosed: {
-                        capsule.editorFocusRequested(capsule.menuTriggered);
-                        capsule.menuTriggered = false;
-                    }
+                    onClosed: capsule.menuClosed()
                     Entry {
                         command: capsule.actions.strikethrough
                     }
@@ -342,17 +362,26 @@ Item {
             flick.scrollBy(i - (first + shown - 1));
         }
     }
+    // A new window: what the old one had focused says nothing now.
+    readonly property var window: Window.window
+    onWindowChanged: focusInside = false
     Connections {
-        target: capsule.Window.window
+        target: capsule.window
         function onActiveFocusItemChanged() {
-            let item = capsule.Window.window.activeFocusItem;
+            const window = capsule.window;
+            let item = window.activeFocusItem;
             const focused = item;
             while (item && item !== column) {
                 item = item.parent;
             }
+            const was = capsule.focusInside;
             capsule.focusInside = !!(item && focused);
             if (capsule.focusInside) {
                 capsule.reveal(focused);
+            } else if (was && (!focused || focused === window.contentItem)) {
+                // The focused button went disabled or hidden: focus fell to
+                // nothing, so typing would go nowhere.
+                Qt.callLater(() => capsule.editorFocusRequested(false));
             }
         }
     }
@@ -367,9 +396,10 @@ Item {
         anchors.right: parent.right
         anchors.top: atTop ? parent.top : undefined
         anchors.bottom: atTop ? undefined : parent.bottom
-        // The tap area reaches out past the capsule's end, so it is wider
-        // than the margin without covering the first or last button.
-        readonly property real reach: Math.round(capsule.buttonSize * 0.4)
+        // The tap area reaches out past the capsule's end, by no more than
+        // the margin kept around it, so it never covers a button, the tab
+        // bar or the text.
+        readonly property real reach: Math.min(Math.round(capsule.buttonSize * 0.4), capsule.edgeMargin)
         height: capsule.edge + reach
         anchors.topMargin: atTop ? -reach : 0
         anchors.bottomMargin: atTop ? 0 : -reach
