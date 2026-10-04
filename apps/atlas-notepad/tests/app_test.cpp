@@ -20,6 +20,8 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
+#include <QQuickWindow>
+#include <QWheelEvent>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSignalSpy>
@@ -2653,22 +2655,76 @@ private Q_SLOTS:
         QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), scroll, 5000);
     }
 
-    // While the restore waits for the layout, a scroll by the user wins: the
-    // view doesn't jump back to the restored place once the layout arrives.
-    void restoredScrollYieldsToTheUser()
+    // A restore waiting for a lagging layout, in a window, with the hold
+    // started: the window is what the hold watches for the user's input.
+    Document *startHeldRestore(QQuickWindow &window, QQuickItem *&flick)
     {
         Document *doc = openFile(newList(), write(QStringLiteral("late.txt"), QByteArray("one two three four five six seven eight nine ten\n").repeated(300)));
-        QVERIFY(doc);
+        if (!doc) {
+            return nullptr;
+        }
         doc->d->cursor = doc->d->anchor = 0;
         doc->d->scrollY = 800.0;
-        QQuickItem *flick = attachInLaggingFlickable(doc);
-        QVERIFY(flick);
+        flick = attachInLaggingFlickable(doc);
+        if (!flick) {
+            return nullptr;
+        }
+        flick->setParentItem(window.contentItem()); // before the hold starts
+        return doc;
+    }
+
+    // While the restore waits for the layout, the user's own scroll wins:
+    // the view doesn't jump back to the restored place once it arrives.
+    void restoredScrollYieldsToTheUser()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
         QVERIFY(filled(doc));
-        QTRY_VERIFY(doc->d->heldSet >= 0); // the hold has made its first step
-        QVERIFY(doc->d->heldScroll > 0); // and is still waiting
-        flick->setProperty("contentY", 5.0); // the wheel
-        QTest::qWait(1200); // past the hold's second
+        QTRY_VERIFY(doc->d->heldWatch); // the hold is waiting
+        QWheelEvent wheel(QPointF(10, 10), QPointF(10, 10), QPoint(), QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(&window, &wheel);
+        flick->setProperty("contentY", 5.0); // what the wheel does
+        QVERIFY(!doc->d->heldFlick);
+        QTest::qWait(1200);
         QVERIFY(flick->property("contentHeight").toReal() > 900);
+        QCOMPARE(flick->property("contentY").toReal(), 5.0);
+    }
+
+    // The view's own moves while the layout settles (following the caret,
+    // clamping to a shorter height) don't end the restore.
+    void restoredScrollOutlastsTheViewsOwnMoves()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        flick->setProperty("contentY", 5.0); // no input: the view itself
+        QTRY_COMPARE_WITH_TIMEOUT(flick->property("contentY").toReal(), 800.0, 5000);
+        QTRY_VERIFY(!doc->d->heldWatch); // done once the layout settled
+    }
+
+    // A new view state (a tab switch, a reload at the top) ends a restore
+    // still waiting: the old place doesn't come back.
+    void newViewStateEndsAHeldRestore()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = nullptr;
+        Document *doc = startHeldRestore(window, flick);
+        QVERIFY(doc);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QVERIFY(filled(doc));
+        QTRY_VERIFY(doc->d->heldWatch);
+        doc->d->scrollY = 0;
+        doc->d->applyView();
+        QVERIFY(!doc->d->heldFlick);
+        flick->setProperty("contentY", 5.0);
+        QTest::qWait(1200);
         QCOMPARE(flick->property("contentY").toReal(), 5.0);
     }
 

@@ -179,12 +179,16 @@ struct Document::Private {
     void applyView();
     // A restored scroll waits for the layout: the view's content height
     // may still grow after the text is in (a wrapped text, a delayed
-    // binding), so the target is re-applied every 50 ms for a second, or until it fits.
+    // binding, a big text filled in pieces), so the target is re-applied
+    // every 50 ms until the layout settles, or the user scrolls, clicks or
+    // types.
     void holdScroll(QQuickItem *flick, qreal y);
     void stepHeldScroll(int generation);
+    int endHeldScroll(); // returns the new generation
     QPointer<QQuickItem> heldFlick;
+    QPointer<QObject> heldWatch; // the window's input watch while holding
     qreal heldScroll = -1;
-    qreal heldSet = -1; // what the last step set, to tell a user scroll apart
+    qreal heldHeight = -1; // the content height at the last step
     int heldGeneration = 0;
     QElapsedTimer heldClock;
     QQuickItem *flickable() const;
