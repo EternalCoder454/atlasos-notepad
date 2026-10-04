@@ -118,15 +118,23 @@ if(BUILD_TESTING)
     # programs: this one has no service directories. Without dbus-run-session
     # those tests (and the ones that launch other programs) skip.
     find_program(DBUS_RUN_SESSION dbus-run-session)
-    if(DBUS_RUN_SESSION)
-        add_test(NAME app_test COMMAND ${DBUS_RUN_SESSION}
-            --config-file=${CMAKE_CURRENT_SOURCE_DIR}/tests/dbus-session.conf -- $<TARGET_FILE:app_test>)
-        set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    else()
-        add_test(NAME app_test COMMAND app_test)
-        # "disabled:" is a bus address nothing answers: no ambient bus is reached.
-        set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NP_TEST_NO_BUS=1;DBUS_SESSION_BUS_ADDRESS=disabled:")
-    endif()
+    # app_test runs as shards (tests/shard.sh), so ctest -j spreads its slow
+    # big-file tests over cores.
+    set(APP_TEST_SHARDS 8)
+    math(EXPR last "${APP_TEST_SHARDS} - 1")
+    foreach(shard RANGE ${last})
+        if(DBUS_RUN_SESSION)
+            add_test(NAME app_test_${shard} COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/shard.sh
+                ${APP_TEST_SHARDS} ${shard} $<TARGET_FILE:app_test> ${DBUS_RUN_SESSION}
+                --config-file=${CMAKE_CURRENT_SOURCE_DIR}/tests/dbus-session.conf --)
+            set_tests_properties(app_test_${shard} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        else()
+            add_test(NAME app_test_${shard} COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/shard.sh
+                ${APP_TEST_SHARDS} ${shard} $<TARGET_FILE:app_test>)
+            # "disabled:" is a bus address nothing answers: no ambient bus is reached.
+            set_tests_properties(app_test_${shard} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NP_TEST_NO_BUS=1;DBUS_SESSION_BUS_ADDRESS=disabled:")
+        endif()
+    endforeach()
 endif()
 
 install(TARGETS atlas-notepad-app RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

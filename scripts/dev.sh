@@ -64,7 +64,7 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
             echo keepcache=True >>/etc/dnf/dnf.conf
             dnf -y install dnf5-plugins rpm-build clippy rustfmt xorg-x11-server-Xvfb \
                 dbus-daemon qt6-qtbase-gui kf6-qqc2-desktop-style breeze-icon-theme \
-                ImageMagick xdotool
+                ImageMagick xdotool ccache
             cd /rpms
             dnf -y install "$@"
             # The exact files, also when this version or a newer one is installed.
@@ -85,7 +85,7 @@ if [ "$(podman image inspect --format '{{index .Labels "spec"}}' "$image")" != "
     ctr=$(podman run -d -v "$repo/packaging":/packaging:ro,z \
         -v atlas-dnf:/var/cache/libdnf5 "$image" sleep infinity)
     trap 'podman rm -f -t 0 "$ctr" >/dev/null' EXIT
-    podman exec "$ctr" dnf -y builddep /packaging/atlas-notepad.spec >&2
+    podman exec "$ctr" bash -c 'dnf -y install ccache && dnf -y builddep /packaging/atlas-notepad.spec' >&2
     podman commit --change "LABEL spec=$spec_sum" "$ctr" "$image" >/dev/null
     podman rm -f -t 0 "$ctr" >/dev/null
     trap - EXIT
@@ -99,5 +99,12 @@ exec podman run --rm "${tty[@]}" \
     -v "$repo":/src:z -w /src \
     -v atlas-cargo:/root/.cargo/registry \
     -v atlas-cargo-git:/root/.cargo/git \
+    -v atlas-notepad-ccache:/root/.cache/ccache \
     -e CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/src/target/dev}" \
-    "$image" "${@:-bash}"
+    "$image" bash -c '
+        # C++ through ccache (its own volume), so a new build dir or a
+        # rebuild after a header change reuses what was compiled before.
+        if command -v ccache >/dev/null; then
+            export CMAKE_CXX_COMPILER_LAUNCHER=ccache CMAKE_C_COMPILER_LAUNCHER=ccache
+        fi
+        exec "$@"' bash "${@:-bash}"
