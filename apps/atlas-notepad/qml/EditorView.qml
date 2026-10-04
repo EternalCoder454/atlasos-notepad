@@ -209,7 +209,6 @@ FocusScope {
             id: edit
             objectName: view.current ? "editor" : ""
             width: view.settings.wordWrap ? flick.width : Math.max(flick.width, implicitWidth)
-            height: Math.max(implicitHeight, flick.height)
             focus: true
             textFormat: TextEdit.PlainText
             wrapMode: view.settings.wordWrap ? TextEdit.Wrap : TextEdit.NoWrap
@@ -218,14 +217,11 @@ FocusScope {
             persistentSelection: true
             // Four spaces, as Windows Notepad.
             tabStopDistance: fontInfo.advanceWidth(" ") * 4
-            font: {
-                const base = view.formatted ? Kirigami.Theme.defaultFont : view.settings.font;
-                return Qt.font({
-                    family: base.family,
-                    styleName: view.formatted ? "" : view.settings.font.styleName,
-                    pointSize: view.settings.font.pointSize * view.settings.zoom / 100
-                });
-            }
+            // Set one by one: Qt.font({pointSize}) cuts a fractional size
+            // (9 * 110% = 9.9) down to a whole one, so 110% looked like 100%.
+            font.family: (view.formatted ? Kirigami.Theme.defaultFont : view.settings.font).family
+            font.styleName: view.formatted ? "" : view.settings.font.styleName
+            font.pointSize: view.settings.font.pointSize * view.settings.zoom / 100
             color: Kirigami.Theme.textColor
             selectionColor: Kirigami.Theme.highlightColor
             selectedTextColor: Kirigami.Theme.highlightedTextColor
@@ -239,6 +235,15 @@ FocusScope {
             Accessible.role: Accessible.EditableText
             Accessible.name: view.document.title
             Accessible.multiLine: true
+
+            // Delayed: the text's implicit height follows its width (wrap), and
+            // a plain binding here loops with the layout.
+            Binding {
+                target: edit
+                property: "height"
+                value: Math.max(edit.implicitHeight, flick.height)
+                delayed: true
+            }
 
             FontMetrics {
                 id: fontInfo
