@@ -13,6 +13,7 @@ if [ ! -e /run/.containerenv ] || [ "$(id -u)" != 0 ]; then
     exit 2
 fi
 
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 build=$(cd "${1:?usage: kio-sftp-test.sh <build dir>}" && pwd)
 need=()
 for pkg in openssh-server openssh-clients kio-extras xorg-x11-server-Xvfb; do
@@ -29,8 +30,16 @@ ssh_dir=/nonexistent-never-removed
 cleanup() {
     [ -n "$sshd_pid" ] && kill "$sshd_pid" 2>/dev/null
     pkill -f "sshd.*$work" 2>/dev/null
+    pkill -u np-sftp 2>/dev/null
+    # Whatever still has the work folder open (a KIO worker, kiod, a bus).
+    fuser -km "$work" >/dev/null 2>&1
+    sleep 1
     userdel -r np-sftp >/dev/null 2>&1
-    rm -rf "$work" "$ssh_dir"
+    local _
+    for _ in 1 2 3; do
+        rm -rf "$work" "$ssh_dir" 2>/dev/null && [ ! -e "$work" ] && break
+        sleep 1
+    done
 }
 
 mkdir -p "$work/server" "$work/files" "$work/xdg/config" "$work/xdg/data" "$work/xdg/cache" "$work/xdg/state" "$work/run"
@@ -55,6 +64,17 @@ chmod 755 "$work"; chmod 777 "$work/files"
 ssh-keygen -q -t ed25519 -N '' -f "$ssh_dir/id_ed25519"
 ssh-keygen -q -t ed25519 -N '' -f "$work/server/host_key"
 cp "$ssh_dir/id_ed25519.pub" "$work/server/authorized_keys"
+# sftp-server logs every open/rename/remove to its stderr, which sshd would
+# send to the client: keep it in a file (to see whether a save goes through
+# a .part file and a rename).
+cat > "$work/server/sftp-logged" <<WRAP
+#!/bin/sh
+exec /usr/libexec/openssh/sftp-server -l VERBOSE -e 2>> "$work/sftp.log"
+WRAP
+chmod 755 "$work/server/sftp-logged"
+: > "$work/sftp.log"
+chmod 666 "$work/sftp.log"
+
 cat > "$work/server/sshd_config" <<CFG
 Port 2222
 ListenAddress 127.0.0.1
@@ -67,7 +87,7 @@ KbdInteractiveAuthentication no
 UsePAM no
 StrictModes no
 PermitRootLogin yes
-Subsystem sftp internal-sftp -l INFO
+Subsystem sftp $work/server/sftp-logged
 LogLevel VERBOSE
 CFG
 mkdir -p /run/sshd
@@ -93,19 +113,20 @@ echo "ssh login to the test sshd: exit $?"
 [ -s "$work/ssh.log" ] && grep -E "Authenticat|denied|refused|Permission|Host key|known_hosts" "$work/ssh.log" | head -6
 
 export XDG_CONFIG_HOME="$work/xdg/config" XDG_DATA_HOME="$work/xdg/data" XDG_CACHE_HOME="$work/xdg/cache" XDG_STATE_HOME="$work/xdg/state" XDG_RUNTIME_DIR="$work/run"
-umask 000 # the files the tests make are writable for that user too
 export NP_KIO_TEST_BASE="sftp://np-sftp@127.0.0.1:2222$work/files"
 export QT_QPA_PLATFORM=offscreen
 status=0
 
 echo "== app_test over sftp"
-dbus-run-session -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab kioSaveRaisesNoBanner relocateDuringRemoteSave renameDuringRemoteLoad > "$work/app_test.log" 2>&1
+# umask 000 for the test process only: the files it makes are writable for
+# the server's user too.
+(umask 000; dbus-run-session --config-file="$here/../apps/atlas-notepad/tests/dbus-session.conf" -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab kioSaveRaisesNoBanner relocateDuringRemoteSave renameDuringRemoteLoad) > "$work/app_test.log" 2>&1
 test_rc=$?
 grep -E "^(PASS|FAIL|SKIP|Totals|   Loc|   Actual|   Expected)" "$work/app_test.log"
 [ "$test_rc" = 0 ] || { status=1; echo "app_test exit $test_rc"; tail -15 "$work/app_test.log"; tail -15 "$work/sshd.log"; }
 
 echo "== what sshd's sftp-server did with the test files (does a save go through a .part and a rename?)"
-grep -E 'sftp-server|internal-sftp' "$work/sshd.log" | grep -E 'rt\.txt|cf\.txt|\.part|rename' | sed 's/^.*\(open\|rename\|posix-rename\|remove\|close\)/\1/' | sort | uniq -c | head -20
+grep -E 'open "|rename|remove|posix-rename' "$work/sftp.log" | sed 's/^.*sftp-server\[[0-9]*\]: //' | sort | uniq -c | head -20
 echo "== the app itself, under Xvfb, opening an sftp URL"
 printf 'from the server\n' > "$work/files/e2e.txt"
 sessions_before=$(grep -c "subsystem 'sftp'" "$work/sshd.log")
@@ -120,7 +141,7 @@ sessions_before=$(grep -c "subsystem 'sftp'" "$work/sshd.log")
 )
 # Only the app's and KIO's own lines: the container's portal daemons grumble
 # about having no desktop.
-grep -iE "atlas-notepad|qrc:|kf\.kio|kioworker|sftp|Main\.qml|QML|qt\." "$work/app.log" | grep -iE "error|fail|critical|warn|cannot|can't" | grep -v "fuse init" > "$work/app.errors"
+grep -iE "atlas-notepad|qrc:|kf\.kio|kioworker|sftp|Main\.qml|QML|qt\." "$work/app.log" | grep -iE "error|fail|critical|warn|cannot|can't" | grep -v "fuse init" | grep -v xdg-desktop-portal > "$work/app.errors"
 echo "app log lines with errors or warnings: $(wc -l < "$work/app.errors")"
 head -10 "$work/app.errors"
 if [ "$(grep -c "subsystem 'sftp'" "$work/sshd.log")" -gt "$sessions_before" ]; then
