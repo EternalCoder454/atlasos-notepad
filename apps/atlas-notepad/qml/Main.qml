@@ -569,7 +569,9 @@ QQC2.ApplicationWindow {
                 Keys.onEscapePressed: if (root.view) root.view.focusEditor()
                 // Right-click, or the Menu key / Shift+F10 on a focused tab.
                 onContextMenuRequested: (index, position) => {
-                    tabMenu.tabIndex = index;
+                    // The tab's document, not its place: another tab may
+                    // close while the menu is open.
+                    tabMenu.target = root.documents.documents()[index] ?? null;
                     tabMenu.popup(tabBar, position.x, position.y);
                 }
 
@@ -614,10 +616,11 @@ QQC2.ApplicationWindow {
             }
             ContextMenu {
                 id: tabMenu
-                property int tabIndex: -1
-                // Nothing holds the focus once the menu is gone: back to the
-                // editor, unless a dialog (Close Tab on unsaved text) took it.
-                onClosed: if (root.view && !unsavedDialog.visible) root.view.focusEditor()
+                property var target: null
+                // Focus that fell to nothing when the menu closed goes back to
+                // the editor through the window's fallback; a click elsewhere
+                // keeps the focus where it landed.
+                onClosed: target = null
                 ContextMenuItem {
                     text: qsTr("New Tab")
                     shortcutText: App.shortcutText(newTabAction.keys)
@@ -632,7 +635,12 @@ QQC2.ApplicationWindow {
                 ContextMenuSeparator {}
                 ContextMenuItem {
                     text: qsTr("Close Tab")
-                    onTriggered: root.closeTab(tabMenu.tabIndex)
+                    onTriggered: {
+                        const index = tabMenu.target ? root.documents.indexOf(tabMenu.target) : -1;
+                        if (index >= 0) {
+                            root.closeTab(index);
+                        }
+                    }
                 }
             }
         }
@@ -1046,24 +1054,32 @@ QQC2.ApplicationWindow {
         acceptText: qsTr("Go To")
         onAboutToShow: {
             const lc = root.document.lineColumn(root.view.edit.cursorPosition);
+            lineField.tried = false;
             lineField.text = String(lc.x);
             lineField.selectAll();
         }
         onOpened: lineField.forceActiveFocus()
         // A number past the last line shows its error and keeps the dialog.
-        closeOnAccept: lineField.errorText.length === 0
+        closeOnAccept: lineField.valid
         onAccepted: {
-            if (lineField.errorText.length === 0) {
-                root.view.goToLine(parseInt(lineField.text) || 1);
+            lineField.tried = true;
+            if (lineField.valid) {
+                root.view.goToLine(parseInt(lineField.text));
             }
         }
 
         AtlasTextField {
             id: lineField
             Layout.fillWidth: true
+            // Enter or Go To was pressed: an empty field says so too.
+            property bool tried: false
+            readonly property int number: parseInt(text) || 0
+            readonly property bool valid: root.document !== null && number >= 1 && number <= root.document.lineCount
             errorText: {
-                const n = parseInt(text);
-                return root.document && n > root.document.lineCount ? qsTr("The file has %1 lines").arg(root.document.lineCount) : "";
+                if (root.document && number > root.document.lineCount) {
+                    return qsTr("The file has %1 lines").arg(root.document.lineCount);
+                }
+                return tried && number < 1 ? qsTr("Enter a line number") : "";
             }
             inputMethodHints: Qt.ImhDigitsOnly
             validator: IntValidator {
@@ -1071,12 +1087,16 @@ QQC2.ApplicationWindow {
             }
             placeholderText: root.document ? qsTr("1 to %1").arg(root.document.lineCount) : ""
             Accessible.name: qsTr("Line number")
-            onAccepted: {
+            // Return also when the field isn't acceptable (empty): the
+            // error says why nothing happened.
+            function submit() {
                 goToDialog.accepted();
                 if (goToDialog.closeOnAccept) {
                     goToDialog.close();
                 }
             }
+            Keys.onReturnPressed: submit()
+            Keys.onEnterPressed: submit()
         }
     }
 
