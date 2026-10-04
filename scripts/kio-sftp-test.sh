@@ -7,6 +7,12 @@
 # failure.
 set -uo pipefail
 
+# It adds a user and writes root's ~/.ssh: never outside a container.
+if [ ! -e /run/.containerenv ] || [ "$(id -u)" != 0 ]; then
+    echo "kio-sftp-test: run this through scripts/dev.sh (a throwaway container, as root)" >&2
+    exit 2
+fi
+
 build=$(cd "${1:?usage: kio-sftp-test.sh <build dir>}" && pwd)
 need=()
 for pkg in openssh-server openssh-clients kio-extras xorg-x11-server-Xvfb; do
