@@ -21,8 +21,6 @@ BuildRequires:  gcc-c++
 BuildRequires:  cmake
 BuildRequires:  ninja-build
 BuildRequires:  corrosion
-# CMake fetches Atlas.Ui from atlasos-updater.
-BuildRequires:  git-core
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
 BuildRequires:  cmake(Qt6Core)
@@ -43,10 +41,15 @@ BuildRequires:  cmake(KF6WindowSystem)
 BuildRequires:  cmake(KF6Sonnet)
 # the spell check tests
 BuildRequires:  hunspell-en-US
-# QML modules qmlcachegen resolves at build time (not linked)
+# QML modules qmlcachegen resolves at build time (not linked). atlas-ui comes
+# from atlas-framework, which is in no repository: install its RPMs first
+# (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
 BuildRequires:  kf6-kirigami-devel
+BuildRequires:  atlas-ui >= 1.2.0
 
 Requires:       kf6-kirigami
+# Atlas.Ui (its 1.2.0 has the editor components)
+Requires:       atlas-ui >= 1.2.0
 Requires:       kf6-qqc2-desktop-style
 # spell check (dictionaries come from the system's langpacks)
 Requires:       kf6-sonnet
@@ -67,23 +70,33 @@ and headings.
 %autosetup -n atlas-notepad-%{version}
 
 %build
-# NETWORK: cargo (Corrosion runs it with --locked) fetches crates.io, and
-# CMake's FetchContent clones Atlas.Ui at the pinned commit, during %%build.
-# That works in podman and with `rpmbuild` on a networked machine, not in an
-# offline mock/Koji build.
+# NETWORK: cargo (Corrosion runs it with --locked) fetches crates.io and
+# atlas-framework at the pinned commit during %%build. That works in podman
+# and with `rpmbuild` on a networked machine, not in an offline mock/Koji build.
 export CARGO_HOME=${CARGO_HOME:-%{_builddir}/cargo-home}
-export RUSTFLAGS="%{build_rustflags}"
+# No build paths in the binary (panic messages, debug info): %%build runs in
+# the source directory. %%cmake keeps CFLAGS/CXXFLAGS when they are set.
+# These flags split on spaces, so _topdir must have none (build-rpm.sh's hasn't).
+export RUSTFLAGS="%{build_rustflags} --remap-path-prefix=$PWD=. --remap-path-prefix=$CARGO_HOME=cargo"
+export CFLAGS="%{build_cflags} -ffile-prefix-map=$PWD=."
+export CXXFLAGS="%{build_cxxflags} -ffile-prefix-map=$PWD=."
 export CARGO_PROFILE_RELEASE_STRIP=none
 %global _vpath_srcdir apps/atlas-notepad
-# --define "atlas_ui_dir /path/to/atlasos-updater" builds against a local
-# Atlas.Ui checkout instead of the pinned commit (for testing unpushed work).
-%cmake -G Ninja -DCMAKE_BUILD_TYPE=Release %{?atlas_ui_dir:-DFETCHCONTENT_SOURCE_DIR_ATLASOS_UPDATER=%{atlas_ui_dir}}
+%cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
 %cmake_build
 
 %install
 %cmake_install
 
 %check
+# No path into the build tree (checked as well as set: see %%build).
+# grep: 0 = found, 1 = not found, anything else (no binary) fails too.
+rc=0
+grep -qF "%{_builddir}" %{buildroot}%{_bindir}/atlas-notepad || rc=$?
+if [ "$rc" != 1 ]; then
+    echo "atlas-notepad holds the build path %{_builddir} (grep status $rc)" >&2
+    exit 1
+fi
 desktop-file-validate %{buildroot}%{_datadir}/applications/net.eterneon.atlas.notepad.desktop
 appstream-util validate-relax --nonet \
     %{buildroot}%{_datadir}/metainfo/net.eterneon.atlas.notepad.metainfo.xml

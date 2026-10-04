@@ -9,7 +9,6 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX /usr CACHE PATH "" FORCE)
 endif()
 include(GNUInstallDirs)
-include(FetchContent)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Concurrent DBus Gui PrintSupport Qml Quick QuickControls2 Widgets)
 qt_policy(SET QTP0001 NEW)
 qt_policy(SET QTP0004 NEW)
@@ -25,24 +24,19 @@ set(QT_QML_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml)
 corrosion_import_crate(MANIFEST_PATH ${WORKSPACE_DIR}/Cargo.toml
     CRATES atlas-notepad LOCKED)
 
-# Atlas.Ui comes from the atlasos-updater commit pinned for atlas-core in the
-# workspace Cargo.toml, so the two can't drift apart. To try unpushed Atlas.Ui
-# changes, point CMake at a local checkout (scripts/dev.sh mounts $ATLAS_UI):
-#   -DFETCHCONTENT_SOURCE_DIR_ATLASOS_UPDATER=/atlas-ui
-file(READ ${WORKSPACE_DIR}/Cargo.toml _workspace_toml)
-string(REGEX MATCH "atlas-core = {[^}]*rev = \"([0-9a-f]+)\"" _pin "${_workspace_toml}")
-set(ATLAS_UPDATER_REV "${CMAKE_MATCH_1}")
-string(LENGTH "${ATLAS_UPDATER_REV}" _rev_len)
-if(NOT _rev_len EQUAL 40)
-    message(FATAL_ERROR "No full 40-character atlas-core rev in ${WORKSPACE_DIR}/Cargo.toml")
+# Atlas.Ui, the shared Atlas look, is installed like Kirigami (atlas-ui, from
+# atlas-framework): QML imports it and nothing links it. qmlcachegen and
+# qmllint read its types from the installed copy.
+# 1.2.0 added the editor parts (TabBar, StatusBar...); an older one only
+# fails later, in qmlcachegen, with "unknown type".
+set(_atlas_ui_qmldir "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_QML}/Atlas/Ui/qmldir")
+if(NOT EXISTS "${_atlas_ui_qmldir}")
+    message(FATAL_ERROR "Atlas.Ui is not installed: install atlas-ui >= 1.2.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
 endif()
-message(STATUS "Atlas.Ui from atlasos-updater ${ATLAS_UPDATER_REV}")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${WORKSPACE_DIR}/Cargo.toml)
-FetchContent_Declare(atlasos_updater
-    GIT_REPOSITORY https://github.com/EternalCoder454/atlasos-updater.git
-    GIT_TAG ${ATLAS_UPDATER_REV}
-    SOURCE_SUBDIR ui)
-FetchContent_MakeAvailable(atlasos_updater)
+file(STRINGS "${_atlas_ui_qmldir}" _atlas_ui_tabbar REGEX "^TabBar ")
+if(NOT _atlas_ui_tabbar)
+    message(FATAL_ERROR "The installed Atlas.Ui is older than 1.2.0: install atlas-ui >= 1.2.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
+endif()
 
 # The app's QObjects (cpp/app.h), shared with app_test.
 set(APP_SOURCES
@@ -65,8 +59,7 @@ target_include_directories(atlas-notepad-app PRIVATE cpp)
 qt_add_qml_module(atlas-notepad-app
     URI net.eterneon.atlas.notepad
     VERSION 1.0
-    # Atlas.Ui is linked explicitly (atlas-uiplugin); Kirigami and Qt load
-    # their plugins at run time.
+    # Atlas.Ui, Kirigami and Qt load their plugins at run time.
     NO_IMPORT_SCAN
     QML_FILES
         qml/Main.qml qml/EditorView.qml qml/FormatToolbar.qml qml/GlobalMenu.qml
@@ -85,9 +78,9 @@ qt_add_qml_module(atlas-notepad-app
         icons/task.svg icons/text.svg icons/toolbar.svg
 )
 
-target_link_libraries(atlas-notepad-app PRIVATE ${APP_LIBS} atlas-ui atlas-uiplugin)
-# Drops the parts of atlas-core Notepad doesn't call (its D-Bus client and
-# tokio, about 1.5 MB): only the crash reports are used.
+target_link_libraries(atlas-notepad-app PRIVATE ${APP_LIBS})
+# Drops the Rust code Notepad doesn't call: of atlas-framework only the
+# crash reports are used.
 target_link_options(atlas-notepad-app PRIVATE -Wl,--gc-sections)
 
 # Tests: the editing logic on a real TextEdit, offscreen.

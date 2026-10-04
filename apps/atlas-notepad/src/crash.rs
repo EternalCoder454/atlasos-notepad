@@ -1,25 +1,22 @@
-//! Opt-in crash reports through atlas-core, as in Atlas Monitor. Off unless
-//! the user turned them on in Atlas Updater, which is also where reports are
-//! reviewed and sent; Notepad only saves them.
+//! Opt-in crash reports through atlas-framework, as in the other Atlas apps.
+//! Off unless the user turned them on in Atlas Updater, which is also where
+//! reports are reviewed and sent (as public GitHub issues); Notepad only
+//! saves them.
 
 use std::ffi::{CStr, c_char};
 
-use atlas_core::crash::{self, AppInfo};
+use atlas_framework_core::{AppInfo, app_info};
+use atlas_framework_system::crash;
 
 pub const APP_ID: &str = "net.eterneon.atlas.notepad";
 pub const REPO: &str = "atlasos-notepad";
 
 pub fn app_info() -> AppInfo {
-    AppInfo {
-        name: "Notepad".into(),
-        id: APP_ID.into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        repo: REPO.into(),
-    }
+    app_info! { name: "Notepad", id: APP_ID, repo: REPO }
 }
 
 /// Called first thing from `main.cpp`: panics save a report, but only when
-/// the user enabled crash reports (atlas-core checks the setting).
+/// the user enabled crash reports (atlas-framework checks the setting).
 #[unsafe(no_mangle)]
 pub extern "C" fn atlas_crash_install() {
     crash::install(app_info());

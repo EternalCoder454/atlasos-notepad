@@ -182,7 +182,7 @@ AtlasPage {
 
     Section {
         title: qsTr("Crash Reports")
-        footer: qsTr("Crash reports for every Atlas app are turned on or off in Atlas Updater. They're off unless you turn them on, and each one is shown to you before it's sent.")
+        footer: qsTr("Crash reports for every Atlas app are turned on or off in Atlas Updater. They're off unless you turn them on, and each one is shown to you before it's sent. A report you send is posted as a public issue on the AtlasOS GitHub project, with no name or account attached. Anyone can read it, including the error and stack trace and your AtlasOS version, kernel, CPU, GPU and memory.")
 
         SectionRow {
             title: qsTr("Open Atlas Updater")
@@ -201,7 +201,7 @@ AtlasPage {
 
     Section {
         title: qsTr("About")
-        footer: qsTr("Notepad collects nothing and needs no account. Crash reports are off unless you turn them on in Atlas Updater.")
+        footer: qsTr("Notepad collects nothing and needs no account. Crash reports are off unless you turn them on in Atlas Updater, and are sent, as public GitHub issues, only when you choose to.")
 
         SectionRow {
             title: qsTr("Notepad")

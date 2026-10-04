@@ -10,10 +10,12 @@ repository = "https://github.com/EternalCoder454/atlasos-notepad"
 rust-version = "1.89"
 
 [workspace.dependencies]
-# atlas-core and the Atlas.Ui QML module come from the same atlasos-updater
-# commit. apps/atlas-notepad/CMakeLists.txt reads this `rev` to fetch Atlas.Ui,
-# so this line is the only place the pin lives. To move it, see CLAUDE.md.
-atlas-core = { git = "https://github.com/EternalCoder454/atlasos-updater", rev = "bd4bbaa0413dd1ca14b1bacb11d97797f5240013" }
+# atlas-framework: the crash reports. Its Atlas.Ui QML module is not built
+# from here: it comes installed (the atlas-ui RPM), like Kirigami. This rev is
+# atlas-ui 1.2.0; move it together with `atlas-ui >=` in
+# packaging/atlas-notepad.spec (see CLAUDE.md). Pin a commit of origin/main.
+atlas-framework-core = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "460e478e39524be9b53f489958f3671edcc684c5" }
+atlas-framework-system = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "460e478e39524be9b53f489958f3671edcc684c5" }
 
 [profile.release]
 lto = "thin"

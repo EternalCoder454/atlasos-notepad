@@ -15,7 +15,14 @@ built and tested).
 
 ## Commands
 
-All builds and tests run in the fedora:44 dev container, never on the host:
+All builds and tests run in the fedora:44 dev container, never on the host.
+Atlas.Ui is the installed atlas-ui RPM: the first `scripts/dev.sh` run (and
+`packaging/build-rpm.sh`) needs `ATLAS_LOCAL_RPMS=<dir>` with atlas-framework's
+RPMs at the commit pinned in `Cargo.toml` (ones you built: they are installed
+as root without a signature check). To move to a newer Atlas.Ui, change
+that rev and `atlas-ui >=` in the spec together, build the framework RPMs at
+the new rev and run `scripts/dev.sh` once with `ATLAS_LOCAL_RPMS`. In the VM,
+install atlas-ui and atlas-symbols-fonts before the Notepad RPM.
 
 ```sh
 scripts/dev.sh cargo fmt --all

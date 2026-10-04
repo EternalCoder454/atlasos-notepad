@@ -20,6 +20,11 @@ plain C ABI. The QObjects are C++: they mostly wrap Qt (the TextEdit's
 document, file watching, the session bus), and the Rust work behind them is a
 handful of pure functions, so CXX-Qt would add a build step for little.
 
+The shared Atlas parts come from atlas-framework: the `Atlas.Ui` QML module
+(tabs, banners, sections, menus, the status bar) is the installed `atlas-ui`
+package, loaded like Kirigami, and the opt-in crash reports are the
+`atlas-framework-system` crate, pinned in the workspace `Cargo.toml`.
+
 Find and replace search the document's text (`QString`/`QRegularExpression`
 on a snapshot), not `QTextDocument::find`, which is slower and can't count
 matches cheaply. Replace All is one edit block, so one undo.
@@ -331,4 +336,7 @@ on the session bus can send it files to open.
 ## Building and testing
 
 Everything builds in the `localhost/atlas-notepad-dev:44` container
-(`scripts/dev.sh`); see `CLAUDE.md` for the commands.
+(`scripts/dev.sh`); see `CLAUDE.md` for the commands. `atlas-ui` is in no
+repository: build atlas-framework's RPMs (its `packaging/build-rpm.sh`) and
+give their directory as `ATLAS_LOCAL_RPMS` to the first `scripts/dev.sh` run
+and to `packaging/build-rpm.sh`.
