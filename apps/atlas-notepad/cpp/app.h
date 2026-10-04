@@ -4,7 +4,7 @@
 // (notepad_core.h) on a worker thread; nothing here blocks on the disk.
 #pragma once
 
-#include "limits.h"
+#include "sizelimits.h"
 #include "notepad_core.h"
 
 #include <QAbstractListModel>
@@ -12,6 +12,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickPaintedItem>
+#include <QQuickWindow>
 #include <QSettings>
 #include <QUrl>
 #include <QVariantMap>
@@ -20,7 +21,6 @@
 
 class QFileSystemWatcher;
 class QQmlApplicationEngine;
-class QQuickWindow;
 class QTextDocument;
 class DocumentList;
 class Session;
@@ -86,6 +86,9 @@ public:
     QRect windowGeometry() const;
     bool windowMaximized() const;
     void setWindowGeometry(const QRect &rect, bool maximized);
+
+    // The rc file itself, for the recent files ([Recent], kept by App).
+    QSettings &rc();
 
 Q_SIGNALS:
     void fontChanged();
@@ -269,6 +272,8 @@ Q_SIGNALS:
 private:
     friend class DocumentList;
     friend class Session;
+    friend class App;
+    friend class AppTest;
     struct Private;
     std::unique_ptr<Private> d;
 };
@@ -290,6 +295,7 @@ class LineNumbers : public QQuickPaintedItem
 
 public:
     explicit LineNumbers(QQuickItem *parent = nullptr);
+    ~LineNumbers() override;
     void paint(QPainter *painter) override;
     QQuickItem *textEdit() const;
     void setTextEdit(QQuickItem *edit);
@@ -308,6 +314,11 @@ Q_SIGNALS:
     void textEditChanged();
     void flickableChanged();
     void styleChanged();
+
+private Q_SLOTS:
+    // Connected to the TextEdit's and Flickable's signals by name.
+    void caretMoved();
+    void relayout();
 
 private:
     struct Private;
@@ -343,7 +354,10 @@ public:
     Document *current() const;
     bool canReopenClosed() const;
     bool anyModified() const;
-    QList<Document *> documents() const;
+    Q_INVOKABLE QList<Document *> documents() const;
+    // Appends an untitled-or-restored tab without making it current (for the
+    // session's restore). Open files with open().
+    Document *append();
 
     // A new untitled tab after the current one, made current.
     Q_INVOKABLE Document *newTab();
@@ -376,6 +390,7 @@ Q_SIGNALS:
 
 private:
     friend class Session;
+    friend class App;
     struct Private;
     std::unique_ptr<Private> d;
 };
@@ -394,7 +409,8 @@ class App : public QObject
     Q_PROPERTY(QString version READ version CONSTANT)
 
 public:
-    // main.cpp makes the one App before loading QML. Each window is Main.qml
+    // main.cpp makes the one App before loading QML. A null engine makes
+    // windows without QML (tests). Each window is Main.qml
     // loaded with initial property `documents` (its DocumentList); the App
     // owns the lists and deletes a window's list after the window closes.
     App(QQmlApplicationEngine *engine, QObject *parent = nullptr);
@@ -423,11 +439,24 @@ public:
     Q_INVOKABLE void print(Document *document, QQuickWindow *parent);
     // "Fri, Oct 3, 2026 4:12 PM", the locale's short date and time, for F5.
     Q_INVOKABLE QString timeDate() const;
+    // The windows' tab lists, most recently used first (also for tests, which
+    // run with a null engine: windows then have no QML).
+    QList<DocumentList *> windows() const;
+    QQuickWindow *activeWindow() const; // the most recent window's, or null
+    // false: nothing is read from or written to the session (--bench).
+    void setSessionEnabled(bool enabled);
+
     // The window asks before closing: true = close now. With
     // continueSession the tabs go to the session and it closes; without, it
     // returns false when tabs are modified (QML asks about them, then calls
     // closeWindow again with force).
     Q_INVOKABLE bool closeWindow(DocumentList *documents, bool force = false);
+    // Quits the app. With continueSession: saves the session, closes every
+    // window (closeWindow says yes while quitting) and quits. Without: closes
+    // the windows one at a time and stops at the first that refuses (its QML
+    // asks about the unsaved tabs, then calls quit() again).
+    Q_INVOKABLE void quit();
+    Q_INVOKABLE void copyToClipboard(const QString &text);
     // Saves the session now (also done a second after any edit stops and at
     // quit).
     Q_INVOKABLE void saveSession();
