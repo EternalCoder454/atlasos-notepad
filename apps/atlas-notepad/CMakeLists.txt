@@ -47,7 +47,7 @@ FetchContent_MakeAvailable(atlasos_updater)
 set(APP_SOURCES
     cpp/app.h cpp/sizelimits.h cpp/notepad_core.h
     cpp/settings.cpp cpp/document.cpp cpp/documentlist.cpp cpp/app.cpp
-    cpp/session.h cpp/session.cpp cpp/linenumbers.cpp)
+    cpp/session.h cpp/document_p.h cpp/session.cpp cpp/linenumbers.cpp)
 set(APP_LIBS
     atlas_notepad
     Qt6::Core Qt6::Concurrent Qt6::DBus Qt6::Gui Qt6::PrintSupport Qt6::Qml Qt6::Quick
