@@ -520,6 +520,30 @@ private Q_SLOTS:
         QCOMPARE(text(), QStringLiteral("1. a\n2. \n3. b\n   - c\n4. d"));
     }
 
+    void formatsAtReportsCaretAndSelectionFormats()
+    {
+        open(QStringLiteral("plain **bold** *it* `code` ~~gone~~\n- item\n1. one\n- [ ] task\n> quote\n# Head **strong**"));
+        const auto at = [&](int s, int e = -1) { return m_editor->formatsAt(s, e < 0 ? s : e); };
+        QCOMPARE(at(2), 0);
+        QVERIFY(at(9) & MarkdownEditor::FmtBold);
+        QVERIFY(!(at(9) & MarkdownEditor::FmtItalic));
+        QVERIFY(at(17) & MarkdownEditor::FmtItalic);
+        QVERIFY(at(22) & MarkdownEditor::FmtCode);
+        QVERIFY(at(30) & MarkdownEditor::FmtStrike);
+        // A selection of the bold word.
+        QVERIFY(at(8, 12) & MarkdownEditor::FmtBold);
+        const QString body = text();
+        QVERIFY(at(body.indexOf(u"item")) & MarkdownEditor::FmtBullet);
+        QVERIFY(at(body.indexOf(u"1. one") + 4) & MarkdownEditor::FmtNumbered);
+        QVERIFY(at(body.indexOf(u"task")) & MarkdownEditor::FmtTask);
+        QVERIFY(at(body.indexOf(u"quote")) & MarkdownEditor::FmtQuote);
+        // A heading is not bold by itself; its strong word is.
+        QVERIFY(!(at(body.indexOf(u"Head")) & MarkdownEditor::FmtBold));
+        QVERIFY(at(body.indexOf(u"strong") + 2) & MarkdownEditor::FmtBold);
+        QCOMPARE(at(-1), 0);
+        QCOMPARE(at(9999), 0);
+    }
+
     void clearFormattingKeepsText()
     {
         open(QStringLiteral("# A **b** [c](u) \\*"));

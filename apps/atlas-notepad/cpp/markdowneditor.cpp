@@ -895,6 +895,71 @@ int MarkdownEditor::headingAt(int position) const
     return info && info->line.kind == Md::HeadingLine ? info->line.heading : 0;
 }
 
+int MarkdownEditor::formatsAt(int start, int end) const
+{
+    if (!m_doc || start < 0) {
+        return 0;
+    }
+    end = qMax(start, end);
+    const QTextBlock block = m_doc->findBlock(start);
+    const BlockInfo *info = BlockInfo::of(block);
+    if (!block.isValid() || !info) {
+        return 0;
+    }
+    int bits = 0;
+    switch (info->line.kind) {
+    case Md::Bullet:
+        bits |= FmtBullet;
+        break;
+    case Md::Numbered:
+        bits |= FmtNumbered;
+        break;
+    case Md::Task:
+        bits |= FmtTask;
+        break;
+    case Md::FenceLine:
+    case Md::CodeLine:
+    case Md::RuleLine:
+        return 0; // no inline formats in code, and a rule has none
+    default:
+        break;
+    }
+    if (info->line.quoteDepth > 0) {
+        bits |= FmtQuote;
+    }
+    const bool heading = info->line.kind == Md::HeadingLine;
+    // The characters looked at, in the block: the selection clipped to the
+    // line, or for a caret the character before it (or after, at the start).
+    const int from = start - block.position();
+    const int to = qMin(end, block.position() + block.length() - 1) - block.position();
+    const bool caret = start == end;
+    const auto formats = block.layout() ? block.layout()->formats() : QList<QTextLayout::FormatRange>();
+    for (const auto &r : formats) {
+        const int rs = r.start;
+        const int re = r.start + r.length;
+        const bool hit = caret ? ((from > 0 ? from - 1 : from) >= rs && (from > 0 ? from - 1 : from) < re) : (rs < to && re > from);
+        if (!hit) {
+            continue;
+        }
+        const QTextCharFormat &f = r.format;
+        // A heading is bold by itself: only its own bold (Strong) counts, and
+        // the Syntax view draws the whole line bold.
+        if (f.fontWeight() >= QFont::Bold && (!heading || formatted())) {
+            bits |= FmtBold;
+        }
+        if (f.fontItalic()) {
+            bits |= FmtItalic;
+        }
+        if (f.fontStrikeOut() && info->line.kind != Md::Task) {
+            bits |= FmtStrike;
+        }
+        if (f.fontFamilies().toStringList().contains(m_style.monoFamily)) {
+            bits |= FmtCode;
+        }
+    }
+    return bits;
+}
+
 QString MarkdownEditor::linkAt(int position) const
 {
     if (!m_doc) {

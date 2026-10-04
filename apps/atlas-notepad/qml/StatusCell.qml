@@ -37,7 +37,10 @@ T.AbstractButton {
 
     onClicked: {
         if (control.clickable && control.menu) {
-            control.menu.popup(control, control.mirrored ? control.width - control.menu.implicitWidth : 0, -control.menu.implicitHeight - Kirigami.Units.smallSpacing);
+            control.menu.popup(control, control.mirrored ? control.width - control.menu.implicitWidth : 0, 0);
+            // Wholly above the cell, so it never covers the cells beside it;
+            // bound, as the menu's size settles after it opens.
+            control.menu.y = Qt.binding(() => -control.menu.height - Kirigami.Units.smallSpacing);
         }
     }
 
@@ -50,6 +53,11 @@ T.AbstractButton {
         color: Qt.alpha(Kirigami.Theme.textColor, !control.clickable ? 0 : control.down ? 0.14 : control.hovered ? 0.08 : 0)
     }
 
+    FontMetrics {
+        id: metrics
+        font: control.smallFont
+    }
+
     contentItem: Item {
         implicitWidth: row.implicitWidth
         implicitHeight: row.implicitHeight
@@ -60,7 +68,8 @@ T.AbstractButton {
             Symbol {
                 visible: control.symbol.length > 0
                 name: control.symbol
-                size: Math.round(control.smallFont.pointSize * 1.7)
+                // In pixels: the height of a line of the small font.
+                size: Math.round(metrics.height)
                 opacity: 0.8
                 anchors.verticalCenter: parent.verticalCenter
             }

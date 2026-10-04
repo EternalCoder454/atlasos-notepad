@@ -530,7 +530,6 @@ QQC2.ApplicationWindow {
         onActivated: root.settingsOpen = false
     }
 
-
     // --- Menus.
 
     GlobalMenu {
@@ -718,9 +717,13 @@ QQC2.ApplicationWindow {
                 actions: root.actions
                 heading: root.view ? root.view.heading : 0
                 formatted: root.document !== null && root.document.formatted
+                formats: root.view ? root.view.formats : 0
                 topInset: findBar.visible ? findBar.height + Kirigami.Units.smallSpacing : 0
-                onEditorFocusRequested: {
-                    if (root.view) {
+                // After a menu: the editor takes the focus back when an item ran,
+                // or when nothing else (the find bar's field) has it.
+                onEditorFocusRequested: force => {
+                    const holder = root.activeFocusItem;
+                    if (root.view && (force || holder === null || holder === root.contentItem)) {
                         root.view.focusEditor();
                     }
                 }
@@ -836,7 +839,7 @@ QQC2.ApplicationWindow {
                 text: byWords ? (selected > 0 ? qsTr("%1 of %2 words").arg(num(selectedWords)).arg(num(words)) : words === 1 ? qsTr("1 word") : qsTr("%1 words").arg(num(words)))
                     : selected > 0 ? qsTr("%1 of %2 characters").arg(num(selected)).arg(num(total))
                     : total === 1 ? qsTr("1 character") : qsTr("%1 characters").arg(num(total))
-                toolTip: root.document ? (byWords ? qsTr("%1 characters, %2 line(s)") : qsTr("%1 words, %2 line(s)")).arg(num(byWords ? total : words)).arg(num(root.document.lineCount)) : ""
+                toolTip: root.document ? (byWords ? qsTr("%n character(s), %1 line(s)", "", total) : qsTr("%n word(s), %1 line(s)", "", words)).arg(num(root.document.lineCount)) : ""
             }
             Item {
                 Layout.fillWidth: true

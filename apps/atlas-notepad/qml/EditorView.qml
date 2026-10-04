@@ -33,6 +33,16 @@ FocusScope {
     // Kept clear at the right edge (the window's tool capsule).
     property real rightInset: 0
 
+    // Which formats the caret or selection is in (MarkdownEditor.Format
+    // bits), for the tool capsule: read from the highlighter's layout.
+    readonly property int formats: {
+        if (!document.markdown) {
+            return 0;
+        }
+        edit.length; // re-read on edits too
+        return md.formatsAt(edit.selectionStart, edit.selectionEnd);
+    }
+
     signal linkRequested
 
     function focusEditor() {
@@ -108,6 +118,20 @@ FocusScope {
         padding: Kirigami.Units.largeSpacing
         color: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.4)
         currentColor: Kirigami.Theme.textColor
+    }
+
+    // The wheel over the strip kept free for the capsule scrolls the text too.
+    Item {
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        width: view.rightInset
+        WheelHandler {
+            acceptedModifiers: Qt.NoModifier
+            onWheel: event => {
+                flick.contentY = Math.max(0, Math.min(flick.contentHeight - flick.height, flick.contentY - event.angleDelta.y / 2));
+            }
+        }
     }
 
     Flickable {
@@ -206,7 +230,8 @@ FocusScope {
             selectionColor: Kirigami.Theme.highlightColor
             selectedTextColor: Kirigami.Theme.highlightedTextColor
             leftPadding: view.settings.lineNumbers ? Kirigami.Units.largeSpacing : Kirigami.Units.gridUnit
-            rightPadding: Kirigami.Units.gridUnit
+            // The capsule's margin already keeps text clear of the edge.
+            rightPadding: view.rightInset > 0 ? Kirigami.Units.smallSpacing : Kirigami.Units.gridUnit
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing
             onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)

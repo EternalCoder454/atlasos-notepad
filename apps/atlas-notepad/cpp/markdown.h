@@ -269,6 +269,13 @@ public:
     Q_INVOKABLE void toggleBlock(const QString &kind);
     // The heading level of the caret's line (0 for none), for the toolbar.
     Q_INVOKABLE int headingAt(int position) const;
+    // Which formats the caret (start == end) or the selection is in, for the
+    // toolbar's highlights: a bit each of Bold, Italic, Code, Strike, and of
+    // the line's Bullet, Numbered, Task, Quote. Read from what the highlighter
+    // already laid out (no parsing), on the first line of the range.
+    enum Format { FmtBold = 1, FmtItalic = 2, FmtCode = 4, FmtStrike = 8, FmtBullet = 16, FmtNumbered = 32, FmtTask = 64, FmtQuote = 128 };
+    Q_ENUM(Format)
+    Q_INVOKABLE int formatsAt(int start, int end) const;
     // The URL of the link at a position, or "".
     Q_INVOKABLE QString linkAt(int position) const;
     // Takes the Markdown out of the selection: bold, italic, code, links

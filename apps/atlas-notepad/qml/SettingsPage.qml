@@ -16,8 +16,19 @@ AtlasPage {
     title: qsTr("Settings")
 
     // A SectionRow a little shorter than the default, for the compact look.
+    // Never shorter than its text needs (a long, wrapped or translated
+    // subtitle): the row's own layout is the one child with `uniformCellSizes`.
     component CompactRow: SectionRow {
-        implicitHeight: Math.round(Kirigami.Units.gridUnit * (subtitle.length > 0 ? 2.9 : 2.2))
+        id: row
+        readonly property real textHeight: {
+            for (const child of row.children) {
+                if (child.uniformCellSizes !== undefined) {
+                    return child.implicitHeight + Kirigami.Units.largeSpacing;
+                }
+            }
+            return 0;
+        }
+        implicitHeight: Math.max(Math.round(Kirigami.Units.gridUnit * 2.2), textHeight)
     }
 
     Section {
@@ -117,7 +128,8 @@ AtlasPage {
             onSwitchToggled: checked => page.settings.openMarkdownFormatted = checked
         }
         CompactRow {
-            title: qsTr("Tool capsule")
+            title: qsTr("Tools")
+            subtitle: qsTr("The formatting capsule at the right edge")
             enabled: page.settings.formatting
             showSwitch: true
             switchChecked: page.settings.formattingToolbar
