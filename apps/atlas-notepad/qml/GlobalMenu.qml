@@ -60,6 +60,11 @@ Platform.MenuBar {
         Item { action: bar.actions.saveAs }
         Item { action: bar.actions.saveAll }
         Separator {}
+        Item { action: bar.actions.openWith }
+        Item { action: bar.actions.showInFolder }
+        Item { action: bar.actions.copyLocation }
+        Item { action: bar.actions.properties }
+        Separator {}
         Item { action: bar.actions.print }
         Separator {}
         Item { action: bar.actions.closeTab }

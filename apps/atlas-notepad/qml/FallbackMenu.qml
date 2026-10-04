@@ -46,6 +46,12 @@ ContextMenu {
     Item { action: menu.actions.save }
     Item { action: menu.actions.saveAs }
     Item { action: menu.actions.saveAll }
+    ContextMenuSeparator {}
+    Item { action: menu.actions.openWith }
+    Item { action: menu.actions.showInFolder }
+    Item { action: menu.actions.copyLocation }
+    Item { action: menu.actions.properties }
+    ContextMenuSeparator {}
     Item { action: menu.actions.print }
     ContextMenuSeparator {}
     ContextMenu {

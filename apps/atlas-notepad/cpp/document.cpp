@@ -1209,6 +1209,12 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
         Q_EMIT q->formattedChanged();
     }
     checkWritable();
+    if (mode == Initial && userOpened) {
+        userOpened = false;
+        if (App *app = App::instance()) {
+            app->addRecentFile(path);
+        }
+    }
     putText(r.text, mode != Initial);
     scheduleCounts();
     if (readOnly != wasReadOnly) {
@@ -1422,6 +1428,50 @@ void Document::cancelLoad()
     // A reload (or a restored tab): the text stays, loading ends.
     d->loading = false;
     d->syncLoading();
+}
+
+bool Document::Private::relocate(const QUrl &to)
+{
+    const bool toRemote = Remote::useKio(to);
+    const QString newPath = toRemote ? Remote::display(to) : to.toLocalFile();
+    if (newPath.isEmpty() || newPath == path) {
+        return false;
+    }
+    if (App *app = App::instance()) {
+        for (DocumentList *other : app->windows()) {
+            for (Document *doc : other->documents()) {
+                if (doc != q && doc->d->path == newPath) {
+                    return false;
+                }
+            }
+        }
+    }
+    const QString oldPath = path;
+    unwatch();
+    if (toRemote) {
+        setRemote(to);
+    } else {
+        url = QUrl();
+    }
+    path = newPath;
+    applyMarkdown(currentBytes());
+    watch();
+    Q_EMIT q->pathChanged();
+    Q_EMIT q->titleChanged();
+    if (!toRemote) {
+        // The watcher may have said "deleted" a moment ago: the file is here.
+        NpStamp now = {};
+        const int err = np_file_stamp(path.toUtf8().constData(), &now);
+        if (saving || isLoading()) {
+            recheck = true;
+        } else {
+            applyDiskStat(err, now);
+        }
+    }
+    if (App *app = App::instance()) {
+        app->renameRecent(oldPath, path);
+    }
+    return true;
 }
 
 void Document::Private::cancelRemote()

@@ -45,12 +45,12 @@ set(APP_SOURCES
     cpp/app.h cpp/sizelimits.h cpp/notepad_core.h
     cpp/settings.cpp cpp/document.cpp cpp/documentlist.cpp cpp/app.cpp
     cpp/session.h cpp/document_p.h cpp/session.cpp cpp/linenumbers.cpp
-    cpp/remote.h cpp/remote.cpp)
+    cpp/remote.h cpp/remote.cpp cpp/dirnotify.h cpp/dirnotify.cpp cpp/documentactions.cpp)
 set(APP_LIBS
     atlas_notepad
     Qt6::Core Qt6::Concurrent Qt6::DBus Qt6::Gui Qt6::PrintSupport Qt6::Qml Qt6::Quick
     Qt6::QuickControls2 Qt6::Widgets KF6::DBusAddons KF6::WindowSystem KF6::SonnetCore
-    KF6::KIOCore KF6::KIOGui KF6::GuiAddons)
+    KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::GuiAddons)
 
 qt_add_executable(atlas-notepad-app cpp/main.cpp cpp/bench.h cpp/bench.cpp)
 set_target_properties(atlas-notepad-app PROPERTIES OUTPUT_NAME atlas-notepad)
@@ -110,7 +110,13 @@ if(BUILD_TESTING)
     target_link_libraries(app_test PRIVATE ${APP_LIBS} Qt6::Test)
     # Lets the tests send local files through the KIO path (cpp/remote.h).
     target_compile_definitions(app_test PRIVATE NP_KIO_TEST_HOOK)
-    add_test(NAME app_test COMMAND app_test)
+    # KDirNotify tests need a session bus: one of their own when we can make it.
+    find_program(DBUS_RUN_SESSION dbus-run-session)
+    if(DBUS_RUN_SESSION)
+        add_test(NAME app_test COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:app_test>)
+    else()
+        add_test(NAME app_test COMMAND app_test)
+    endif()
     set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 

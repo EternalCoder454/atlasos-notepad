@@ -223,6 +223,7 @@ void DocumentList::open(const QList<QUrl> &urls)
             doc->d->path = shown;
             doc->d->untitledNumber = 0;
             doc->d->announceOpen = true;
+            doc->d->userOpened = true;
             doc->d->applyMarkdown(0);
             d->insert(doc, at++);
             doc->d->startLoad(Document::Private::Initial);
@@ -262,6 +263,7 @@ void DocumentList::open(const QList<QUrl> &urls)
         }
         Document *doc = d->make();
         doc->d->path = path;
+        doc->d->userOpened = true;
         doc->d->untitledNumber = 0;
         doc->d->applyMarkdown(qint64(stamp.size));
         d->insert(doc, at++);

@@ -25,6 +25,7 @@ fi
 work=$(mktemp -d /var/tmp/np-sftp.XXXXXX)
 sshd_pid=
 ssh_dir=/nonexistent-never-removed
+# shellcheck disable=SC2329 # called by the trap below
 cleanup() {
     [ -n "$sshd_pid" ] && kill "$sshd_pid" 2>/dev/null
     pkill -f "sshd.*$work" 2>/dev/null
@@ -43,7 +44,8 @@ if [ -n "$(ls -A "$ssh_dir" 2>/dev/null)" ]; then
     echo "kio-sftp-test: $ssh_dir isn't empty; run this in the dev container only" >&2
     exit 2
 fi
-mkdir -p -m 700 "$ssh_dir"
+mkdir -p "$ssh_dir"
+chmod 700 "$ssh_dir"
 trap cleanup EXIT INT TERM
 export HOME="$home"
 # sshd (without PAM) won't let a locked account in, and root's is: the server

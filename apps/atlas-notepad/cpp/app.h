@@ -211,6 +211,12 @@ public:
     bool isSaving() const;
     // First open: closes the tab. A reload: keeps the text.
     Q_INVOKABLE void cancelLoad();
+    // File menu: the document's file in the file manager, Open With, the
+    // properties dialog, the location on the clipboard. None for untitled.
+    Q_INVOKABLE void showInFolder();
+    Q_INVOKABLE void openWith();
+    Q_INVOKABLE void showProperties();
+    Q_INVOKABLE void copyLocation();
     bool isMarkdown() const;
     bool isProse() const;
     bool isFormatted() const;
@@ -308,6 +314,7 @@ private:
     friend class DocumentList;
     friend class Session;
     friend class App;
+    friend class DirNotifyListener;
     friend class AppTest;
     struct Private;
     std::unique_ptr<Private> d;
@@ -474,6 +481,8 @@ public:
     // against workingDirectory) or a URL. Invalid when it can't be used.
     static QUrl urlFromArgument(const QString &arg, const QString &workingDirectory);
     Q_INVOKABLE void addRecentFile(const QString &path);
+    // The file behind a recent entry was renamed.
+    void renameRecent(const QString &from, const QString &to);
     Q_INVOKABLE void clearRecentFiles();
     // Prints the document with Qt's print dialog: the Formatted look for
     // Markdown in the Formatted view, the editor font for everything else.
@@ -534,6 +543,8 @@ Q_SIGNALS:
     // can't be written, the last one was set aside): the most recent window
     // shows it.
     void message(const QString &text);
+    // A short remark for a Toast: a tab renamed or moved elsewhere, a copied location.
+    void notice(const QString &text);
 
 private:
     struct Private;

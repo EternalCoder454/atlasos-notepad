@@ -1,6 +1,9 @@
 // The process: settings, recent files, the windows and the session.
 #include "app.h"
+#include "dirnotify.h"
 #include "remote.h"
+
+#include <KRecentDocument>
 
 #include "document_p.h"
 #include "session.h"
@@ -353,6 +356,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
 {
     s_instance = this;
     d->q = this;
+    new DirNotifyListener(this);
     d->engine = engine;
     d->settings = new Settings(this);
     d->saveTimer.setSingleShot(true);
@@ -641,6 +645,22 @@ void App::addRecentFile(const QString &path)
     while (paths.size() > recentLimit) {
         paths.removeLast();
     }
+    d->writeRecent(paths);
+    Q_EMIT recentFilesChanged();
+    // KDE's recent documents too (Dolphin, the Kickoff menu): the URL has no
+    // password, a local file is a file: URL.
+    KRecentDocument::add(Remote::isStoredUrl(absolute) ? QUrl(absolute) : QUrl::fromLocalFile(absolute), QStringLiteral("net.eterneon.atlas.notepad"));
+}
+
+void App::renameRecent(const QString &from, const QString &to)
+{
+    QStringList paths = d->readRecent();
+    const qsizetype at = paths.indexOf(from);
+    if (at < 0) {
+        return;
+    }
+    paths.removeAll(to);
+    paths.replace(paths.indexOf(from), to);
     d->writeRecent(paths);
     Q_EMIT recentFilesChanged();
 }

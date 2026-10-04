@@ -7,6 +7,9 @@
 #include "session.h"
 
 #include <QApplication>
+#include <QClipboard>
+#include <QDBusConnection>
+#include <QDirIterator>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -22,6 +25,8 @@
 #include <QTemporaryDir>
 #include <QTextDocument>
 #include <QTest>
+
+#include <KDirNotify>
 
 #include <memory>
 #include <vector>
@@ -622,6 +627,123 @@ private Q_SLOTS:
         Document *ro = openSftp(list, QStringLiteral("ro.txt"));
         QVERIFY(ro);
         QCOMPARE(ro->banner(), Document::ReadOnlyFile);
+    }
+
+    // ---- KDirNotify and KDE integration. These need a session bus
+    // (ctest makes one with dbus-run-session); without it they skip.
+    bool haveBus()
+    {
+        return QDBusConnection::sessionBus().isConnected();
+    }
+
+    void dirNotifyRename()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        const QString from = write(QStringLiteral("a.md"), "# a\n");
+        Document *doc = openFile(newList(), from);
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("typed "));
+        QSignalSpy notice(m_app, &App::notice);
+        const QString to = m_dir + QStringLiteral("/b.md");
+        QVERIFY(QFile::rename(from, to));
+        OrgKdeKDirNotifyInterface::emitFileRenamed(QUrl::fromLocalFile(from), QUrl::fromLocalFile(to));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->path(), to, 5000);
+        QCOMPARE(doc->title(), QStringLiteral("b.md"));
+        QVERIFY(doc->isModified()); // the text and its state stay
+        QCOMPARE(doc->text(), QStringLiteral("typed # a\n"));
+        QVERIFY(doc->banner() != Document::Deleted);
+        QCOMPARE(notice.size(), 1);
+        QVERIFY(saveAndWait(doc)); // saves to the new place
+        QCOMPARE(read(to), QByteArray("typed # a\n"));
+        QVERIFY(!QFileInfo::exists(from));
+        QCOMPARE(m_app->recentFiles().value(0), to);
+    }
+
+    void dirNotifyFolderMove()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        QVERIFY(QDir().mkpath(m_dir + QStringLiteral("/old/sub")));
+        const QString from = write(QStringLiteral("old/sub/n.txt"), "x\n");
+        Document *doc = openFile(newList(), from);
+        QVERIFY(doc);
+        QVERIFY(QDir().rename(m_dir + QStringLiteral("/old"), m_dir + QStringLiteral("/new")));
+        OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(m_dir + QStringLiteral("/old")), QUrl::fromLocalFile(m_dir + QStringLiteral("/new")));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->path(), m_dir + QStringLiteral("/new/sub/n.txt"), 5000);
+        QVERIFY(doc->banner() != Document::Deleted);
+    }
+
+    void dirNotifyRemoved()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        const QString path = write(QStringLiteral("gone.txt"), "x\n");
+        Document *doc = openKio(newList(), path); // no file watcher: only the notice tells
+        QVERIFY(doc);
+        QVERIFY(QFile::remove(path));
+        OrgKdeKDirNotifyInterface::emitFilesRemoved({QUrl::fromLocalFile(path)});
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::Deleted, 20000);
+    }
+
+    void recentDocumentsHaveNoPassword()
+    {
+        m_app->addRecentFile(QStringLiteral("sftp://user:secret@host/dir/kde-recent.txt"));
+        const QString local = write(QStringLiteral("kde-local.txt"), "x\n");
+        QVERIFY(openFile(newList(), local)); // opening counts too
+        QTest::qWait(200);
+        QString all;
+        QDirIterator it(QString::fromUtf8(qgetenv("XDG_DATA_HOME")), QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            all += QString::fromUtf8(read(it.next()));
+        }
+        QVERIFY(all.contains(QStringLiteral("host/dir/kde-recent.txt")));
+        // (KRecentDocument leaves out files under /tmp, where these live: the
+        // local file is only in Notepad's own list.)
+        QVERIFY(m_app->recentFiles().contains(local));
+        QVERIFY(!all.contains(QStringLiteral("secret")));
+        QVERIFY(all.contains(QStringLiteral("net.eterneon.atlas.notepad")));
+    }
+
+    void copyLocationAndActions()
+    {
+        QApplication::clipboard()->setText(QStringLiteral("before"));
+        Document *untitled = newList()->newTab();
+        untitled->copyLocation();
+        untitled->showInFolder();
+        untitled->openWith();
+        untitled->showProperties(); // nothing for a tab with no file
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("before"));
+
+        const QString path = write(QStringLiteral("loc.txt"), "x\n");
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        QSignalSpy notice(m_app, &App::notice);
+        doc->copyLocation();
+        QCOMPARE(QApplication::clipboard()->text(), path);
+        QCOMPARE(notice.size(), 1);
+        // Show in Folder, Open With and Properties need a desktop: they
+        // start their job or dialog, and nothing crashes.
+        doc->showInFolder();
+        doc->showProperties();
+        doc->openWith();
+        QTest::qWait(300);
+        const auto widgets = QApplication::topLevelWidgets();
+        for (QWidget *w : widgets) {
+            w->close();
+        }
+        QTest::qWait(100);
+
+        Remote::setForceKio(false);
+        Document *remote = newList()->newTab();
+        remote->d->setRemote(QUrl(QStringLiteral("sftp://user:secret@127.0.0.1:1/r.txt")));
+        remote->d->path = Remote::display(remote->d->url);
+        remote->copyLocation();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("sftp://user@127.0.0.1:1/r.txt"));
     }
 
     void kioSessionStripsPassword()

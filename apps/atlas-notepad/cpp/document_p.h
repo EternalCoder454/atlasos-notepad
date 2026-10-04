@@ -61,6 +61,7 @@ struct Document::Private {
     QString path;
     QUrl url; // empty for a local file or an untitled tab; else KIO handles it
     bool remoteWritable = true; // what the last stat said (the scheme may still refuse)
+    bool userOpened = false; // opened by the user (not restored): the first read is a recent file
     bool announceOpen = false; // a failed first read closes the tab and tells openFailed
     QPointer<KJob> remoteJob; // the load or save in flight
     QPointer<KJob> checkJob; // the stat of the change check
@@ -146,6 +147,9 @@ struct Document::Private {
     void checkRemote(bool force);
     void applyDiskStat(int err, const NpStamp &now);
     void cancelRemote();
+    // The file was renamed or moved by someone else: follow it. False when
+    // another tab has the new place.
+    bool relocate(const QUrl &to);
     qint64 currentBytes() const;
 
     void startLoad(LoadMode mode, int forcedEncoding = -1);

@@ -33,6 +33,10 @@ QQC2.ApplicationWindow {
             save: saveAction,
             saveAs: saveAsAction,
             saveAll: saveAllAction,
+            openWith: openWithAction,
+            showInFolder: showInFolderAction,
+            copyLocation: copyLocationAction,
+            properties: propertiesAction,
             print: printAction,
             closeTab: closeTabAction,
             reopenTab: reopenTabAction,
@@ -136,6 +140,40 @@ QQC2.ApplicationWindow {
         keys: "Ctrl+Alt+S"
         enabled: root.documents.anyModified
         onTriggered: root.saveAll()
+    }
+    // The file behind the tab: nothing for an untitled one.
+    readonly property bool hasFile: document !== null && document.path.length > 0
+    KeyedAction {
+        id: openWithAction
+        text: qsTr("Open With…")
+        enabled: root.hasFile && !root.document.loading
+        onTriggered: {
+            const doc = root.document;
+            // The other app reads the file: what's typed goes to it first.
+            if (doc.modified) {
+                root.saveThen(doc, () => doc.openWith());
+            } else {
+                doc.openWith();
+            }
+        }
+    }
+    KeyedAction {
+        id: showInFolderAction
+        text: qsTr("Show in Folder")
+        enabled: root.hasFile
+        onTriggered: root.document.showInFolder()
+    }
+    KeyedAction {
+        id: copyLocationAction
+        text: qsTr("Copy Location")
+        enabled: root.hasFile
+        onTriggered: root.document.copyLocation()
+    }
+    KeyedAction {
+        id: propertiesAction
+        text: qsTr("Properties")
+        enabled: root.hasFile
+        onTriggered: root.document.showProperties()
     }
     KeyedAction {
         id: printAction
@@ -1142,6 +1180,9 @@ QQC2.ApplicationWindow {
     property bool appMessageIsSessionProblem: false
     Connections {
         target: App
+        function onNotice(text) {
+            toast.show(text);
+        }
         function onMessage(text) {
             if (App.activeWindow() === root) {
                 root.appMessage = text;
