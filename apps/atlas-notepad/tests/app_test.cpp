@@ -653,7 +653,11 @@ private Q_SLOTS:
     bool haveBus()
     {
         // NP_TEST_NO_BUS: ctest had no dbus-run-session; never use an ambient bus.
-        return !qEnvironmentVariableIsSet("NP_TEST_NO_BUS") && QDBusConnection::sessionBus().isConnected();
+        const bool bus = !qEnvironmentVariableIsSet("NP_TEST_NO_BUS") && QDBusConnection::sessionBus().isConnected();
+        if (bus) {
+            m_app->startDirNotify(); // the app starts it a moment after the first frames
+        }
+        return bus;
     }
 
     void dirNotifyRename()
@@ -715,7 +719,7 @@ private Q_SLOTS:
         m_app->addRecentFile(QStringLiteral("sftp://user:secret@host/dir/kde-recent.txt"));
         const QString local = write(QStringLiteral("kde-local.txt"), "x\n");
         QVERIFY(openFile(newList(), local)); // opening counts too
-        QTest::qWait(200);
+        QTest::qWait(1500); // KDE's file is written a moment after the open
         QString all;
         QDirIterator it(QString::fromUtf8(qgetenv("XDG_DATA_HOME")), QDir::Files, QDirIterator::Subdirectories);
         while (it.hasNext()) {
@@ -747,7 +751,7 @@ private Q_SLOTS:
         KSharedConfig::openConfig()->reparseConfiguration();
 
         m_app->addRecentFile(QStringLiteral("sftp://host/dir/not-remembered.txt"));
-        QTest::qWait(200);
+        QTest::qWait(1500); // KDE's file is written a moment after the open
         QString all;
         QDirIterator it(QString::fromUtf8(qgetenv("XDG_DATA_HOME")), QDir::Files, QDirIterator::Subdirectories);
         while (it.hasNext()) {

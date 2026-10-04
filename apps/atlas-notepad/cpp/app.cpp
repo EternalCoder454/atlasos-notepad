@@ -48,6 +48,8 @@ protected:
 };
 
 constexpr int recentLimit = 10;
+// KDE's recent-documents file is written this long after a file is opened.
+constexpr int kdeRecentDelayMs = 1000;
 // A launch that lives this long after restoring got past it.
 constexpr int restoreSettleMs = 3000;
 constexpr auto menuService = "com.canonical.AppMenu.Registrar";
@@ -101,6 +103,7 @@ struct App::Private {
     QList<std::shared_ptr<Window>> windows; // most recent first
     QTimer saveTimer; // quiet period
     QTimer maxTimer; // longest an unsaved change waits
+    DirNotifyListener *dirNotify = nullptr;
     bool hasMenu = false;
     bool restoring = false; // Session::beginRestore() without endRestore() yet
     QString problem; // sessionProblem
@@ -357,7 +360,7 @@ App::App(QQmlApplicationEngine *engine, QObject *parent)
 {
     s_instance = this;
     d->q = this;
-    new DirNotifyListener(this);
+    QTimer::singleShot(1500, this, &App::startDirNotify); // after the first frames
     d->engine = engine;
     d->settings = new Settings(this);
     d->saveTimer.setSingleShot(true);
@@ -633,6 +636,13 @@ QUrl App::urlFromArgument(const QString &arg, const QString &workingDirectory)
     return QUrl::fromLocalFile(QDir(workingDirectory).absoluteFilePath(arg));
 }
 
+void App::startDirNotify()
+{
+    if (!d->dirNotify) {
+        d->dirNotify = new DirNotifyListener(this);
+    }
+}
+
 void App::addRecentFile(const QString &path)
 {
     if (path.isEmpty()) {
@@ -650,7 +660,11 @@ void App::addRecentFile(const QString &path)
     Q_EMIT recentFilesChanged();
     // KDE's recent documents too (Dolphin, the Kickoff menu): the URL has no
     // password, a local file is a file: URL.
-    KRecentDocument::add(Remote::isStoredUrl(absolute) ? QUrl(absolute) : QUrl::fromLocalFile(absolute), QStringLiteral("net.eterneon.atlas.notepad"));
+    // Writing the file takes ms (and the first time creates it): not before
+    // the text is on screen.
+    QTimer::singleShot(kdeRecentDelayMs, this, [absolute] {
+        KRecentDocument::add(Remote::isStoredUrl(absolute) ? QUrl(absolute) : QUrl::fromLocalFile(absolute), QStringLiteral("net.eterneon.atlas.notepad"));
+    });
 }
 
 void App::renameRecent(const QString &from, const QString &to)

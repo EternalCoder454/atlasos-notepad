@@ -566,6 +566,12 @@ Q_SIGNALS:
     // A short remark for a Toast: a tab renamed or moved elsewhere, a copied location.
     void notice(const QString &text);
 
+public:
+    // Listens for what other programs do to files (KDirNotify). Started a
+    // moment after the app is up, not on the way to the first text; calling
+    // it earlier (tests) is fine, a second call does nothing.
+    void startDirNotify();
+
 private:
     struct Private;
     std::unique_ptr<Private> d;
