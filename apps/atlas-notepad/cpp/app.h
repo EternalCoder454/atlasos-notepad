@@ -123,6 +123,11 @@ class Document : public QObject
     Q_PROPERTY(QString title READ title NOTIFY titleChanged)
     // Local path, empty for an untitled tab.
     Q_PROPERTY(QString path READ path NOTIFY pathChanged)
+    // On a non-local URL (sftp, smb...): read and written through KIO. path
+    // is then the URL without its password; url is the same as a QUrl.
+    Q_PROPERTY(bool isRemote READ isRemote NOTIFY pathChanged)
+    Q_PROPERTY(QUrl url READ url NOTIFY pathChanged)
+    Q_PROPERTY(QString host READ host NOTIFY pathChanged)
     Q_PROPERTY(QUrl folder READ folder NOTIFY pathChanged) // for file dialogs
     Q_PROPERTY(QString toolTip READ toolTip NOTIFY pathChanged)
     Q_PROPERTY(bool modified READ isModified NOTIFY modifiedChanged)
@@ -189,6 +194,9 @@ public:
 
     QString title() const;
     QString path() const;
+    bool isRemote() const;
+    QUrl url() const;
+    QString host() const;
     QUrl folder() const;
     QString toolTip() const;
     bool isModified() const;
@@ -450,6 +458,9 @@ public:
     void activate(const QStringList &arguments, const QString &workingDirectory);
 
     Q_INVOKABLE void newWindow();
+    // What the command line or a second launch names: a path (made absolute
+    // against workingDirectory) or a URL. Invalid when it can't be used.
+    static QUrl urlFromArgument(const QString &arg, const QString &workingDirectory);
     Q_INVOKABLE void addRecentFile(const QString &path);
     Q_INVOKABLE void clearRecentFiles();
     // Prints the document with Qt's print dialog: the Formatted look for

@@ -15,6 +15,7 @@ qt_policy(SET QTP0004 NEW)
 find_package(KF6DBusAddons REQUIRED)
 find_package(KF6WindowSystem REQUIRED)
 find_package(KF6Sonnet REQUIRED)
+find_package(KF6KIO REQUIRED)
 find_package(Corrosion REQUIRED)
 
 set(WORKSPACE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
@@ -42,11 +43,13 @@ endif()
 set(APP_SOURCES
     cpp/app.h cpp/sizelimits.h cpp/notepad_core.h
     cpp/settings.cpp cpp/document.cpp cpp/documentlist.cpp cpp/app.cpp
-    cpp/session.h cpp/document_p.h cpp/session.cpp cpp/linenumbers.cpp)
+    cpp/session.h cpp/document_p.h cpp/session.cpp cpp/linenumbers.cpp
+    cpp/remote.h cpp/remote.cpp)
 set(APP_LIBS
     atlas_notepad
     Qt6::Core Qt6::Concurrent Qt6::DBus Qt6::Gui Qt6::PrintSupport Qt6::Qml Qt6::Quick
-    Qt6::QuickControls2 Qt6::Widgets KF6::DBusAddons KF6::WindowSystem KF6::SonnetCore)
+    Qt6::QuickControls2 Qt6::Widgets KF6::DBusAddons KF6::WindowSystem KF6::SonnetCore
+    KF6::KIOCore KF6::KIOGui)
 
 qt_add_executable(atlas-notepad-app cpp/main.cpp cpp/bench.h cpp/bench.cpp)
 set_target_properties(atlas-notepad-app PROPERTIES OUTPUT_NAME atlas-notepad)
@@ -104,6 +107,8 @@ if(BUILD_TESTING)
         ${APP_SOURCES})
     target_include_directories(app_test PRIVATE cpp)
     target_link_libraries(app_test PRIVATE ${APP_LIBS} Qt6::Test)
+    # Lets the tests send local files through the KIO path (cpp/remote.h).
+    target_compile_definitions(app_test PRIVATE NP_KIO_TEST_HOOK)
     add_test(NAME app_test COMMAND app_test)
     set_tests_properties(app_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

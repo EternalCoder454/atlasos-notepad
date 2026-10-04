@@ -2,6 +2,7 @@
 // watching the file, the banners, find and replace, and the counts. The text
 // lives in the TextEdit's QTextDocument once there is one.
 #include "document_p.h"
+#include "remote.h"
 
 #include <QDir>
 #include <QFile>
@@ -17,6 +18,11 @@
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QtConcurrent>
+
+#include <KIO/Job>
+#include <KIO/StoredTransferJob>
+#include <KProtocolInfo>
+#include <KProtocolManager>
 
 #include <cerrno>
 #include <cstring>
@@ -133,6 +139,8 @@ QString decodeWindows1252(const QByteArray &bytes)
     return out;
 }
 
+LoadResult decodeAs(QByteArray bytes, int encoding, LoadResult r);
+
 // Reading as an encoding the user chose (np_file_read detects its own).
 LoadResult readAs(const QByteArray &path, int encoding, LoadResult r)
 {
@@ -164,6 +172,12 @@ LoadResult readAs(const QByteArray &path, int encoding, LoadResult r)
         r.tooLarge = true;
         return r;
     }
+    return decodeAs(std::move(bytes), encoding, r);
+}
+
+// bytes (already read, at most Limits::fileBytes) as the encoding given.
+LoadResult decodeAs(QByteArray bytes, int encoding, LoadResult r)
+{
     r.encoding = encoding;
     switch (encoding) {
     case NP_UTF8_BOM:
@@ -219,6 +233,33 @@ LoadResult readAs(const QByteArray &path, int encoding, LoadResult r)
     return r;
 }
 
+// Takes the result of np_file_read or np_file_decode (and frees it).
+LoadResult fromNpFile(NpFile *file, LoadResult r)
+{
+    if (file->error == EFBIG) {
+        r.tooLarge = true;
+        np_file_free(file);
+        return r;
+    }
+    if (file->error || !file->text) {
+        r.error = file->error ? file->error : EIO;
+        np_file_free(file);
+        return r;
+    }
+    r.text = QString::fromUtf16(reinterpret_cast<const char16_t *>(file->text), qsizetype(file->len));
+    r.encoding = file->encoding;
+    r.lineEnding = file->lineEnding;
+    r.mixed = file->mixed || r.text.contains(QChar::ParagraphSeparator);
+    r.binary = file->binary;
+    r.lossy = file->lossy;
+    if (file->stamp.mtimeNs || file->stamp.size || file->stamp.ino) {
+        r.stamp = file->stamp; // a remote read keeps the stat's
+    }
+    np_file_free(file);
+    r.longLines = hasLongLine(r.text);
+    return r;
+}
+
 // Runs on a worker.
 LoadResult readFile(const QByteArray &path, int forcedEncoding)
 {
@@ -242,27 +283,16 @@ LoadResult readFile(const QByteArray &path, int forcedEncoding)
         return readAs(path, forcedEncoding, r);
     }
     // np_file_read checks both again on the open file.
-    NpFile *file = np_file_read(path.constData(), quint64(Limits::fileBytes));
-    if (file->error == EFBIG) {
-        r.tooLarge = true;
-        np_file_free(file);
-        return r;
+    return fromNpFile(np_file_read(path.constData(), quint64(Limits::fileBytes)), r);
+}
+
+// Runs on a worker. Bytes that came through KIO, decoded as a local file's are.
+LoadResult decodeRemote(const QByteArray &bytes, int forcedEncoding, LoadResult r)
+{
+    if (forcedEncoding >= 0) {
+        return decodeAs(bytes, forcedEncoding, r);
     }
-    if (file->error || !file->text) {
-        r.error = file->error ? file->error : EIO;
-        np_file_free(file);
-        return r;
-    }
-    r.text = QString::fromUtf16(reinterpret_cast<const char16_t *>(file->text), qsizetype(file->len));
-    r.encoding = file->encoding;
-    r.lineEnding = file->lineEnding;
-    r.mixed = file->mixed || r.text.contains(QChar::ParagraphSeparator);
-    r.binary = file->binary;
-    r.lossy = file->lossy;
-    r.stamp = file->stamp;
-    np_file_free(file);
-    r.longLines = hasLongLine(r.text);
-    return r;
+    return fromNpFile(np_file_decode(reinterpret_cast<const uint8_t *>(bytes.constData()), size_t(bytes.size())), r);
 }
 
 QString errnoText(int error)
@@ -517,6 +547,14 @@ void Document::Private::applyMarkdown(qint64 bytes)
 
 void Document::Private::checkWritable()
 {
+    if (isRemote()) {
+        if (!remoteWritable || !KProtocolManager::supportsWriting(url)) {
+            setBanner(ReadOnlyFile);
+        } else {
+            clearBanner(ReadOnlyFile);
+        }
+        return;
+    }
     if (!path.isEmpty() && QFileInfo::exists(path) && ::access(path.toUtf8().constData(), W_OK) != 0) {
         setBanner(ReadOnlyFile);
     } else {
@@ -900,6 +938,12 @@ QMultiHash<QString, Document *> &waitingDocuments()
     return docs;
 }
 
+QList<Document *> &remoteDocuments()
+{
+    static QList<Document *> docs;
+    return docs;
+}
+
 // One watcher for all tabs (each QFileSystemWatcher holds an inotify instance).
 QPointer<QFileSystemWatcher> &sharedWatcher()
 {
@@ -925,7 +969,7 @@ void stopWaiting(Document *doc)
 
 void Document::Private::watch()
 {
-    if (path.isEmpty()) {
+    if (path.isEmpty() || isRemote()) { // a remote file is looked at again, not watched
         return;
     }
     if (!sharedWatcher()) {
@@ -1003,9 +1047,19 @@ void Document::Private::checkOnDisk()
         }
         return;
     }
+    if (isRemote()) {
+        checkRemote(true);
+        return;
+    }
     watch(); // re-add after an atomic rename
     NpStamp now = {};
     const int err = np_file_stamp(path.toUtf8().constData(), &now);
+    applyDiskStat(err, now);
+}
+
+// What the stat of the file (local or remote) says about the tab's text.
+void Document::Private::applyDiskStat(int err, const NpStamp &now)
+{
     if (err == ENOENT || err == ENOTDIR) {
         banners.erase(ReadFailed); // gone now, which Deleted says
         if (!banners.count(Deleted)) {
@@ -1018,6 +1072,9 @@ void Document::Private::checkOnDisk()
     }
     if (err) {
         return;
+    }
+    if (isRemote() && banners.count(ReadFailed) && !isLoading()) {
+        clearBanner(ReadFailed); // reachable again
     }
     if (banners.count(Deleted)) {
         clearBanner(Deleted);
@@ -1054,6 +1111,10 @@ void Document::Private::startLoad(LoadMode mode, int forcedEncoding)
     }
     if (mode != SilentReload && !loading) {
         setLoading(true);
+    }
+    if (isRemote()) {
+        startRemoteLoad(mode, forcedEncoding, gen);
+        return;
     }
     auto *watcher = new QFutureWatcher<LoadResult>(q);
     QObject::connect(watcher, &QFutureWatcherBase::finished, q, [this, watcher, gen, mode] {
@@ -1094,7 +1155,7 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
             setBanner(Deleted);
             setModified(true);
         } else {
-            setBanner(ReadFailed, readErrorText(r.error));
+            setBanner(ReadFailed, r.errorText.isEmpty() ? readErrorText(r.error) : r.errorText);
         }
         return;
     }
@@ -1160,7 +1221,11 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
 void Document::Private::startSave()
 {
     saving = true;
-    SaveSnapshot snapshot{q->text(), revision(), editGeneration, path};
+    SaveSnapshot snapshot{q->text(), revision(), editGeneration, path, url};
+    if (isRemote()) {
+        startSaveRemote(snapshot);
+        return;
+    }
     const Encoding enc = encoding;
     const LineEnding le = lineEnding;
     auto *watcher = new QFutureWatcher<SaveResult>(q);
@@ -1183,7 +1248,7 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
     saving = false;
     if (r.rc == 0) {
         stamp = r.stamp;
-        hasStamp = true;
+        hasStamp = !r.noStamp;
         keepMine = false;
         loaded = true;
         for (const Banner b : {ChangedOnDisk, SaveFailed, ReadFailed, Unrecovered, Unencodable, Deleted, Lossy, MixedLineEndings}) {
@@ -1204,7 +1269,7 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
         setBanner(Unencodable, message);
         Q_EMIT q->saveFailed(message);
     } else {
-        const QString message = errnoText(r.rc);
+        const QString message = r.errorText.isEmpty() ? errnoText(r.rc) : r.errorText;
         setBanner(SaveFailed, message);
         Q_EMIT q->saveFailed(message);
     }
@@ -1223,6 +1288,11 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
 void Document::Private::restore(const TabState &t, const std::optional<QString> &text)
 {
     path = t.path;
+    if (Remote::isStoredUrl(path)) {
+        const QUrl remote = Remote::fromStored(path);
+        setRemote(remote);
+        path = Remote::display(remote);
+    }
     untitledNumber = path.isEmpty() ? untitledNumber : 0;
     encoding = Encoding(t.encoding);
     lineEnding = LineEnding(t.lineEnding);
@@ -1242,13 +1312,19 @@ void Document::Private::restore(const TabState &t, const std::optional<QString> 
             applyMarkdown(t.hasStamp ? qint64(t.stamp.size) : qint64(pending.size()));
             checkWritable();
             watch();
-            NpStamp now = {};
-            const int err = np_file_stamp(path.toUtf8().constData(), &now);
-            if (err == ENOENT || err == ENOTDIR) {
-                setBanner(Deleted);
-                modified = true;
-            } else if (err == 0 && t.hasStamp && !sameStamp(now, t.stamp)) {
-                setBanner(ChangedOnDisk);
+            if (isRemote()) {
+                // Looked at in the background, so an unreachable host can't
+                // hold up the start: its banner comes when the stat fails.
+                QTimer::singleShot(0, q, [this] { checkRemote(true); });
+            } else {
+                NpStamp now = {};
+                const int err = np_file_stamp(path.toUtf8().constData(), &now);
+                if (err == ENOENT || err == ENOTDIR) {
+                    setBanner(Deleted);
+                    modified = true;
+                } else if (err == 0 && t.hasStamp && !sameStamp(now, t.stamp)) {
+                    setBanner(ChangedOnDisk);
+                }
             }
         } else {
             applyMarkdown(0);
@@ -1267,6 +1343,267 @@ void Document::Private::restore(const TabState &t, const std::optional<QString> 
 
 // --------------------------------------------------------------- Document
 
+// ----------------------------------------------------------------- Remote
+
+void Document::Private::setRemote(const QUrl &remote)
+{
+    url = remote;
+    // Everyone's focus check: when the window becomes active again, each
+    // remote tab looks at its file once (throttled).
+    static bool connected = false;
+    if (!connected) {
+        connected = true;
+        QObject::connect(qGuiApp, &QGuiApplication::applicationStateChanged, qGuiApp, [](Qt::ApplicationState state) {
+            if (state != Qt::ApplicationActive) {
+                return;
+            }
+            const auto docs = remoteDocuments();
+            for (Document *doc : docs) {
+                doc->d->checkRemote(false);
+            }
+        });
+    }
+    if (!remoteDocuments().contains(q)) {
+        remoteDocuments().append(q);
+    }
+}
+
+void Document::Private::cancelRemote()
+{
+    if (remoteJob) {
+        remoteJob->kill(KJob::Quietly);
+    }
+    if (checkJob) {
+        checkJob->kill(KJob::Quietly);
+    }
+}
+
+namespace
+{
+QString remoteOpenFailure(const QString &name, const LoadResult &r)
+{
+    if (r.isDir) {
+        return QObject::tr("“%1” is a folder.").arg(name);
+    }
+    if (r.tooLarge) {
+        return QObject::tr("“%1” is too large to open (over %2 MB).").arg(name).arg(Limits::fileBytes >> 20);
+    }
+    if (r.error == ENOENT) {
+        return QObject::tr("“%1” doesn't exist.").arg(name);
+    }
+    return QObject::tr("Couldn't open “%1”: %2").arg(name, r.errorText);
+}
+}
+
+// Stat, then a stored get; the bytes are decoded on a worker with the Rust
+// code a local file's are. The size limit is checked on the stat and again
+// on what arrives, since a server can lie about the size.
+void Document::Private::startRemoteLoad(LoadMode mode, int forcedEncoding, int gen)
+{
+    cancelRemote();
+    const QString unsupportedReason = Remote::unsupported(url, false);
+    auto done = [this, mode, gen](const LoadResult &r) {
+        if (gen != loadGeneration) {
+            return;
+        }
+        if (mode == Initial && announceOpen && (r.error || r.tooLarge || r.isDir)) {
+            DocumentList *owner = list;
+            Q_EMIT owner->openFailed(remoteOpenFailure(QFileInfo(path).fileName(), r));
+            owner->closeDocument(q); // deletes this later: nothing runs after it
+            return;
+        }
+        announceOpen = false;
+        finishLoad(r, mode);
+        if (recheck && !saving && !isLoading()) {
+            recheck = false;
+            checkOnDisk();
+        }
+    };
+    if (!unsupportedReason.isEmpty()) {
+        LoadResult r;
+        r.error = EINVAL;
+        r.errorText = unsupportedReason;
+        QTimer::singleShot(0, q, [done, r] { done(r); });
+        return;
+    }
+    remoteJob = Remote::stat(url, q, [this, gen, forcedEncoding, done](const Remote::StatInfo &st) {
+        if (gen != loadGeneration) {
+            return;
+        }
+        LoadResult r;
+        r.stamp = st.stamp;
+        r.errorText = st.errorText;
+        remoteWritable = st.writable;
+        if (st.error) {
+            r.error = st.error;
+            done(r);
+            return;
+        }
+        if (st.isDir) {
+            r.isDir = true;
+            r.error = EISDIR;
+            done(r);
+            return;
+        }
+        if (qint64(st.stamp.size) > Limits::fileBytes) {
+            r.tooLarge = true;
+            done(r);
+            return;
+        }
+        KIO::StoredTransferJob *job = KIO::storedGet(url, KIO::NoReload, KIO::HideProgressInfo);
+        Remote::setup(job);
+        remoteJob = job;
+        auto received = std::make_shared<qint64>(0);
+        QObject::connect(job, &KIO::TransferJob::data, q, [job, received, done, r](KIO::Job *, const QByteArray &chunk) mutable {
+            const bool already = *received > Limits::fileBytes;
+            *received += chunk.size();
+            if (*received > Limits::fileBytes && !already) {
+                // The stat said less than this: stop the transfer.
+                job->kill(KJob::Quietly);
+                r.tooLarge = true;
+                done(r);
+            }
+        });
+        QObject::connect(job, &KJob::result, q, [this, job, r, gen, forcedEncoding, done] {
+            if (job->error()) {
+                LoadResult failed = r;
+                failed.error = job->error() == KIO::ERR_DOES_NOT_EXIST ? ENOENT : job->error() == KIO::ERR_USER_CANCELED ? ECANCELED : EIO;
+                failed.errorText = job->errorString();
+                done(failed);
+                return;
+            }
+            auto *watcher = new QFutureWatcher<LoadResult>(q);
+            QObject::connect(watcher, &QFutureWatcherBase::finished, q, [watcher, done] {
+                const LoadResult decoded = watcher->result();
+                watcher->deleteLater();
+                done(decoded);
+            });
+            watcher->setFuture(QtConcurrent::run([bytes = job->data(), forcedEncoding, r] { return decodeRemote(bytes, forcedEncoding, r); }));
+        });
+    });
+}
+
+// Looks at the remote file again: when the window comes back (throttled),
+// after a conflict, and before a save. One stat at a time.
+void Document::Private::checkRemote(bool force)
+{
+    constexpr qint64 throttleMs = 4000;
+    if (!isRemote() || checkJob || !Remote::unsupported(url, false).isEmpty()) {
+        return;
+    }
+    if (saving || isLoading()) {
+        recheck = true;
+        return;
+    }
+    if (!force && lastRemoteCheck.isValid() && lastRemoteCheck.elapsed() < throttleMs) {
+        return;
+    }
+    lastRemoteCheck.start();
+    checkJob = Remote::stat(url, q, [this](const Remote::StatInfo &st) {
+        checkJob = nullptr;
+        if (saving || isLoading()) {
+            recheck = true;
+            return;
+        }
+        if (st.error && st.error != ENOENT) {
+            // Unreachable or refused. The text on screen stays; a tab that
+            // never read the file says why it's empty.
+            if (!banners.count(ReadFailed) && !banners.count(Deleted) && st.error != ECANCELED) {
+                setBanner(ReadFailed, st.errorText);
+            }
+            return;
+        }
+        remoteWritable = st.writable;
+        checkWritable();
+        if (!loaded) {
+            if (!st.error && !isModified()) {
+                startLoad(Initial);
+            }
+            return;
+        }
+        applyDiskStat(st.error, st.stamp);
+    });
+}
+
+void Document::Private::saveRemote()
+{
+    const QString why = Remote::unsupported(url, true);
+    if (!why.isEmpty() || !KProtocolManager::supportsWriting(url)) {
+        setBanner(ReadOnlyFile);
+        Q_EMIT q->saveFailed(why.isEmpty() ? QObject::tr("This location can't be written to. Use Save As.") : why);
+        return;
+    }
+    if (!hasStamp || keepMine) {
+        startSave();
+        return;
+    }
+    // The file as it is now against the one this text came from.
+    saving = true;
+    checkJob = Remote::stat(url, q, [this](const Remote::StatInfo &st) {
+        checkJob = nullptr;
+        saving = false;
+        resave = false;
+        if (!st.error && !sameStamp(st.stamp, stamp)) {
+            setBanner(ChangedOnDisk);
+            Q_EMIT q->saveFailed(QObject::tr("The file changed on disk."));
+            return;
+        }
+        startSave();
+    });
+}
+
+void Document::Private::startSaveRemote(const SaveSnapshot &snapshot)
+{
+    struct Encoded {
+        int rc = 0;
+        QByteArray bytes;
+    };
+    const Encoding enc = encoding;
+    const LineEnding le = lineEnding;
+    auto *watcher = new QFutureWatcher<Encoded>(q);
+    QObject::connect(watcher, &QFutureWatcherBase::finished, q, [this, watcher, snapshot] {
+        const Encoded encoded = watcher->result();
+        watcher->deleteLater();
+        if (encoded.rc != 0) {
+            SaveResult r;
+            r.rc = encoded.rc;
+            finishSave(r, snapshot);
+            return;
+        }
+        KIO::StoredTransferJob *job = KIO::storedPut(encoded.bytes, snapshot.url, -1, KIO::Overwrite | KIO::HideProgressInfo);
+        Remote::setup(job);
+        remoteJob = job;
+        QObject::connect(job, &KJob::result, q, [this, job, snapshot] {
+            if (job->error()) {
+                SaveResult r;
+                r.rc = job->error() == KIO::ERR_USER_CANCELED ? ECANCELED : EIO;
+                r.errorText = job->errorString();
+                finishSave(r, snapshot);
+                return;
+            }
+            // The new mtime, so the next save and check know it as ours.
+            checkJob = Remote::stat(snapshot.url, q, [this, snapshot](const Remote::StatInfo &st) {
+                checkJob = nullptr;
+                SaveResult r;
+                r.stamp = st.stamp;
+                r.noStamp = st.error != 0;
+                remoteWritable = st.error ? remoteWritable : st.writable;
+                finishSave(r, snapshot);
+            });
+        });
+    });
+    watcher->setFuture(QtConcurrent::run([text = snapshot.text, enc, le] {
+        Encoded out;
+        NpBytes *bytes = np_file_encode(reinterpret_cast<const uint16_t *>(text.utf16()), size_t(text.size()), uint8_t(enc), uint8_t(le));
+        out.rc = bytes->error;
+        if (bytes->data) {
+            out.bytes = QByteArray(reinterpret_cast<const char *>(bytes->data), qsizetype(bytes->len));
+        }
+        np_bytes_free(bytes);
+        return out;
+    }));
+}
+
 Document::Document(DocumentList *list)
     : QObject(list)
     , d(std::make_unique<Private>(this, list))
@@ -1276,6 +1613,8 @@ Document::Document(DocumentList *list)
 Document::~Document()
 {
     d->unwatch();
+    d->cancelRemote();
+    remoteDocuments().removeAll(this);
 }
 
 namespace
@@ -1315,8 +1654,29 @@ QString Document::path() const
     return d->path;
 }
 
+bool Document::isRemote() const
+{
+    return d->isRemote();
+}
+
+QUrl Document::url() const
+{
+    if (d->isRemote()) {
+        return d->url.adjusted(QUrl::RemovePassword);
+    }
+    return d->path.isEmpty() ? QUrl() : QUrl::fromLocalFile(d->path);
+}
+
+QString Document::host() const
+{
+    return d->isRemote() ? d->url.host() : QString();
+}
+
 QUrl Document::folder() const
 {
+    if (d->isRemote()) {
+        return d->url.adjusted(QUrl::RemovePassword | QUrl::RemoveFilename);
+    }
     if (d->path.isEmpty()) {
         return QUrl::fromLocalFile(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
     }
@@ -1328,6 +1688,7 @@ QString Document::toolTip() const
     // The desktop style's ToolTip takes text with a tag in it as rich text
     // (a folder named <img src=...> would load an image): a word joiner
     // after each '<' keeps it plain and looks the same.
+    // A remote tab: the whole URL (no password), the host in it.
     return d->path.isEmpty() ? title() : shown(d->path).replace(u'<', QStringLiteral("<\u2060"));
 }
 
@@ -1599,6 +1960,10 @@ void Document::save()
         d->resave = true;
         return;
     }
+    if (d->isRemote()) {
+        d->saveRemote();
+        return;
+    }
     NpStamp now = {};
     const int err = np_file_stamp(d->path.toUtf8().constData(), &now);
     if (err == 0 && d->hasStamp && !sameStamp(now, d->stamp) && !d->keepMine) {
@@ -1611,8 +1976,16 @@ void Document::save()
 
 void Document::saveAs(const QUrl &url)
 {
-    // A remote URL's path (sftp://host/etc/x) isn't the local /etc/x.
-    const QString newPath = url.isLocalFile() ? url.toLocalFile() : QString();
+    // A remote URL's path (sftp://host/etc/x) isn't the local /etc/x: KIO's.
+    const bool remote = Remote::useKio(url);
+    if (remote) {
+        const QString why = Remote::unsupported(url, true);
+        if (!why.isEmpty() || url.fileName().isEmpty()) {
+            Q_EMIT saveFailed(why.isEmpty() ? tr("That isn't a file name.") : why);
+            return;
+        }
+    }
+    const QString newPath = remote ? Remote::display(url) : url.isLocalFile() ? url.toLocalFile() : QString();
     if (newPath.isEmpty() || d->saving) {
         Q_EMIT saveFailed(newPath.isEmpty() ? tr("That isn't a file on this computer.") : tr("A save is already running."));
         return;
@@ -1627,13 +2000,13 @@ void Document::saveAs(const QUrl &url)
     }
     {
         // Two tabs (in any window) on one file would overwrite each other's saves.
-        const QString canonical = QFileInfo(newPath).canonicalFilePath();
-        const QString absolute = QFileInfo(newPath).absoluteFilePath();
+        const QString canonical = remote ? QString() : QFileInfo(newPath).canonicalFilePath();
+        const QString absolute = remote ? newPath : QFileInfo(newPath).absoluteFilePath();
         for (Document *other : std::as_const(others)) {
             if (other == this || other->d->path.isEmpty()) {
                 continue;
             }
-            if (other->d->path == absolute || (!canonical.isEmpty() && QFileInfo(other->d->path).canonicalFilePath() == canonical)) {
+            if (other->d->path == absolute || (!canonical.isEmpty() && !other->d->isRemote() && QFileInfo(other->d->path).canonicalFilePath() == canonical)) {
                 Q_EMIT saveFailed(tr("%1 is open in another tab. Close it first, or save there.").arg(other->title()));
                 return;
             }
@@ -1645,8 +2018,16 @@ void Document::saveAs(const QUrl &url)
         return;
     }
     d->unwatch();
+    d->cancelRemote();
     ++d->loadGeneration; // a silent reload of the old file must not land here
-    d->path = QFileInfo(newPath).absoluteFilePath();
+    if (remote) {
+        d->setRemote(url);
+        d->path = newPath;
+    } else {
+        d->url = QUrl();
+        d->path = QFileInfo(newPath).absoluteFilePath();
+    }
+    d->remoteWritable = true;
     d->untitledNumber = 0;
     d->hasStamp = false;
     d->keepMine = false;
@@ -1685,10 +2066,24 @@ void Document::keepMine()
 {
     // The disk version seen now is the one overruled: a later change shows
     // the banner again, and Save checks against this one.
-    NpStamp now = {};
-    if (np_file_stamp(d->path.toUtf8().constData(), &now) == 0) {
-        d->stamp = now;
-        d->hasStamp = true;
+    if (d->isRemote()) {
+        // No stamp: the next save doesn't check. The stat below fills it in
+        // unless a save got there first.
+        d->hasStamp = false;
+        d->cancelRemote();
+        d->checkJob = Remote::stat(d->url, this, [this](const Remote::StatInfo &st) {
+            d->checkJob = nullptr;
+            if (!st.error && !d->hasStamp && !d->saving) {
+                d->stamp = st.stamp;
+                d->hasStamp = true;
+            }
+        });
+    } else {
+        NpStamp now = {};
+        if (np_file_stamp(d->path.toUtf8().constData(), &now) == 0) {
+            d->stamp = now;
+            d->hasStamp = true;
+        }
     }
     d->keepMine = false;
     d->clearBanner(ChangedOnDisk);

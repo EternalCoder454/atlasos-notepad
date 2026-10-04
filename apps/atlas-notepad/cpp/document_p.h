@@ -6,16 +6,21 @@
 #include "session.h"
 
 #include <QFutureWatcher>
+#include <QElapsedTimer>
 #include <QPointer>
+#include <QUrl>
 #include <QTimer>
 
 #include <map>
 #include <optional>
 
 class QQuickTextDocument;
+class KJob;
 
 struct LoadResult {
     int error = 0; // errno
+    QString errorText; // KIO's words, when it has some
+    bool isDir = false; // a remote folder
     bool tooLarge = false;
     QString text;
     int encoding = 0;
@@ -29,6 +34,8 @@ struct LoadResult {
 
 struct SaveResult {
     int rc = 0; // 0, an errno, or -1 (unencodable)
+    QString errorText; // KIO's words
+    bool noStamp = false; // a remote save whose new mtime couldn't be read
     NpStamp stamp = {};
 };
 
@@ -49,7 +56,14 @@ struct Document::Private {
     Document *q = nullptr;
     DocumentList *list = nullptr;
     quint64 id = 0;
+    // Local: the absolute path. Remote (url set): url without its password.
     QString path;
+    QUrl url; // empty for a local file or an untitled tab; else KIO handles it
+    bool remoteWritable = true; // what the last stat said (the scheme may still refuse)
+    bool announceOpen = false; // a failed first read closes the tab and tells openFailed
+    QPointer<KJob> remoteJob; // the load or save in flight
+    QPointer<KJob> checkJob; // the stat of the change check
+    QElapsedTimer lastRemoteCheck;
     int untitledNumber = 0;
     NpStamp stamp = {};
     bool hasStamp = false;
@@ -119,6 +133,14 @@ struct Document::Private {
     // setting and the size in bytes.
     void applyMarkdown(qint64 bytes);
     void checkWritable();
+    bool isRemote() const { return !url.isEmpty(); }
+    // Makes this a remote document (registers it for the focus check).
+    void setRemote(const QUrl &remote);
+    void startRemoteLoad(LoadMode mode, int forcedEncoding, int generation);
+    void saveRemote();
+    void checkRemote(bool force);
+    void applyDiskStat(int err, const NpStamp &now);
+    void cancelRemote();
     qint64 currentBytes() const;
 
     void startLoad(LoadMode mode, int forcedEncoding = -1);
@@ -143,8 +165,10 @@ struct Document::Private {
         quint64 revision;
         quint64 editGeneration;
         QString path;
+        QUrl url;
     };
     void startSave();
+    void startSaveRemote(const SaveSnapshot &snapshot);
     void finishSave(const SaveResult &result, const SaveSnapshot &snapshot);
 
     void watch();

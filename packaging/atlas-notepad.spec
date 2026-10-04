@@ -39,6 +39,7 @@ BuildRequires:  qt6-qtbase-private-devel
 BuildRequires:  cmake(KF6DBusAddons)
 BuildRequires:  cmake(KF6WindowSystem)
 BuildRequires:  cmake(KF6Sonnet)
+BuildRequires:  cmake(KF6KIO)
 # the spell check tests
 BuildRequires:  hunspell-en-US
 # QML modules qmlcachegen resolves at build time (not linked). atlas-ui comes
@@ -48,6 +49,7 @@ BuildRequires:  kf6-kirigami-devel
 BuildRequires:  atlas-ui >= 1.2.0
 
 Requires:       kf6-kirigami
+Recommends:     kio-extras
 # Atlas.Ui (its 1.2.0 has the editor components)
 Requires:       atlas-ui >= 1.2.0
 Requires:       kf6-qqc2-desktop-style

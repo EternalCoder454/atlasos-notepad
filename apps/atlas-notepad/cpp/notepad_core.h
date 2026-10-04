@@ -49,6 +49,21 @@ typedef struct NpFile {
 NpFile *np_file_read(const char *path, uint64_t maxBytes);
 void np_file_free(NpFile *file);
 
+// The same decoding for bytes that came another way (KIO); stamp is zero.
+NpFile *np_file_decode(const uint8_t *bytes, size_t len);
+
+// What np_file_save would write, without writing. error: 0, an errno, or -1
+// (the text can't be written in that encoding; badOffset as in np_file_save).
+typedef struct NpBytes {
+    uint8_t *data; // len bytes; null on error
+    size_t len;
+    int32_t error;
+    size_t badOffset;
+} NpBytes;
+NpBytes *np_file_encode(const uint16_t *text, size_t len, uint8_t encoding,
+                        uint8_t lineEnding);
+void np_bytes_free(NpBytes *bytes);
+
 // 0 on success and *stamp is set; > 0 is an errno; -1 means the text can't be
 // written in that encoding (*badOffset is the first such UTF-16 offset).
 int32_t np_file_save(const char *path, const uint16_t *text, size_t len,

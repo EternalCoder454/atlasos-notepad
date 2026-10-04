@@ -3,6 +3,7 @@
 // real ones made from QML, as in editor_test.
 #include "app.h"
 #include "document_p.h"
+#include "remote.h"
 #include "session.h"
 
 #include <QApplication>
@@ -173,6 +174,7 @@ private Q_SLOTS:
         m_edits.clear();
         QDir(stateDir()).removeRecursively();
         QFile::remove(Settings::filePath());
+        Remote::setForceKio(false);
     }
 
     void roundTrip_data()
@@ -399,6 +401,148 @@ private Q_SLOTS:
         QVERIFY(doc->isModified());
     }
 
+    // ---- KIO. The test build sends local files through the KIO path, so the
+    // real file worker stands in for sftp: no network.
+    Document *openKio(DocumentList *list, const QString &path)
+    {
+        Remote::setForceKio(true);
+        list->open({QUrl::fromLocalFile(path)});
+        Document *doc = list->current();
+        if (!doc || !doc->isRemote()) {
+            return nullptr;
+        }
+        return QTest::qWaitFor([&] { return !doc->isLoading(); }, 20000) ? doc : nullptr;
+    }
+
+    void kioRoundTrip()
+    {
+        const QString text = QStringLiteral("h\u00e9llo\r\nworld\r\n");
+        const QString path = write(QStringLiteral("k.txt"), utf16(text, false));
+        Document *doc = openKio(newList(), path);
+        QVERIFY(doc);
+        QCOMPARE(doc->text(), QStringLiteral("h\u00e9llo\nworld\n"));
+        QCOMPARE(int(doc->encoding()), int(NP_UTF16_LE));
+        QCOMPARE(int(doc->lineEnding()), int(NP_CRLF));
+        QCOMPARE(doc->title(), QStringLiteral("k.txt"));
+        attach(doc);
+        insert(doc, 0, QStringLiteral("X"));
+        QVERIFY(doc->isModified());
+        QVERIFY(saveAndWait(doc));
+        QVERIFY(!doc->isModified());
+        QCOMPARE(read(path), utf16(QStringLiteral("Xh\u00e9llo\r\nworld\r\n"), false));
+        // Saved again with no change, then reopened: the same bytes.
+        QTRY_VERIFY(doc->d->hasStamp);
+        const QByteArray before = read(path);
+        newList()->closeDocument(doc);
+        Document *again = openKio(newList(), path);
+        QVERIFY(again);
+        QCOMPARE(again->text(), QStringLiteral("Xh\u00e9llo\nworld\n"));
+        attach(again);
+        insert(again, 0, QStringLiteral("a"));
+        insert(again, 0, QString());
+        QVERIFY(saveAndWait(again));
+        QCOMPARE(read(path), utf16(QStringLiteral("aXh\u00e9llo\r\nworld\r\n"), false));
+        QVERIFY(before != read(path));
+    }
+
+    void kioRefusals()
+    {
+        Remote::setForceKio(true);
+        DocumentList *list = newList();
+        QSignalSpy failed(list, &DocumentList::openFailed);
+        const int tabs = list->rowCount();
+        QFile big(write(QStringLiteral("big.txt"), QByteArray()));
+        QVERIFY(big.open(QIODevice::WriteOnly));
+        QVERIFY(big.resize(Limits::fileBytes + 1));
+        big.close();
+        list->open({QUrl::fromLocalFile(big.fileName())});
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 20000);
+        QVERIFY(failed.last().at(0).toString().contains(QStringLiteral("too large")));
+        QVERIFY(QDir().mkpath(m_dir + QStringLiteral("/folder")));
+        list->open({QUrl::fromLocalFile(m_dir + QStringLiteral("/folder"))});
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 2, 20000);
+        QVERIFY(failed.last().at(0).toString().contains(QStringLiteral("is a folder")));
+        list->open({QUrl::fromLocalFile(m_dir + QStringLiteral("/missing.txt"))});
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 3, 20000);
+        QVERIFY(failed.last().at(0).toString().contains(QStringLiteral("doesn't exist")));
+        list->open({QUrl(QStringLiteral("nosuchscheme://host/x.txt"))});
+        QCOMPARE(failed.size(), 4);
+        QTRY_COMPARE(list->rowCount(), tabs); // refused tabs are gone again
+    }
+
+    void kioConflictAndFailure()
+    {
+        const QString path = write(QStringLiteral("c.txt"), "one\n");
+        Document *doc = openKio(newList(), path);
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("mine "));
+        // Someone else writes it meanwhile (a later mtime).
+        QFile other(path);
+        QVERIFY(other.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        other.write("theirs\n");
+        QVERIFY(other.setFileTime(QDateTime::currentDateTimeUtc().addSecs(60), QFileDevice::FileModificationTime));
+        other.close();
+        QSignalSpy failed(doc, &Document::saveFailed);
+        doc->save();
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 20000);
+        QCOMPARE(doc->banner(), Document::ChangedOnDisk);
+        QCOMPARE(read(path), QByteArray("theirs\n"));
+        QVERIFY(doc->isModified());
+        doc->keepMine();
+        QVERIFY(saveAndWait(doc));
+        QCOMPARE(read(path), QByteArray("mine one\n"));
+
+        // A failed write keeps the text and the modified state.
+        insert(doc, 0, QStringLiteral("more "));
+        QSignalSpy failed2(doc, &Document::saveFailed);
+        doc->saveAs(QUrl::fromLocalFile(m_dir + QStringLiteral("/nope/x.txt")));
+        QTRY_COMPARE_WITH_TIMEOUT(failed2.size(), 1, 20000);
+        QCOMPARE(doc->banner(), Document::SaveFailed);
+        QVERIFY(doc->isModified());
+        QCOMPARE(doc->text(), QStringLiteral("more mine one\n"));
+    }
+
+    void kioSessionStripsPassword()
+    {
+        const QString path = markdownSession();
+        QFile f(sessionDir() + QStringLiteral("/session.json"));
+        QVERIFY(f.open(QIODevice::ReadWrite));
+        QByteArray json = f.readAll();
+        const QByteArray old = QJsonDocument(QJsonArray{path}).toJson(QJsonDocument::Compact).mid(1);
+        const QByteArray quoted = old.left(old.size() - 1);
+        QVERIFY(json.contains(quoted));
+        json.replace(quoted, "\"sftp://user:secret@127.0.0.1:1/notes.md\"");
+        f.resize(0);
+        f.write(json);
+        f.close();
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        QVERIFY(doc);
+        QVERIFY(doc->isRemote()); // the tab is there at once, loading in the background
+        QCOMPARE(doc->path(), QStringLiteral("sftp://user@127.0.0.1:1/notes.md"));
+        QVERIFY(!doc->toolTip().contains(QStringLiteral("secret")));
+        QCOMPARE(doc->host(), QStringLiteral("127.0.0.1"));
+        QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::ReadFailed, 30000); // nothing listens there
+        m_app->saveSession();
+        const QByteArray saved = read(sessionDir() + QStringLiteral("/session.json"));
+        QVERIFY(!saved.contains("secret"));
+        QVERIFY(saved.contains("sftp://user@127.0.0.1:1/notes.md"));
+        m_app->addRecentFile(QStringLiteral("sftp://user:secret@host/a.txt"));
+        QCOMPARE(m_app->recentFiles().value(0), QStringLiteral("sftp://user@host/a.txt"));
+    }
+
+    void argumentUrls()
+    {
+        QCOMPARE(App::urlFromArgument(QStringLiteral("a.txt"), QStringLiteral("/w")), QUrl::fromLocalFile(QStringLiteral("/w/a.txt")));
+        QCOMPARE(App::urlFromArgument(QStringLiteral("/x/a.txt"), QString()), QUrl::fromLocalFile(QStringLiteral("/x/a.txt")));
+        QVERIFY(!App::urlFromArgument(QStringLiteral("a.txt"), QString()).isValid());
+        QCOMPARE(App::urlFromArgument(QStringLiteral("sftp://h/a.txt"), QString()), QUrl(QStringLiteral("sftp://h/a.txt")));
+        QCOMPARE(App::urlFromArgument(QStringLiteral("file:///x/a%20b.txt"), QString()), QUrl::fromLocalFile(QStringLiteral("/x/a b.txt")));
+        QCOMPARE(App::urlFromArgument(QStringLiteral("smb://h/s/a.txt"), QStringLiteral("/w")), QUrl(QStringLiteral("smb://h/s/a.txt")));
+    }
+
+
     void saveAsTakesName()
     {
         Document *doc = newList()->newTab();
@@ -427,9 +571,9 @@ private Q_SLOTS:
         attach(doc);
         insert(doc, 0, QStringLiteral("mine"));
         QSignalSpy failed(doc, &Document::saveFailed);
-        // sftp://host/<dir>/remote.txt is not the local <dir>/remote.txt.
+        // An unknown scheme's URL is never the local <dir>/remote.txt.
         QUrl remote;
-        remote.setScheme(QStringLiteral("sftp"));
+        remote.setScheme(QStringLiteral("nosuchscheme")); // KIO would take a real one: see kioConflictAndFailure
         remote.setHost(QStringLiteral("host"));
         remote.setPath(m_dir + QStringLiteral("/remote.txt"));
         doc->saveAs(remote);

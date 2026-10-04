@@ -86,7 +86,7 @@ QQC2.ApplicationWindow {
     height: Kirigami.Units.gridUnit * 36
     minimumWidth: Kirigami.Units.gridUnit * 20
     minimumHeight: Kirigami.Units.gridUnit * 12
-    title: document ? qsTr("%1 — Notepad").arg(document.title) : qsTr("Notepad")
+    title: document ? (document.isRemote && document.host.length > 0 ? qsTr("%1 — %2 — Notepad").arg(document.title, document.host) : qsTr("%1 — Notepad").arg(document.title)) : qsTr("Notepad")
     color: Kirigami.Theme.backgroundColor
 
     // --- Actions. The menus, the toolbar and the shortcuts all use these.

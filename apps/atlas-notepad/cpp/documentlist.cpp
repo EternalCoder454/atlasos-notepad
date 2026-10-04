@@ -1,6 +1,7 @@
 // One window's tabs: a list model of Documents with the current one, the
 // closed-tab stack and the "open" rules (dedupe, failures).
 #include "document_p.h"
+#include "remote.h"
 
 #include <QFileInfo>
 #include <QUrl>
@@ -205,6 +206,29 @@ void DocumentList::open(const QList<QUrl> &urls)
     Document *last = nullptr;
     int at = d->current < 0 ? 0 : d->current + 1;
     for (const QUrl &url : urls) {
+        if (Remote::useKio(url)) {
+            // Read through KIO in the background: the tab is here at once.
+            const QString shown = Remote::display(url);
+            if (Document *existing = d->find(shown)) {
+                last = existing;
+                continue;
+            }
+            const QString why = Remote::unsupported(url, false);
+            if (!why.isEmpty() || url.fileName().isEmpty()) {
+                Q_EMIT openFailed(why.isEmpty() ? tr("“%1” isn't a file.").arg(shown) : why);
+                continue;
+            }
+            Document *doc = d->make();
+            doc->d->setRemote(url);
+            doc->d->path = shown;
+            doc->d->untitledNumber = 0;
+            doc->d->announceOpen = true;
+            doc->d->applyMarkdown(0);
+            d->insert(doc, at++);
+            doc->d->startLoad(Document::Private::Initial);
+            last = doc;
+            continue;
+        }
         const QString given = url.isLocalFile() ? url.toLocalFile() : url.toString();
         if (given.isEmpty()) {
             continue;
@@ -274,7 +298,8 @@ void DocumentList::close(int index)
         return;
     }
     Document *doc = d->docs.at(index);
-    if (!doc->d->path.isEmpty()) {
+    doc->d->cancelRemote();
+    if (!doc->d->path.isEmpty() && !doc->d->announceOpen) {
         d->closed.removeAll(doc->d->path);
         d->closed.append(doc->d->path);
         while (d->closed.size() > closedLimit) {
@@ -333,7 +358,7 @@ void DocumentList::reopenClosed()
     }
     const QString path = d->closed.takeLast();
     Q_EMIT closedChanged();
-    open({QUrl::fromLocalFile(path)});
+    open({Remote::isStoredUrl(path) ? QUrl(path) : QUrl::fromLocalFile(path)});
 }
 
 int DocumentList::indexOf(Document *document) const

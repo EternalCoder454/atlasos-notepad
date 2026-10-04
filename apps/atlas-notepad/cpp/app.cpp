@@ -1,5 +1,6 @@
 // The process: settings, recent files, the windows and the session.
 #include "app.h"
+#include "remote.h"
 
 #include "document_p.h"
 #include "session.h"
@@ -445,7 +446,8 @@ QStringList App::recentFiles() const
 {
     QStringList out;
     for (const QString &p : d->readRecent()) {
-        if (QFileInfo::exists(p)) {
+        // A remote file isn't looked for: that would wait on the network.
+        if (Remote::isStoredUrl(p) || QFileInfo::exists(p)) {
             out.append(p);
         }
     }
@@ -532,7 +534,10 @@ void App::start(const QStringList &files)
     }
     QList<QUrl> urls;
     for (const QString &file : files) {
-        urls.append(QUrl::fromLocalFile(QFileInfo(file).absoluteFilePath()));
+        const QUrl url = urlFromArgument(file, QDir::currentPath());
+        if (url.isValid()) {
+            urls.append(url);
+        }
     }
     if (!urls.isEmpty()) {
         d->windows.first()->list->open(urls);
@@ -567,12 +572,10 @@ void App::activate(const QStringList &arguments, const QString &workingDirectory
         if ((options && arg.startsWith(QLatin1Char('-'))) || arg.isEmpty() || urls.size() >= maxFiles) {
             continue;
         }
-        const QUrl url(arg);
-        const QString path = url.isLocalFile() ? url.toLocalFile() : arg;
-        if (!QDir::isAbsolutePath(path) && !absoluteDir) {
-            continue;
+        const QUrl url = urlFromArgument(arg, absoluteDir ? workingDirectory : QString());
+        if (url.isValid()) {
+            urls.append(url);
         }
-        urls.append(QUrl::fromLocalFile(QDir(workingDirectory).absoluteFilePath(path)));
     }
     // A closed last window stays (the session keeps its tabs) but is hidden:
     // when none is visible, bring that one back.
@@ -605,12 +608,33 @@ void App::newWindow()
     d->ensureTab(d->createWindow(nullptr)->list);
 }
 
+QUrl App::urlFromArgument(const QString &arg, const QString &workingDirectory)
+{
+    if (arg.isEmpty()) {
+        return {};
+    }
+    // A URL KIO may know (sftp://host/file); a "file:" one is a local path.
+    // Anything else is a path, relative to the working directory.
+    if (Remote::isStoredUrl(arg)) {
+        const QUrl url(arg, QUrl::StrictMode);
+        if (!url.isValid()) {
+            return {};
+        }
+        return url.isLocalFile() ? QUrl::fromLocalFile(QFileInfo(url.toLocalFile()).absoluteFilePath()) : url;
+    }
+    if (!QDir::isAbsolutePath(arg) && !QDir::isAbsolutePath(workingDirectory)) {
+        return {};
+    }
+    return QUrl::fromLocalFile(QDir(workingDirectory).absoluteFilePath(arg));
+}
+
 void App::addRecentFile(const QString &path)
 {
     if (path.isEmpty()) {
         return;
     }
-    const QString absolute = QFileInfo(path).absoluteFilePath();
+    // Remote entries are URLs without a password; local ones, absolute paths.
+    const QString absolute = Remote::isStoredUrl(path) ? Remote::display(QUrl(path)) : QFileInfo(path).absoluteFilePath();
     QStringList paths = d->readRecent();
     paths.removeAll(absolute);
     paths.prepend(absolute);

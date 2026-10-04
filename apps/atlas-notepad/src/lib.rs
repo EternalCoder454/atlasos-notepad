@@ -149,6 +149,15 @@ fn errno(e: &std::io::Error) -> i32 {
     e.raw_os_error().unwrap_or(EIO)
 }
 
+/// What `np_file_encode` returns. Mirrors `NpBytes` in cpp/notepad_core.h.
+#[repr(C)]
+pub struct NpBytes {
+    data: *mut u8,
+    len: usize,
+    error: i32,
+    bad_offset: usize,
+}
+
 fn failed(error: i32) -> *mut NpFile {
     Box::into_raw(Box::new(NpFile {
         text: std::ptr::null_mut(),
@@ -191,23 +200,114 @@ pub unsafe extern "C" fn np_file_read(path: *const c_char, max_bytes: u64) -> *m
     };
     let read = catch_unwind(|| file::read(&path, max_bytes));
     match read {
-        Ok(Ok((d, stamp))) => {
-            let len = d.text.len();
-            let text = Box::into_raw(d.text.into_boxed_slice()).cast::<u16>();
-            Box::into_raw(Box::new(NpFile {
-                text,
-                len,
-                encoding: d.encoding as u8,
-                line_ending: d.line_ending as u8,
-                mixed: d.mixed.into(),
-                binary: d.binary.into(),
-                lossy: d.lossy.into(),
-                stamp: stamp.into(),
-                error: 0,
-            }))
-        }
+        Ok(Ok((d, stamp))) => from_decoded(d, stamp.into()),
         Ok(Err(e)) => failed(errno(&e)),
         Err(_) => failed(EIO),
+    }
+}
+
+fn from_decoded(d: file::Decoded, stamp: NpStamp) -> *mut NpFile {
+    let len = d.text.len();
+    let text = Box::into_raw(d.text.into_boxed_slice()).cast::<u16>();
+    Box::into_raw(Box::new(NpFile {
+        text,
+        len,
+        encoding: d.encoding as u8,
+        line_ending: d.line_ending as u8,
+        mixed: d.mixed.into(),
+        binary: d.binary.into(),
+        lossy: d.lossy.into(),
+        stamp,
+        error: 0,
+    }))
+}
+
+/// Decodes bytes read some other way (KIO) exactly as `np_file_read` decodes
+/// a file; the stamp is zero. Never returns null. Free the result with
+/// `np_file_free`.
+///
+/// # Safety
+///
+/// `bytes` points to `len` bytes, or `len` is 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_file_decode(bytes: *const u8, len: usize) -> *mut NpFile {
+    let bytes = if len == 0 {
+        &[][..]
+    } else if bytes.is_null() {
+        return failed(EINVAL);
+    } else {
+        // SAFETY: as documented.
+        unsafe { std::slice::from_raw_parts(bytes, len) }
+    };
+    match catch_unwind(|| file::decode(bytes)) {
+        Ok(d) => from_decoded(d, NpStamp::default()),
+        Err(_) => failed(EIO),
+    }
+}
+
+/// The bytes `np_file_save` would write, for a writer that isn't a local
+/// file (KIO). Never returns null: `error` is 0, an errno, or -1 when the
+/// text can't be written in that encoding (`bad_offset`, in UTF-16 units).
+/// Free with `np_bytes_free`.
+///
+/// # Safety
+///
+/// `text` points to `len` UTF-16 units (or `len` is 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_file_encode(
+    text: *const u16,
+    len: usize,
+    encoding: u8,
+    line_ending: u8,
+) -> *mut NpBytes {
+    let result = |data: *mut u8, len: usize, error: i32, bad_offset: usize| {
+        Box::into_raw(Box::new(NpBytes {
+            data,
+            len,
+            error,
+            bad_offset,
+        }))
+    };
+    // SAFETY: as documented.
+    let Some(text) = (unsafe { slice(text, len) }) else {
+        return result(std::ptr::null_mut(), 0, EINVAL, 0);
+    };
+    let (Some(encoding), Some(line_ending)) = (
+        file::Encoding::from_u8(encoding),
+        file::LineEnding::from_u8(line_ending),
+    ) else {
+        return result(std::ptr::null_mut(), 0, EINVAL, 0);
+    };
+    match catch_unwind(|| file::encode(text, encoding, line_ending)) {
+        Ok(Ok(bytes)) => {
+            let n = bytes.len();
+            result(
+                Box::into_raw(bytes.into_boxed_slice()).cast::<u8>(),
+                n,
+                0,
+                0,
+            )
+        }
+        Ok(Err(bad)) => result(std::ptr::null_mut(), 0, -1, bad.utf16_offset),
+        Err(_) => result(std::ptr::null_mut(), 0, EIO, 0),
+    }
+}
+
+/// Frees what `np_file_encode` returned. Null is fine.
+///
+/// # Safety
+///
+/// `bytes` came from `np_file_encode` and isn't used afterwards.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn np_bytes_free(bytes: *mut NpBytes) {
+    if bytes.is_null() {
+        return;
+    }
+    // SAFETY: as documented.
+    let b = unsafe { Box::from_raw(bytes) };
+    if !b.data.is_null() {
+        // SAFETY: `data` and `len` came from a boxed slice in np_file_encode.
+        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(b.data, b.len)) });
     }
 }
 
@@ -457,5 +557,35 @@ mod tests {
             assert_eq!(np_file_stamp(missing.as_ptr(), &mut again), 2);
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn decode_encode_round_trip() {
+        let bytes = b"\xEF\xBB\xBFa\r\nb\r\n";
+        // SAFETY: valid pointers; each result is freed once.
+        unsafe {
+            let f = np_file_decode(bytes.as_ptr(), bytes.len());
+            assert_eq!(((*f).error, (*f).encoding, (*f).line_ending), (0, 1, 1));
+            let text = std::slice::from_raw_parts((*f).text, (*f).len).to_vec();
+            assert_eq!(text, "a\nb\n".encode_utf16().collect::<Vec<_>>());
+            let b = np_file_encode(text.as_ptr(), text.len(), 1, 1);
+            assert_eq!((*b).error, 0);
+            assert_eq!(std::slice::from_raw_parts((*b).data, (*b).len), bytes);
+            np_bytes_free(b);
+            np_file_free(f);
+
+            let empty = np_file_decode(std::ptr::null(), 0);
+            assert_eq!(((*empty).error, (*empty).len), (0, 0));
+            np_file_free(empty);
+            let bad = np_file_decode(std::ptr::null(), 3);
+            assert_eq!((*bad).error, EINVAL);
+            np_file_free(bad);
+
+            let emoji: Vec<u16> = "\u{1F600}".encode_utf16().collect();
+            let b = np_file_encode(emoji.as_ptr(), emoji.len(), 4, 0);
+            assert_eq!(((*b).error, (*b).bad_offset), (-1, 0));
+            assert!((*b).data.is_null());
+            np_bytes_free(b);
+        }
     }
 }
