@@ -44,9 +44,6 @@ private:
     std::vector<Step> m_steps;
     size_t m_next = 0;
     qint64 m_sent = -1; // when the step being timed was sent; -1: none
-    qint64 m_loadStart = 0;
-    bool m_loading = false;
-    double m_loadMs = 0;
     double m_highlightMs = 0;
     int m_missed = 0;
     std::vector<std::vector<double>> m_total;  // per group: event to frame

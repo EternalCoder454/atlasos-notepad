@@ -2,10 +2,25 @@
 #include "markdown.h"
 #include "spellcheck.h"
 
+#include <QElapsedTimer>
+
 MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document, bool markdown)
     : QSyntaxHighlighter(document)
     , m_markdown(markdown)
 {
+    m_passTimer.setSingleShot(true);
+    m_passTimer.setInterval(0);
+    connect(&m_passTimer, &QTimer::timeout, this, &MarkdownHighlighter::rehighlightSlice);
+    // For a document with text, QSyntaxHighlighter queued a rehighlight() of
+    // its own, which lays out each formatted line on its own: quadratic. Run
+    // it now with highlightBlock muted (no formats: nothing to lay out), so
+    // the queued one finds nothing to do; whoever made this calls setStyle,
+    // which highlights.
+    if (document && !document->isEmpty()) {
+        m_muted = true;
+        rehighlight();
+        m_muted = false;
+    }
 }
 
 void MarkdownHighlighter::setSpellChecker(SpellChecker *spell)
@@ -70,6 +85,9 @@ int MarkdownHighlighter::read(const QString &text, int previous, BlockInfo *info
 
 void MarkdownHighlighter::highlightBlock(const QString &text)
 {
+    if (m_muted) {
+        return;
+    }
     auto *info = static_cast<BlockInfo *>(currentBlockUserData());
     if (!info) {
         info = new BlockInfo;
@@ -78,6 +96,12 @@ void MarkdownHighlighter::highlightBlock(const QString &text)
     const int state = read(text, qMax(0, previousBlockState()), info);
     for (const QTextLayout::FormatRange &r : std::as_const(m_ranges)) {
         setFormat(r.start, r.length, r.format);
+    }
+    // A line rehighlightAll's slices haven't reached yet keeps its state:
+    // a new one would make Qt go on to the next line, and the next, through
+    // the rest of the document in this keystroke. The slices get there.
+    if (!m_pass.isNull() && currentBlock().position() >= m_pass.block().position()) {
+        return;
     }
     setCurrentBlockState(state);
 }
@@ -112,28 +136,86 @@ void MarkdownHighlighter::addMisspelled(const QString &text, size_t runs, BlockI
     }
 }
 
+namespace
+{
+// Up to this many characters, rehighlightAll does it all at once.
+constexpr int sliceFrom = 64 * 1024;
+// Main-thread time wanted per slice: reading the lines and laying them out.
+constexpr qint64 sliceNs = 8'000'000;
+} // namespace
+
+int MarkdownHighlighter::readBlock(QTextBlock block, int previous)
+{
+    auto *info = static_cast<BlockInfo *>(block.userData());
+    if (!info) {
+        info = new BlockInfo;
+        block.setUserData(info);
+    }
+    const int state = read(block.text(), previous, info);
+    block.layout()->setFormats(m_ranges);
+    block.setUserState(state);
+    return state;
+}
+
 // QSyntaxHighlighter::rehighlight() tells the layout about each block on its
 // own, and the layout walks the document from the top every time: quadratic,
 // 9 s for a 1 MB file. This sets the same formats, user data and states
-// straight on the blocks and tells the layout once.
-void MarkdownHighlighter::rehighlightAll()
+// straight on the blocks and tells the layout once (once a slice: laying out
+// a whole 1 MB file again takes 200 ms).
+void MarkdownHighlighter::rehighlightAll(bool now)
 {
+    m_passTimer.stop();
+    m_pass = QTextCursor();
     QTextDocument *doc = document();
     if (!doc) {
         return;
     }
-    int state = 0;
-    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
-        auto *info = static_cast<BlockInfo *>(b.userData());
-        if (!info) {
-            info = new BlockInfo;
-            b.setUserData(info);
+    if (now || doc->characterCount() <= sliceFrom) {
+        int state = 0;
+        for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+            state = readBlock(b, state);
         }
-        state = read(b.text(), state, info);
-        b.layout()->setFormats(m_ranges);
-        b.setUserState(state);
+        doc->markContentsDirty(0, doc->characterCount());
+        return;
     }
-    doc->markContentsDirty(0, doc->characterCount());
+    m_pass = QTextCursor(doc);
+    rehighlightSlice();
+}
+
+void MarkdownHighlighter::rehighlightSlice()
+{
+    QTextDocument *doc = document();
+    if (!doc || m_pass.isNull() || m_pass.document() != doc) {
+        m_pass = QTextCursor();
+        return;
+    }
+    QElapsedTimer clock;
+    clock.start();
+    // The cursor moved with any edits since the last slice; the line before
+    // it has its state (typing highlights as it goes).
+    QTextBlock b = m_pass.block();
+    const int from = b.position();
+    int state = qMax(0, b.previous().userState());
+    for (int n = 1; b.isValid(); ++n) {
+        state = readBlock(b, state);
+        b = b.next();
+        if (n % 32 == 0 && clock.nsecsElapsed() > m_readBudgetNs) {
+            break;
+        }
+    }
+    const qint64 read = qMax<qint64>(clock.nsecsElapsed(), 1);
+    const int end = b.isValid() ? b.position() : doc->characterCount();
+    doc->markContentsDirty(from, end - from);
+    // Laying out costs a few times the reading: give the reading the share of
+    // sliceNs it had this time, changing by at most half or double a slice.
+    const double share = double(read) / double(qMax<qint64>(clock.nsecsElapsed(), 1));
+    m_readBudgetNs = qBound<qint64>(qMax<qint64>(500'000, m_readBudgetNs / 2), qint64(double(sliceNs) * share), 2 * m_readBudgetNs);
+    if (b.isValid()) {
+        m_pass.setPosition(b.position());
+        m_passTimer.start();
+    } else {
+        m_pass = QTextCursor();
+    }
 }
 
 const QTextCharFormat &MarkdownHighlighter::format(uint32_t flags, int heading)

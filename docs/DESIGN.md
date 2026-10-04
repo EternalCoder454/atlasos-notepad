@@ -94,6 +94,11 @@ Quiet machine (i9-14900KF), milliseconds, event to frame:
 
 Load to first frame: 67 ms, of which the first full highlight is 35 ms.
 
+These were taken on an idle desktop and don't reproduce while the desktop
+is in use: the plain TextEdit baseline alone then reads 1.1 to 3.6 ms mean
+from run to run. Current figures, and how to read them, are under
+Performance.
+
 **Where the time goes.** `perf` puts the Rust reader and the highlighter
 under 1 %. The extra millisecond over plain text is Qt drawing more glyph
 runs per formatted block (`QQuickTextNodeEngine::addTextBlock`,
@@ -106,14 +111,15 @@ than half used. Still to measure: the GPU backend, and a comparison with Kate.
 
 **Open for S2.** The first highlight is synchronous: about 35 ms per 50 KB,
 so large files need it done lazily or in chunks, or Formatted turned off past
-a size limit.
+a size limit. (Done in the Performance phase: see there.)
 
 ## S2: large files
 
 `scripts/bench-s2.sh` runs the same bench on 1 MB and 10 MB Markdown and a
 5 MB single line (`bench/make-large.py` writes them to `out/s2`). The machine
 was busy for these runs (load 4-6 from other work), so the plain-text
-baseline doubled against S1's; compare within a row, not with S1.
+baseline doubled against S1's; compare within a row, not with S1. Opening
+is no longer like this: see Performance, Opening.
 
 | File | View | Open to first frame | Key, mean | Memory (RSS) |
 | --- | --- | --- | --- | --- |
@@ -167,6 +173,107 @@ first word; with the C locale it falls back to the UI languages, then en_US.
   `QSyntaxHighlighter` clears every block's formats, so `SpellChecker` and
   `MarkdownEditor` tell each other to highlight again (queued) when one goes.
 - Typing bench: no change beyond noise against the plain TextEdit baseline.
+
+## Performance
+
+Measured in the dev container (Qt 6.11.2), Xvfb, software backend, pinned
+to the fast cores, with the desktop in use (load 2 to 6): the figures move
+with what else runs, so compare builds in alternate runs, never against an
+old table. On a hybrid CPU an unpinned run lands on an efficiency core now
+and then, which takes three or four times as long; `bench-s1.sh` pins
+itself (`BENCH_CPUS` overrides).
+
+**Typing** (`scripts/bench-s1.sh`, 50 KB Markdown, event to frame, ms,
+range of three runs):
+
+| | type mean | type p95 |
+| --- | --- | --- |
+| Markdown, 1x | 3.8 to 4.3 | 5.1 to 7.3 |
+| Markdown, 1.5x | 3.7 to 4.4 | 4.9 to 8.8 |
+| Plain TextEdit, 1x | 1.1 to 3.6 | 2.1 to 4.7 |
+| Plain TextEdit, 1.5x | 2.9 to 4.1 | 4.7 to 6.3 |
+
+The target is a keystroke within one frame at 160 Hz (6.25 ms): the mean
+is, in every run, at both scales. The p95 crosses it now and then, and so
+does Qt's own TextEdit with no Markdown at all: that tail is the machine
+and Qt, not Notepad. The previous commit measures the same within noise.
+
+**What Qt costs, and the patch we don't ship.** On every keystroke
+`QQuickTextEdit` redraws the whole visible page on the software backend:
+`updatePaintNode` sets its root node's matrix every frame, unchanged or
+not, and the software renderer treats a matrix change as dirtying every
+child; after a highlighter restyles blocks, `q_textChanged` marks every
+node dirty. A three-hunk patch to `qquicktextedit.cpp` (set the matrix only
+when it changes, move nodes only by a non-zero delta, redo nodes from the
+edit on rather than from the top) took Markdown typing from 2.7 ms mean and
+6 ms p95 to 1.9 and 3.5. It isn't shipped: it would mean carrying a patched
+Qt in AtlasOS for one app. Worth sending upstream.
+
+Other Qt costs that set the limits for big files:
+- `QQuickTextEdit::invalidateFontCaches` and `QTextDocumentLayout`'s
+  `doLayout` walk the whole document, so a keystroke in a 10 MB file takes
+  about 25 ms whatever the app does.
+- Setting `text` lays out all of it at once, on the GUI thread.
+- `QSyntaxHighlighter::setDocument` on a non-empty document queues a full
+  rehighlight that ignores edits until it runs, then marks every block
+  dirty one at a time: quadratic on big files. `MarkdownHighlighter` mutes
+  that pass and highlights itself (below).
+
+**Opening** (`NP_BENCH_OPEN_ONLY=1 atlas-notepad --bench FILE`: from
+process start to the first frame with text, and to the frame with all of
+it; median of three; ms):
+
+| File | First text | All text | Longest stall | Before (first text, stall) |
+| --- | --- | --- | --- | --- |
+| 50 KB Markdown | 224 | 224 | 0 | 229, 0 |
+| 1 MB Markdown | 220 | 514 | 39 | 718, window blocked until then |
+| 1 MB prose | 185 | 342 | 36 | 349, blocked |
+| 10 MB Markdown (opens plain) | 182 | 2,313 | 32 | 1,486, 1,313 |
+| 5 MB, one line (read-only) | 1,862 | 1,862 | 0, then 970 | 1,905 |
+
+- The text goes into the TextEdit in pieces (`Document::Private::fillEdit`,
+  `fillStep`): the first 64 K characters at once, then pieces sized to take
+  about 10 ms each, cut after a line break, from the event loop. The editor
+  is read-only until the last piece is in; undo is off meanwhile and the
+  document isn't modified by it. `text()`, Save, the session and the
+  counts see the whole text from the start, Find only what the editor has.
+- A line is never cut: appending to a block lays all of it out again. The
+  one-line file is read-only (over `Limits::lineLength`) and costs Qt's
+  single layout of the line, then a 970 ms stall when spell check reads it.
+- `MarkdownHighlighter::rehighlightAll` highlights big texts in slices
+  under an 8 ms budget per frame, from the top; a line edited ahead of the
+  slices is highlighted on its own and its state passed on when the slices
+  get there.
+- The editor is read-only while loading, and `QQuickTextEdit::setReadOnly`
+  moves the caret to the end: `Document::Private::emitKeepingView` puts
+  the caret, selection and scroll back around those changes. A click or
+  scroll during the fill wins over the session's position.
+
+**Launch** (first frame, cold process, warm caches): 213 to 223 ms with an
+empty tab, 221 to 226 ms with a small file, 254 to 261 ms with 50 KB
+Markdown. About 20 ms of each is loading the libraries Qt Quick pulls in
+(`libQt6Quick` alone brings 83), which a QML app can't avoid.
+
+**Second launch** (a running Notepad, `atlas-notepad FILE` again): 21 to
+23 ms to bring up a file that's open, 37 to 63 ms (median 56) to open a
+new tab, most of it the running window making the tab's view. The target
+was 50 ms.
+
+**Idle**: with the caret blink off, 0 to 3 ticks of CPU in 20 s and no
+wakeups of Notepad's own; with it on, about 8 wakeups a second from the
+caret, as in Kate, stopping when the window loses focus.
+
+**Memory** (`smaps_rollup` after 5 s, the same container image for both):
+
+| | Rss | Pss | Private dirty |
+| --- | --- | --- | --- |
+| Notepad, empty tab | 117 MB | 108 MB | 36 MB |
+| Notepad, 50 KB Markdown | 126 MB | 117 MB | 42 MB |
+| Kate 26.08, empty | 80 MB | 75 MB | 25 MB |
+| Kate 26.08, 50 KB Markdown | 102 MB | 97 MB | 35 MB |
+
+Notepad starts about 33 MB (Pss) above Kate, most of it the QML engine,
+Qt Quick and Kirigami; the file itself costs Notepad 9 MB and Kate 22.
 
 ## Security
 

@@ -31,9 +31,11 @@ fi
 tty=()
 [ -t 0 ] && tty=(-it)
 extra=()
-[ -n "${ATLAS_UI:-}" ] && extra=(-v "$ATLAS_UI":/atlas-ui:ro,z)
+[ -n "${ATLAS_UI:-}" ] && extra=(-v "$ATLAS_UI:/atlas-ui:ro,z")
+# :z (shared), not :Z: :Z gives each container a private label, which locks
+# out any other dev container already running on the tree.
 exec podman run --rm "${tty[@]}" \
-    -v "$repo":/src:Z -w /src \
+    -v "$repo":/src:z -w /src \
     -v atlas-cargo:/root/.cargo/registry \
     -v atlas-cargo-git:/root/.cargo/git \
     -e CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/src/target/dev}" \

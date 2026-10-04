@@ -132,7 +132,7 @@ void MarkdownEditor::setSpellChecker(SpellChecker *spell)
 void MarkdownEditor::rehighlightNow()
 {
     if (m_highlighter) {
-        m_highlighter->rehighlightAll();
+        m_highlighter->rehighlightAll(true);
     }
 }
 

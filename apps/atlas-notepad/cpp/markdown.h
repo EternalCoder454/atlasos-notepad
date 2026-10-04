@@ -17,6 +17,8 @@
 #include <QSyntaxHighlighter>
 #include <QTextBlock>
 #include <QTextBlockUserData>
+#include <QTextCursor>
+#include <QTimer>
 #include <QtQml/qqmlregistration.h>
 
 #include "spellcheck.h"
@@ -125,7 +127,9 @@ public:
     // Notes misspelled words (BlockInfo::misspelled) while it is active.
     // Call rehighlightAll after it changes.
     void setSpellChecker(SpellChecker *spell);
-    void rehighlightAll();
+    // Every line again. A big document is done a slice at a time from the
+    // event loop, so the window keeps drawing; `now` does it all at once.
+    void rehighlightAll(bool now = false);
     const MarkdownStyle &style() const
     {
         return m_style;
@@ -137,6 +141,8 @@ protected:
 private:
     const QTextCharFormat &format(uint32_t flags, int heading);
     int read(const QString &text, int previous, BlockInfo *info);
+    int readBlock(QTextBlock block, int previous);
+    void rehighlightSlice();
 
     void addMisspelled(const QString &text, size_t runs, BlockInfo *info);
 
@@ -146,6 +152,12 @@ private:
     QList<QTextLayout::FormatRange> m_ranges;
     QPointer<SpellChecker> m_spell;
     bool m_markdown;
+    // The slices of rehighlightAll: where the next starts (moves with edits;
+    // null when none is due) and how long its reading may take.
+    QTextCursor m_pass;
+    QTimer m_passTimer;
+    qint64 m_readBudgetNs = 2'000'000;
+    bool m_muted = false; // highlightBlock does nothing (see the constructor)
 };
 
 // Attach to a TextEdit (textEdit) to edit Markdown in it.

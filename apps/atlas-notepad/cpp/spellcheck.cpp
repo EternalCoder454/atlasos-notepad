@@ -10,8 +10,14 @@
 #include <QPainterPath>
 #include <QTextLayout>
 #include <QQuickTextDocument>
+#include <QQuickWindow>
+#include <QSGImageNode>
+#include <QSGTexture>
+#include <QSGTransformNode>
 #include <QSet>
 #include <QTextCursor>
+#include <QTimer>
+#include <QtMath>
 
 #include <Sonnet/Speller>
 
@@ -443,9 +449,9 @@ void SpellChecker::setLanguage(const QString &language)
 }
 
 SpellUnderlines::SpellUnderlines(QQuickItem *parent)
-    : QQuickPaintedItem(parent)
+    : QQuickItem(parent)
 {
-    setAntialiasing(true);
+    setFlag(ItemHasContents);
 }
 
 void SpellUnderlines::setSpellChecker(SpellChecker *spell)
@@ -478,6 +484,15 @@ void SpellUnderlines::watch()
     if (m_doc) {
         disconnect(m_doc->documentLayout(), nullptr, this, nullptr);
     }
+    if (m_edit) {
+        disconnect(m_edit, nullptr, this, nullptr);
+    }
+    // The squiggles are placed by the padding (updatePaintNode).
+    m_edit = m_spell ? m_spell->textEdit() : nullptr;
+    if (m_edit) {
+        connect(m_edit, SIGNAL(leftPaddingChanged()), this, SLOT(paddingChanged()));
+        connect(m_edit, SIGNAL(topPaddingChanged()), this, SLOT(paddingChanged()));
+    }
     m_doc = m_spell ? m_spell->document() : nullptr;
     if (m_doc) {
         auto *layout = m_doc->documentLayout();
@@ -493,7 +508,7 @@ void SpellUnderlines::watch()
 
 void SpellUnderlines::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
 {
-    QQuickPaintedItem::geometryChange(newGeometry, oldGeometry);
+    QQuickItem::geometryChange(newGeometry, oldGeometry);
     // Moved with the view: the same lines, painted at another place.
     if (newGeometry.y() != oldGeometry.y()) {
         update();
@@ -554,28 +569,185 @@ QList<QLineF> SpellUnderlines::layOut() const
     return out;
 }
 
-void SpellUnderlines::paint(QPainter *painter)
+void SpellUnderlines::itemChange(ItemChange change, const ItemChangeData &value)
 {
-    QQuickItem *edit = m_spell ? m_spell->textEdit() : nullptr;
-    if (m_lines.isEmpty() || !edit) {
-        return;
+    QQuickItem::itemChange(change, value);
+    // Another screen: the texture is drawn again at its scale.
+    if (change == ItemDevicePixelRatioHasChanged) {
+        update();
     }
-    painter->setRenderHint(QPainter::Antialiasing);
-    painter->translate(edit->property("leftPadding").toReal(), edit->property("topPadding").toReal() - y());
-    painter->setPen(QPen(m_spell->underlineColor(), 1.1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter->setBrush(Qt::NoBrush);
-    constexpr qreal step = 2.5; // half a wave
-    constexpr qreal amp = 1.25;
-    for (const QLineF &l : std::as_const(m_lines)) {
-        QPainterPath wave(QPointF(l.x1(), l.y1()));
+}
+
+namespace
+{
+// The wave: half-waves of waveStep, the curve waveAmp above and below the
+// baseline, a 1.1 px pen. Stroking it is slow (a few ms for the strip), so
+// one tile of it is drawn, copied along a strip, and the strip kept: each
+// squiggle shows part of it. The tile is four waves wide, a whole number of
+// pixels at the usual scales (1, 1.25, 1.5, 1.75, 2).
+constexpr qreal waveStep = 2.5;
+constexpr qreal waveAmp = 1.25;
+constexpr qreal tileWidth = 8 * waveStep;
+constexpr qreal stripWidth = 25 * tileWidth;
+constexpr qreal stripHeight = 7; // at least
+
+// The baseline in the strip: the middle of a pixel row, so a squiggle at
+// 1x is crisp rather than spread over two rows.
+qreal baseline(int pixelHeight, qreal dpr)
+{
+    return (pixelHeight / 2 + 0.5) / dpr;
+}
+
+QImage drawStrip(const QColor &color, qreal dpr)
+{
+    const int tileW = qMax(1, qRound(tileWidth * dpr));
+    // Whole pixels high, and shown that high (see updatePaintNode), so the
+    // wave isn't squashed at 1.25x or 1.75x.
+    const int h = qCeil(stripHeight * dpr);
+    QImage tile(tileW, h, QImage::Format_ARGB32_Premultiplied);
+    tile.fill(Qt::transparent);
+    {
+        QPainter painter(&tile);
+        painter.setRenderHint(QPainter::Antialiasing);
+        // Scaled to the tile's whole pixel width, so the copies join.
+        painter.scale(tileW / tileWidth, dpr);
+        painter.setPen(QPen(color, 1.1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const qreal y = baseline(h, dpr);
+        // A wave either side past the edges, so the copies join without caps.
+        QPainterPath wave(QPointF(-2 * waveStep, y));
         bool up = true;
-        for (qreal x = l.x1(); x < l.x2(); x += step) {
-            const qreal next = qMin(x + step, l.x2());
-            wave.quadTo((x + next) / 2, l.y1() + (up ? -amp : amp) * 2, next, l.y1());
+        for (qreal x = -2 * waveStep; x < tileWidth + 2 * waveStep; x += waveStep) {
+            wave.quadTo(x + waveStep / 2, y + (up ? -waveAmp : waveAmp) * 2, x + waveStep, y);
             up = !up;
         }
-        painter->drawPath(wave);
+        painter.drawPath(wave);
     }
+    QImage strip(tileW * qRound(stripWidth / tileWidth), h, QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&strip);
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    for (int x = 0; x < strip.width(); x += tileW) {
+        painter.drawImage(x, 0, tile);
+    }
+    return strip;
+}
+
+// The squiggles' parent: places them (document to item coordinates) and owns
+// the strip they share.
+class SquiggleRoot : public QSGTransformNode
+{
+public:
+    ~SquiggleRoot() override
+    {
+        delete texture;
+    }
+    QSGTexture *texture = nullptr;
+    QColor color;
+    qreal dpr = 0;
+};
+}
+
+QSGNode *SpellUnderlines::updatePaintNode(QSGNode *old, UpdatePaintNodeData *)
+{
+    QQuickItem *edit = m_spell ? m_spell->textEdit() : nullptr;
+    if (!edit || !window()) {
+        delete old;
+        return nullptr;
+    }
+    // Kept without squiggles too: the next misspelling, often the next
+    // keystroke, would make the strip again.
+    auto *root = static_cast<SquiggleRoot *>(old);
+    if (!root) {
+        root = new SquiggleRoot;
+    }
+    const qreal dpr = window()->effectiveDevicePixelRatio();
+    const QColor color = m_spell->underlineColor();
+    if (!root->texture || root->color != color || root->dpr != dpr) {
+        QSGTexture *texture = window()->createTextureFromImage(drawStrip(color, dpr));
+        if (!texture) {
+            // Tried again after 1, 2, 4, 8 and 16 s, then left until the
+            // next change; underlines missing beat a warning every second.
+            if (m_textureFailures < 5) {
+                const int wait = 1000 << m_textureFailures++;
+                qWarning("atlas-notepad: no texture for the spelling underlines; trying again in %d s", wait / 1000);
+                QMetaObject::invokeMethod(this, [this, wait] { QTimer::singleShot(wait, this, &QQuickItem::update); }, Qt::QueuedConnection);
+            }
+            delete root;
+            return nullptr;
+        }
+        m_textureFailures = 0;
+        texture->setFiltering(QSGTexture::Linear);
+        // Their source rects are in the old strip's pixels: made anew below.
+        while (QSGNode *n = root->firstChild()) {
+            root->removeChildNode(n);
+            delete n;
+        }
+        delete root->texture;
+        root->texture = texture;
+        root->color = color;
+        root->dpr = dpr;
+    }
+    // Setting the matrix repaints every squiggle: only when it changed.
+    QMatrix4x4 matrix;
+    matrix.translate(edit->property("leftPadding").toReal(), edit->property("topPadding").toReal() - y());
+    if (root->matrix() != matrix) {
+        root->setMatrix(matrix);
+    }
+
+    const QSize pixels = root->texture->textureSize();
+    const qreal height = pixels.height() / dpr;
+    const qreal top = baseline(pixels.height(), dpr);
+    // A squiggle longer than the strip is shown in pieces.
+    QList<QRectF> rects;
+    for (const QLineF &l : std::as_const(m_lines)) {
+        for (qreal x = l.x1(); x < l.x2(); x += stripWidth) {
+            rects.append(QRectF(x, l.y1() - top, qMin(stripWidth, l.x2() - x), height));
+        }
+    }
+    // A node whose rect hasn't changed is left alone, so it isn't repainted;
+    // the others are moved to the new rects, added or removed.
+    QMultiHash<std::pair<qreal, qreal>, qsizetype> wanted;
+    for (qsizetype i = 0; i < rects.size(); ++i) {
+        wanted.insert({rects[i].x(), rects[i].y()}, i);
+    }
+    QList<bool> placed(rects.size(), false);
+    QList<QSGImageNode *> spare;
+    for (QSGNode *n = root->firstChild(); n; n = n->nextSibling()) {
+        auto *image = static_cast<QSGImageNode *>(n);
+        const QRectF r = image->rect();
+        bool kept = false;
+        for (auto it = wanted.find({r.x(), r.y()}); it != wanted.end() && it.key() == std::pair(r.x(), r.y()); ++it) {
+            if (!placed[*it] && rects[*it] == r) {
+                placed[*it] = true;
+                kept = true;
+                break;
+            }
+        }
+        if (!kept) {
+            spare.append(image);
+        }
+    }
+    for (qsizetype i = 0; i < rects.size(); ++i) {
+        if (placed[i]) {
+            continue;
+        }
+        QSGImageNode *image;
+        if (!spare.isEmpty()) {
+            image = spare.takeLast();
+        } else {
+            image = window()->createImageNode();
+            image->setOwnsTexture(false);
+            image->setFiltering(QSGTexture::Linear);
+            image->setTexture(root->texture);
+            root->appendChildNode(image);
+        }
+        image->setRect(rects[i]);
+        image->setSourceRect(QRectF(0, 0, rects[i].width() * pixels.width() / stripWidth, pixels.height()));
+    }
+    for (QSGImageNode *image : std::as_const(spare)) {
+        root->removeChildNode(image);
+        delete image;
+    }
+    return root;
 }
 
 #include "spellcheck.moc"

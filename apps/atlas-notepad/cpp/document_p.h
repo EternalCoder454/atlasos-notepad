@@ -71,6 +71,24 @@ struct Document::Private {
     bool cleanBeforeDelete = false; // unmodified when the Deleted banner came
     quint64 deleteRevision = 0; // sessionKey() then
     bool settingText = false;
+    // A big text goes into the TextEdit in pieces (fillEdit), because setting
+    // it at once lays out all of it on the main thread. While that runs the
+    // document counts as loading and fillText is the whole text.
+    bool filling = false;
+    bool appending = false; // inside a piece: not a change of the text
+    bool shownLoading = false; // what loadingChanged last told
+    bool fillModified = false; // what isModified() is, until the fill ends
+    QString fillText;
+    qsizetype fillPos = 0;
+    qsizetype fillPiece = 0;
+    quint64 fillGeneration = 0;
+    // The edit's caret, anchor and scroll once the first piece is in (the
+    // view may have clamped the scroll to it): a change from them by the end
+    // is the user's.
+    int fillBaseCursor = 0;
+    int fillBaseAnchor = 0;
+    qreal fillBaseScroll = 0;
+    QTimer fillTimer;
     std::map<Banner, QString> banners;
 
     QPointer<QQuickItem> textEdit;
@@ -106,6 +124,17 @@ struct Document::Private {
     void startLoad(LoadMode mode, int forcedEncoding = -1);
     void finishLoad(const LoadResult &result, LoadMode mode);
     void putText(const QString &text, bool keepView);
+    // Puts text into the TextEdit: all at once when small, else the first
+    // piece now and the rest from the event loop. True when it's all in.
+    bool fillEdit(const QString &text, bool modifiedAfter);
+    void fillStep();
+    void cancelFill(); // no signals: the caller calls syncLoading()
+    void completeFill();
+    void setLoading(bool on);
+    void syncLoading();
+    void emitKeepingView(void (Document::*changed)());
+    int editAnchor() const; // the TextEdit's selection anchor, also mid-fill
+    bool isLoading() const { return loading || filling; }
     void applyView();
     QQuickItem *flickable() const;
 

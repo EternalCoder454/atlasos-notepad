@@ -10,7 +10,6 @@
 #include <QPointer>
 #include <QQmlEngine>
 #include <QQuickItem>
-#include <QQuickPaintedItem>
 #include <QTextDocument>
 
 class MarkdownHighlighter;
@@ -121,8 +120,10 @@ private:
 // Red squiggles under the misspelled words of the visible lines (from
 // BlockInfo::misspelled). Make it a child of the TextEdit laid over the
 // visible part only (y = the view's contentY, height = the view's), as
-// MarkdownDecorations. Repaints only when the squiggles moved.
-class SpellUnderlines : public QQuickPaintedItem
+// MarkdownDecorations. Each squiggle is a node of its own, cut from one
+// shared texture, so typing repaints only the squiggles that moved, not
+// everything under the item.
+class SpellUnderlines : public QQuickItem
 {
     Q_OBJECT
     QML_ELEMENT
@@ -137,14 +138,21 @@ public:
     }
     void setSpellChecker(SpellChecker *spell);
 
-    void paint(QPainter *painter) override;
-
 Q_SIGNALS:
     void spellCheckerChanged();
 
 protected:
+    QSGNode *updatePaintNode(QSGNode *old, UpdatePaintNodeData *) override;
+    void itemChange(ItemChange change, const ItemChangeData &value) override;
     void updatePolish() override;
     void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry) override;
+
+private Q_SLOTS:
+    void paddingChanged()
+    {
+        polish(); // which lines are visible
+        update(); // where the squiggles go
+    }
 
 private:
     void watch();
@@ -152,6 +160,8 @@ private:
     QList<QLineF> layOut() const;
 
     QPointer<SpellChecker> m_spell;
+    QPointer<QQuickItem> m_edit; // for its padding
     QPointer<QTextDocument> m_doc;
     QList<QLineF> m_lines;
+    int m_textureFailures = 0; // in a row
 };

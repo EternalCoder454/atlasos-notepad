@@ -11,6 +11,8 @@
 #include <QQuickItem>
 #include <QQuickTextDocument>
 #include <QTextBlock>
+#include <QTextCursor>
+#include <QTextLayout>
 #include <QTextDocument>
 #include <QTest>
 
@@ -471,7 +473,101 @@ private Q_SLOTS:
         m_editor->setSpellChecker(nullptr);
     }
 
+    // Past 64K characters a style change highlights in slices from the event
+    // loop; the result is what highlighting at once gives, fences and all.
+    void bigDocumentHighlightsInSlices()
+    {
+        open(bigMarkdown());
+        const auto atOnce = formats();
+        m_editor->setFormatted(false);
+        QCoreApplication::sendPostedEvents();
+        m_editor->rehighlightNow(); // every line plain, before going back
+        QVERIFY(formats() != atOnce);
+        m_editor->setFormatted(true);
+        QCoreApplication::sendPostedEvents(); // the queued style: the first slice
+        QVERIFY(formats() != atOnce); // not all of it in one go
+        QTRY_VERIFY_WITH_TIMEOUT(formats() == atOnce, 10000);
+    }
+
+    // Made on a document with text, the highlighter still highlights an edit
+    // as it happens (QSyntaxHighlighter skips edits while its own queued
+    // rehighlight is due; the constructor runs that one at once).
+    void editRightAfterAttachIsHighlighted()
+    {
+        open(QStringLiteral("plain\nmore"));
+        auto *doc = qobject_cast<QQuickTextDocument *>(m_edit->property("textDocument").value<QObject *>())->textDocument();
+        QVERIFY(doc->begin().layout()->formats().isEmpty());
+        QTextCursor(doc).insertText(QStringLiteral("# "));
+        QVERIFY(!doc->begin().layout()->formats().isEmpty());
+    }
+
+    // Attached to a big document, an edit ahead of the first pass is one
+    // line's work: lines the slices haven't reached keep their state, so Qt
+    // doesn't read on through the rest of the document in that keystroke
+    // (300 ms for 1 MB).
+    void editAheadOfSlicesReadsOneLine()
+    {
+        m_editor.reset();
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nTextEdit { textFormat: TextEdit.PlainText }", QUrl());
+        m_edit.reset(qobject_cast<QQuickItem *>(component.create()));
+        QVERIFY(m_edit);
+        m_edit->setProperty("text", bigMarkdown());
+        m_editor = std::make_unique<MarkdownEditor>();
+        m_editor->setTextEdit(m_edit.get()); // the first slice
+        auto *doc = qobject_cast<QQuickTextDocument *>(m_edit->property("textDocument").value<QObject *>())->textDocument();
+        QTextCursor middle(doc->findBlockByNumber(doc->blockCount() / 2));
+        QCOMPARE(doc->lastBlock().userState(), -1);
+        middle.insertText(QStringLiteral("x"));
+        QCOMPARE(doc->lastBlock().userState(), -1); // not read yet
+        QTest::qWait(3000);
+        const auto sliced = formats();
+        m_editor->rehighlightNow();
+        QCOMPARE(formats(), sliced);
+    }
+
+    // Edits while the slices run, before and after where they are: each line
+    // still ends up as highlighting at once would have it.
+    void editsDuringSlicesEndRight()
+    {
+        open(bigMarkdown());
+        m_editor->setFormatted(false);
+        QCoreApplication::sendPostedEvents();
+        auto *doc = qobject_cast<QQuickTextDocument *>(m_edit->property("textDocument").value<QObject *>())->textDocument();
+        QTextCursor top(doc);
+        top.insertText(QStringLiteral("```\nnow a fence\n```\n"));
+        QTextCursor end(doc);
+        end.movePosition(QTextCursor::End);
+        end.insertText(QStringLiteral("\n# A heading at the end\n"));
+        QTest::qWait(2000);
+        const auto sliced = formats();
+        m_editor->rehighlightNow();
+        QCOMPARE(formats(), sliced);
+    }
+
 private:
+    // About 400 KB: headings, emphasis, and fences that slices cut through.
+    static QString bigMarkdown()
+    {
+        QString t;
+        for (int i = 0; t.size() < 400 * 1024; ++i) {
+            t += QStringLiteral("# Part %1\n\nSome **bold** and _italic_ text, `code` and a [link](https://example.org).\n\n").arg(i);
+            if (i % 7 == 0) {
+                t += QStringLiteral("```\nfenced line\n# not a heading\n```\n\n");
+            }
+        }
+        return t;
+    }
+    // Each line's state and formats.
+    QList<QPair<int, QList<QTextLayout::FormatRange>>> formats() const
+    {
+        auto *doc = qobject_cast<QQuickTextDocument *>(m_edit->property("textDocument").value<QObject *>())->textDocument();
+        QList<QPair<int, QList<QTextLayout::FormatRange>>> all;
+        for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+            all.append({b.userState(), b.layout()->formats()});
+        }
+        return all;
+    }
     // The misspelled words of the first line, as the underlines get them.
     QList<QPair<int, int>> underlined() const
     {

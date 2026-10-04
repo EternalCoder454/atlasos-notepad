@@ -424,6 +424,9 @@ Document::Private::Private(Document *document, DocumentList *owner)
     countTimer.setSingleShot(true);
     countTimer.setInterval(300);
     QObject::connect(&countTimer, &QTimer::timeout, q, [this] { updateCounts(); });
+    fillTimer.setSingleShot(true);
+    fillTimer.setInterval(0);
+    QObject::connect(&fillTimer, &QTimer::timeout, q, [this] { fillStep(); });
     diskTimer.setSingleShot(true);
     diskTimer.setInterval(100);
     QObject::connect(&diskTimer, &QTimer::timeout, q, [this] { checkOnDisk(); });
@@ -440,12 +443,20 @@ Settings &Document::Private::settings() const
 
 bool Document::Private::isModified() const
 {
+    if (filling) {
+        return fillModified;
+    }
     return qdoc ? qdoc->isModified() : modified;
 }
 
 void Document::Private::setModified(bool on)
 {
-    if (qdoc) {
+    if (filling) {
+        if (fillModified != on) {
+            fillModified = on;
+            Q_EMIT q->modifiedChanged();
+        }
+    } else if (qdoc) {
         qdoc->setModified(on);
     } else if (modified != on) {
         modified = on;
@@ -475,7 +486,7 @@ qint64 Document::Private::currentBytes() const
     if (hasStamp) {
         return qint64(stamp.size);
     }
-    return qdoc ? qdoc->characterCount() : pending.size();
+    return filling ? fillText.size() : qdoc ? qdoc->characterCount() : pending.size();
 }
 
 void Document::Private::applyMarkdown(qint64 bytes)
@@ -527,8 +538,17 @@ quint64 Document::Private::sessionKey() const
 
 void Document::Private::connectTextDocument()
 {
-    QObject::connect(qdoc, &QTextDocument::modificationChanged, q, [this] { Q_EMIT q->modifiedChanged(); });
+    QObject::connect(qdoc, &QTextDocument::modificationChanged, q, [this] {
+        // While filling, isModified() is fillModified; while a fill function
+        // sets the text, it tells a change itself.
+        if (!filling && !settingText) {
+            Q_EMIT q->modifiedChanged();
+        }
+    });
     QObject::connect(qdoc, &QTextDocument::contentsChanged, q, [this] {
+        if (appending) {
+            return; // a piece of the text being read in, not a change
+        }
         ++contentVersion;
         if (settingText) {
             return;
@@ -554,17 +574,22 @@ void Document::Private::applyView()
     if (!textEdit || !qdoc) {
         return;
     }
+    // Copies: moving the caret makes the view save its state back here,
+    // the scroll still at the top.
     const int length = qMax(0, qdoc->characterCount() - 1);
     const int c = qBound(0, cursor, length);
     const int a = qBound(0, anchor, length);
+    const qreal y = scrollY;
     if (a != c) {
         QMetaObject::invokeMethod(textEdit, "select", Q_ARG(int, a), Q_ARG(int, c));
     } else if (c != 0 || textEdit->property("cursorPosition").toInt() != 0) {
         textEdit->setProperty("cursorPosition", c);
     }
-    if (scrollY > 0) {
+    cursor = c;
+    anchor = a;
+    scrollY = y;
+    if (y > 0) {
         QPointer<QQuickItem> flick = flickable();
-        const qreal y = scrollY;
         if (flick) {
             QTimer::singleShot(0, flick, [flick, y] {
                 // Never past the end: a stale or bad value would show nothing.
@@ -583,19 +608,245 @@ void Document::Private::putText(const QString &text, bool keepView)
         const int c = keepView ? q->cursorPosition() : cursor;
         const int an = keepView ? q->selectionAnchor() : anchor;
         const qreal y = keepView ? q->scrollY() : scrollY;
-        settingText = true;
-        textEdit->setProperty("text", text);
-        qdoc->setModified(false);
-        settingText = false;
         cursor = c;
         anchor = an;
         scrollY = y;
-        applyView();
+        if (fillEdit(text, false)) {
+            applyView();
+        } // else completeFill() does, the position may be past the first piece
     } else {
+        if (filling) {
+            cancelFill();
+            syncLoading();
+        }
         pending = text;
         hasPending = true;
         ++contentVersion;
         setModified(false);
+    }
+}
+
+namespace
+{
+// Text is put in at once up to this many UTF-16 units.
+constexpr qsizetype firstPieceUnits = 64 * 1024; // about 40 ms of formatted Markdown
+constexpr qsizetype minPieceUnits = 8 * 1024;
+constexpr qsizetype maxPieceUnits = 1024 * 1024;
+constexpr qsizetype startPieceUnits = 64 * 1024;
+constexpr qint64 stepTargetNs = 10'000'000; // main-thread time wanted per piece
+
+// Where the piece that starts at `from` ends: after the first line break at
+// or past `from + want`, or at the end. A line is never cut: appending to a
+// block lays all of it out again, so a long line cut in many pieces would cost
+// the square of its length; whole, it costs what setting the text did.
+qsizetype pieceEnd(const QString &t, qsizetype from, qsizetype want)
+{
+    const qsizetype target = from + want;
+    if (target >= t.size()) {
+        return t.size();
+    }
+    const qsizetype nl = t.indexOf(QLatin1Char('\n'), target - 1); // the break may be the piece's last unit
+    return nl < 0 ? t.size() : nl + 1;
+}
+} // namespace
+
+void Document::Private::syncLoading()
+{
+    if (shownLoading != isLoading()) {
+        shownLoading = isLoading();
+        emitKeepingView(&Document::loadingChanged);
+    }
+}
+
+// The TextEdit is read-only while the document is read-only or loading, and
+// QQuickTextEdit::setReadOnly moves the caret to the end (and the view
+// follows it there). Emits `changed` and puts back the caret, selection and
+// scroll, and what the session keeps, which the view saves the moved caret to.
+int Document::Private::editAnchor() const
+{
+    const int start = textEdit->property("selectionStart").toInt();
+    const int end = textEdit->property("selectionEnd").toInt();
+    return textEdit->property("cursorPosition").toInt() == start ? end : start;
+}
+
+void Document::Private::emitKeepingView(void (Document::*changed)())
+{
+    if (!textEdit || !qdoc) {
+        Q_EMIT(q->*changed)();
+        return;
+    }
+    const QPointer<QQuickItem> edit = textEdit;
+    const QPointer<QQuickItem> flick = flickable();
+    const int c = edit->property("cursorPosition").toInt();
+    const int a = editAnchor();
+    const qreal y = flick ? flick->property("contentY").toReal() : 0;
+    const int keptCursor = cursor;
+    const int keptAnchor = anchor;
+    const qreal keptScroll = scrollY;
+    Q_EMIT(q->*changed)();
+    if (edit && edit == textEdit) {
+        if (a != c) {
+            QMetaObject::invokeMethod(edit, "select", Q_ARG(int, a), Q_ARG(int, c));
+        } else {
+            edit->setProperty("cursorPosition", c);
+        }
+        if (flick) {
+            flick->setProperty("contentY", y);
+        }
+    }
+    cursor = keptCursor;
+    anchor = keptAnchor;
+    scrollY = keptScroll;
+}
+
+void Document::Private::setLoading(bool on)
+{
+    loading = on;
+    syncLoading();
+}
+
+void Document::Private::cancelFill()
+{
+    ++fillGeneration;
+    fillTimer.stop();
+    if (!filling) {
+        return;
+    }
+    filling = false;
+    fillText.clear();
+    fillPos = 0;
+    if (qdoc) {
+        qdoc->setUndoRedoEnabled(true);
+    }
+}
+
+bool Document::Private::fillEdit(const QString &text, bool modifiedAfter)
+{
+    ++countGeneration; // a count of the old text, still running, is stale
+    // While filling, qdoc's own modificationChanged isn't passed on (it's
+    // fillModified that counts): tell a change here.
+    const bool wasModified = isModified();
+    auto tellModified = [this, wasModified] {
+        if (isModified() != wasModified) {
+            Q_EMIT q->modifiedChanged();
+        }
+    };
+    cancelFill();
+    if (text.size() <= firstPieceUnits) {
+        settingText = true;
+        textEdit->setProperty("text", text);
+        qdoc->setModified(modifiedAfter);
+        settingText = false;
+        tellModified();
+        syncLoading();
+        return true;
+    }
+    filling = true;
+    fillText = text;
+    fillModified = modifiedAfter;
+    fillPiece = startPieceUnits;
+    qdoc->setUndoRedoEnabled(false);
+    const qsizetype end = pieceEnd(text, 0, firstPieceUnits);
+    settingText = true;
+    textEdit->setProperty("text", text.left(end));
+    qdoc->setModified(false);
+    settingText = false;
+    fillPos = end;
+    tellModified();
+    syncLoading();
+    const QQuickItem *flick = flickable();
+    fillBaseCursor = textEdit->property("cursorPosition").toInt();
+    fillBaseAnchor = editAnchor();
+    fillBaseScroll = flick ? flick->property("contentY").toReal() : 0;
+    fillTimer.start();
+    return false;
+}
+
+void Document::Private::fillStep()
+{
+    if (!filling) {
+        return;
+    }
+    if (!textEdit || !qdoc) {
+        // Both are detached through setTextEdit, so this is a TextEdit that
+        // died: keep the whole text for the next one.
+        pending = fillText;
+        hasPending = true;
+        modified = fillModified;
+        cancelFill();
+        syncLoading();
+        if (recheck && !saving && !loading) {
+            recheck = false;
+            checkOnDisk();
+        }
+        return;
+    }
+    QElapsedTimer clock;
+    clock.start();
+    const quint64 generation = fillGeneration;
+    const qsizetype end = pieceEnd(fillText, fillPos, fillPiece);
+    settingText = true;
+    appending = true;
+    {
+        QTextCursor cursor(qdoc);
+        cursor.movePosition(QTextCursor::End);
+        cursor.insertText(fillText.mid(fillPos, end - fillPos));
+    }
+    qdoc->setModified(false);
+    appending = false;
+    settingText = false;
+    if (generation != fillGeneration) {
+        return; // a handler of the change restarted or ended the fill
+    }
+    fillPos = end;
+    if (fillPos >= fillText.size()) {
+        completeFill();
+        return;
+    }
+    // Aim at stepTargetNs per piece, changing by at most half or double a time.
+    const double scale = double(stepTargetNs) / double(qMax<qint64>(clock.nsecsElapsed(), 1));
+    fillPiece = qBound(minPieceUnits, qsizetype(double(fillPiece) * qBound(0.5, scale, 2.0)), maxPieceUnits);
+    fillTimer.start();
+}
+
+void Document::Private::completeFill()
+{
+    const bool on = fillModified;
+    cancelFill(); // undo is back on, with nothing in it
+    settingText = true; // isModified() was `on` all along: nothing to tell
+    qdoc->setModified(on);
+    settingText = false;
+    syncLoading(); // the editor is writable again
+    // The fill leaves the caret and the view where the first piece put them:
+    // a change is the user's (read-only takes clicks and the wheel), and wins
+    // over what the session or the reload had. A click takes the caret and
+    // the view as they are; a scroll alone keeps the kept caret. (A click
+    // where the caret already was can't be told from none, and a window
+    // resized mid-fill can move the view like a scroll: rare, and the kept
+    // values win or lose a little.)
+    const QPointer<QQuickItem> flick = flickable();
+    const int c = textEdit ? textEdit->property("cursorPosition").toInt() : 0;
+    const int a = textEdit ? editAnchor() : 0;
+    const qreal y = flick ? flick->property("contentY").toReal() : 0;
+    if (!textEdit) {
+        // A handler of loadingChanged let it go: setTextEdit kept the state.
+    } else if (c != fillBaseCursor || a != fillBaseAnchor) {
+        cursor = c;
+        anchor = a;
+        scrollY = y;
+    } else if (qAbs(y - fillBaseScroll) >= 0.5) {
+        scrollY = y;
+        applyView(); // the caret; the view follows it there
+        if (flick) {
+            flick->setProperty("contentY", y); // and comes back
+        }
+    } else if (cursor || anchor || scrollY > 0) {
+        applyView();
+    }
+    scheduleCounts();
+    if (recheck && !saving && !loading) {
+        recheck = false;
+        checkOnDisk();
     }
 }
 
@@ -606,7 +857,8 @@ void Document::Private::scheduleCounts()
 
 void Document::Private::updateCounts()
 {
-    const qsizetype size = qdoc ? qdoc->characterCount() : pending.size();
+    // Mid-fill, text() is all of it: the count is the file's from the start.
+    const qsizetype size = filling ? fillText.size() : qdoc ? qdoc->characterCount() : pending.size();
     auto apply = [this](const Counts &c) {
         if (c.characters != counts.characters || c.words != counts.words || c.lines != counts.lines) {
             counts = c;
@@ -738,7 +990,7 @@ void Document::Private::checkOnDisk()
     if (path.isEmpty()) {
         return;
     }
-    if (saving || loading) {
+    if (saving || isLoading()) {
         recheck = true;
         return;
     }
@@ -801,8 +1053,7 @@ void Document::Private::startLoad(LoadMode mode, int forcedEncoding)
         loaded = false;
     }
     if (mode != SilentReload && !loading) {
-        loading = true;
-        Q_EMIT q->loadingChanged();
+        setLoading(true);
     }
     auto *watcher = new QFutureWatcher<LoadResult>(q);
     QObject::connect(watcher, &QFutureWatcherBase::finished, q, [this, watcher, gen, mode] {
@@ -810,7 +1061,7 @@ void Document::Private::startLoad(LoadMode mode, int forcedEncoding)
         watcher->deleteLater();
         if (gen == loadGeneration) {
             finishLoad(result, mode);
-            if (recheck && !saving && !loading) {
+            if (recheck && !saving && !isLoading()) {
                 recheck = false;
                 checkOnDisk();
             }
@@ -821,10 +1072,12 @@ void Document::Private::startLoad(LoadMode mode, int forcedEncoding)
 
 void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
 {
-    if (loading) {
-        loading = false;
-        Q_EMIT q->loadingChanged();
-    }
+    // Loading ends when the text is in, which may be later (a fill).
+    struct Settle {
+        Private *p;
+        ~Settle() { p->syncLoading(); }
+    } settle{this};
+    loading = false;
     if (mode == SilentReload && isModified()) {
         // Typed while the file was being read: it is a conflict now.
         if (!keepMine) {
@@ -861,7 +1114,7 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
         putText(QString(), false);
         Q_EMIT q->bannerChanged();
         if (!wasReadOnly) {
-            Q_EMIT q->readOnlyChanged();
+            emitKeepingView(&Document::readOnlyChanged);
         }
         return;
     }
@@ -897,7 +1150,7 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
     putText(r.text, mode != Initial);
     scheduleCounts();
     if (readOnly != wasReadOnly) {
-        Q_EMIT q->readOnlyChanged();
+        emitKeepingView(&Document::readOnlyChanged);
     }
     Q_EMIT q->bannerChanged();
 }
@@ -1085,7 +1338,7 @@ bool Document::isModified() const
 
 bool Document::isLoading() const
 {
-    return d->loading;
+    return d->isLoading();
 }
 
 bool Document::isMarkdown() const
@@ -1197,15 +1450,19 @@ void Document::setTextEdit(QQuickItem *edit)
     if (edit == d->textEdit) {
         return;
     }
-    if (d->qdoc) {
-        // Keep what is in the old TextEdit.
+    if (d->qdoc || d->filling) {
+        // Keep what is in the old TextEdit. Mid-fill, that is the whole text
+        // even when the old one died first: the next one gets all of it.
         d->cursor = cursorPosition();
         d->anchor = selectionAnchor();
         d->scrollY = scrollY();
-        d->modified = d->qdoc->isModified();
-        d->pending = text();
+        d->modified = d->isModified();
+        d->pending = text(); // all of it, also in the middle of a fill
         d->hasPending = true;
-        disconnect(d->qdoc, nullptr, this, nullptr);
+        d->cancelFill(); // before qdoc goes: it gets undo back
+        if (d->qdoc) {
+            disconnect(d->qdoc, nullptr, this, nullptr);
+        }
         d->qdoc = nullptr;
     }
     d->textEdit = edit;
@@ -1220,34 +1477,40 @@ void Document::setTextEdit(QQuickItem *edit)
             d->connectTextDocument();
             const bool wasModified = d->modified;
             if (d->hasPending) {
-                d->settingText = true;
-                edit->setProperty("text", d->pending);
-                d->settingText = false;
+                const QString text = std::move(d->pending);
                 d->pending.clear();
                 d->hasPending = false;
-                d->applyView();
+                if (d->fillEdit(text, wasModified)) {
+                    d->applyView();
+                } // else completeFill() does
+            } else {
+                d->qdoc->setModified(wasModified);
             }
-            d->qdoc->setModified(wasModified);
             d->scheduleCounts();
         }
     }
+    d->syncLoading();
     Q_EMIT textEditChanged();
 }
 
 int Document::cursorPosition() const
 {
-    return d->textEdit ? d->textEdit->property("cursorPosition").toInt() : d->cursor;
+    // The text is still coming: the edit's caret is not where it will be.
+    return d->textEdit && !d->filling ? d->textEdit->property("cursorPosition").toInt() : d->cursor;
 }
 
 void Document::setCursorPosition(int position)
 {
+    if (d->filling) {
+        return; // the view hasn't got the text yet, and keeps what the session had
+    }
     d->cursor = position;
     Q_EMIT viewStateChanged();
 }
 
 int Document::selectionAnchor() const
 {
-    if (!d->textEdit) {
+    if (!d->textEdit || d->filling) {
         return d->anchor;
     }
     const int start = d->textEdit->property("selectionStart").toInt();
@@ -1258,12 +1521,18 @@ int Document::selectionAnchor() const
 
 void Document::setSelectionAnchor(int position)
 {
+    if (d->filling) {
+        return;
+    }
     d->anchor = position;
     Q_EMIT viewStateChanged();
 }
 
 qreal Document::scrollY() const
 {
+    if (d->filling) {
+        return d->scrollY;
+    }
     if (QQuickItem *flick = d->flickable()) {
         return flick->property("contentY").toReal();
     }
@@ -1272,6 +1541,9 @@ qreal Document::scrollY() const
 
 void Document::setScrollY(qreal y)
 {
+    if (d->filling) {
+        return;
+    }
     d->scrollY = y;
     Q_EMIT viewStateChanged();
 }
@@ -1293,6 +1565,9 @@ int Document::lineCount() const
 
 QString Document::text() const
 {
+    if (d->filling) {
+        return d->fillText; // the QTextDocument has only the first pieces
+    }
     if (!d->qdoc) {
         return d->pending;
     }
@@ -1315,7 +1590,7 @@ void Document::save()
         Q_EMIT saveAsRequested();
         return;
     }
-    if (d->loading || !d->loaded) {
+    if (d->isLoading() || !d->loaded) {
         // Nothing of the file's is here to write.
         Q_EMIT saveFailed(tr("The file is still being read."));
         return;
@@ -1364,9 +1639,9 @@ void Document::saveAs(const QUrl &url)
             }
         }
     }
-    if (d->loading || !d->loaded) {
+    if (d->isLoading() || !d->loaded) {
         // Writing now would put an empty or partial text under the new name.
-        Q_EMIT saveFailed(d->loading ? tr("The file is still being read.") : tr("The file couldn't be read, so there is nothing to save."));
+        Q_EMIT saveFailed(d->isLoading() ? tr("The file is still being read.") : tr("The file couldn't be read, so there is nothing to save."));
         return;
     }
     d->unwatch();
@@ -1384,7 +1659,7 @@ void Document::saveAs(const QUrl &url)
     d->watch();
     Q_EMIT pathChanged();
     Q_EMIT titleChanged();
-    Q_EMIT readOnlyChanged();
+    d->emitKeepingView(&Document::readOnlyChanged);
     Q_EMIT bannerChanged();
     d->startSave();
 }
@@ -1470,7 +1745,8 @@ QVariantMap Document::find(const QString &text, int flags, int from, bool backwa
     if (text.isEmpty()) {
         return noMatch();
     }
-    const QString t = this->text();
+    // Mid-fill, only what the editor has: a match can't be selected past it.
+    const QString t = d->filling ? d->fillText.left(d->fillPos) : this->text();
     if (t.isEmpty()) {
         return noMatch();
     }
@@ -1522,7 +1798,7 @@ QVariantMap Document::find(const QString &text, int flags, int from, bool backwa
 
 void Document::insertText(const QString &text)
 {
-    if (!d->qdoc || !d->textEdit || d->readOnly || d->loading) {
+    if (!d->qdoc || !d->textEdit || d->readOnly || d->isLoading()) {
         return;
     }
     QTextCursor c(d->qdoc);
@@ -1536,7 +1812,7 @@ void Document::insertText(const QString &text)
 
 int Document::replaceAll(const QString &text, const QString &replacement, int flags)
 {
-    if (text.isEmpty() || !d->qdoc || d->readOnly) {
+    if (text.isEmpty() || !d->qdoc || d->readOnly || d->filling) {
         return 0;
     }
     const QString t = this->text();
@@ -1562,7 +1838,7 @@ int Document::replaceAll(const QString &text, const QString &replacement, int fl
 
 QVariantMap Document::replaceOne(const QString &text, const QString &replacement, int flags, int start, int end)
 {
-    if (text.isEmpty() || !d->qdoc || d->readOnly) {
+    if (text.isEmpty() || !d->qdoc || d->readOnly || d->filling) {
         return find(text, flags, start, false);
     }
     const QString t = this->text();

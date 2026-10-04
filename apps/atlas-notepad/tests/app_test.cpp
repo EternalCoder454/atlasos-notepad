@@ -19,6 +19,7 @@
 #include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QTextDocument>
 #include <QTest>
 
 #include <memory>
@@ -1539,6 +1540,456 @@ private Q_SLOTS:
         QVERIFY(m_app->closeWindow(second, true));
         QTest::qWait(50);
         QCOMPARE(m_app->windows().size(), 1);
+    }
+
+    // ---- Big texts reach the TextEdit in pieces, and never go missing.
+
+    static QByteArray bigText(bool longLines)
+    {
+        QByteArray out;
+        const int width = longLines ? 60'000 : 40;
+        const qsizetype target = longLines ? 3'000'000 : 4'000'000;
+        for (int n = 0; out.size() < target; ++n) {
+            out += QByteArray::number(n) + ' ';
+            out += QByteArray(width, char('a' + n % 26));
+            out += n % 7 == 3 ? "\r\n" : "\n";
+            if (n % 5 == 0) {
+                out += "\xC3\xA9\xF0\x9F\x98\x80 caf\xC3\xA9\n"; // a pair of surrogates among them
+            }
+        }
+        return out;
+    }
+    static QString expectedOf(const QByteArray &bytes)
+    {
+        // What a load gives: line ends as LF.
+        QString t = QString::fromUtf8(bytes);
+        t.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+        return t;
+    }
+    // Opened with no TextEdit (so the text is pending), then attached: the fill starts.
+    Document *openBig(const QByteArray &bytes, const QString &name = QStringLiteral("big.txt"))
+    {
+        Document *doc = openFile(newList(), write(name, bytes));
+        return doc;
+    }
+    static bool filled(Document *doc, int ms = 60000)
+    {
+        return QTest::qWaitFor([&] { return !doc->isLoading(); }, ms);
+    }
+    static QString editText(Document *doc)
+    {
+        return doc->d->qdoc ? doc->d->qdoc->toPlainText() : QString();
+    }
+
+    void bigTextArrivesComplete_data()
+    {
+        QTest::addColumn<bool>("longLines");
+        QTest::newRow("many lines") << false;
+        QTest::newRow("long lines") << true;
+    }
+
+    void bigTextArrivesComplete()
+    {
+        QFETCH(bool, longLines);
+        const QByteArray bytes = bigText(longLines);
+        const QString expected = expectedOf(bytes);
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        QCOMPARE(doc->text(), expected);
+        QSignalSpy loading(doc, &Document::loadingChanged);
+        QSignalSpy modified(doc, &Document::modifiedChanged);
+        QSignalSpy edited(doc, &Document::edited);
+        attach(doc);
+        QVERIFY(doc->isLoading());
+        QVERIFY(doc->d->qdoc->characterCount() < expected.size()); // only the first piece is in
+        QCOMPARE(doc->text(), expected); // and the text is whole all the same
+        QVERIFY(!doc->isModified());
+        const quint64 version = doc->d->contentVersion;
+        QVERIFY(filled(doc));
+        QCOMPARE(loading.size(), 2);
+        QCOMPARE(doc->text(), expected);
+        QVERIFY(editText(doc) == expected);
+        QVERIFY(!doc->isModified());
+        QCOMPARE(modified.size(), 0);
+        QCOMPARE(edited.size(), 0);
+        QCOMPARE(doc->d->contentVersion, version);
+        QVERIFY(!doc->d->qdoc->isUndoAvailable());
+        QVERIFY(!doc->d->qdoc->isRedoAvailable());
+        QVERIFY(doc->d->qdoc->isUndoRedoEnabled());
+        // It is a text like any other now: an edit is one undo.
+        insert(doc, 0, QStringLiteral("x"));
+        QVERIFY(doc->isModified());
+        QMetaObject::invokeMethod(doc->textEdit(), "undo");
+        QCOMPARE(doc->text(), expected);
+    }
+
+    void oneHugeLineArrivesComplete()
+    {
+        // No line break to cut at: a line is put in whole.
+        QByteArray bytes = QByteArray("head\n") + QByteArray(1'500'000, 'x') + "\n" + QByteArray(300'000, 'y') + "\ntail\n";
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        attach(doc);
+        QCOMPARE(doc->text(), expectedOf(bytes));
+        QVERIFY(filled(doc));
+        QVERIFY(editText(doc) == expectedOf(bytes));
+        QVERIFY(!doc->isModified());
+    }
+
+    void bigTextIsNotWrittenOverTheFileMidFill()
+    {
+        const QByteArray bytes = bigText(false);
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        attach(doc);
+        QVERIFY(doc->isLoading());
+        QSignalSpy failed(doc, &Document::saveFailed);
+        doc->save();
+        QCOMPARE(failed.size(), 1);
+        QVERIFY(filled(doc));
+        QCOMPARE(read(doc->path()), bytes);
+    }
+
+    void bigTextSessionKeepsFullText()
+    {
+        m_app->start({});
+        Document *doc = m_app->windows().first()->current();
+        const QByteArray bytes = bigText(false);
+        // An untitled tab with a big text: restored, modified, being filled.
+        doc->d->pending = QString::fromUtf8(bytes);
+        doc->d->hasPending = true;
+        doc->d->modified = true;
+        attach(doc);
+        QVERIFY(doc->isLoading());
+        QVERIFY(doc->isModified());
+        m_app->saveSession();
+        const QDir texts(sessionDir() + QStringLiteral("/texts"));
+        const QStringList names = texts.entryList(QDir::Files);
+        QCOMPARE(names.size(), 1);
+        QCOMPARE(read(texts.filePath(names.first())), bytes);
+        QVERIFY(filled(doc));
+        QVERIFY(doc->isModified());
+        QCOMPARE(doc->text(), expectedOf(bytes));
+    }
+
+    void reloadMidFillGivesTheNewText()
+    {
+        const QByteArray bytes = bigText(false);
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        attach(doc);
+        QVERIFY(doc->isLoading());
+        QTest::qWait(5);
+        QVERIFY(doc->isLoading());
+        const QByteArray other = bigText(true);
+        write(QStringLiteral("big.txt"), other);
+        doc->reload();
+        QVERIFY(doc->isLoading());
+        QVERIFY(filled(doc));
+        QVERIFY(doc->d->qdoc->isUndoRedoEnabled());
+        QCOMPARE(doc->text(), expectedOf(other));
+        QVERIFY(editText(doc) == expectedOf(other));
+        QVERIFY(!doc->isModified());
+        // And to a small text.
+        write(QStringLiteral("big.txt"), "small\n");
+        attach(doc); // (a new TextEdit: fills again)
+        QVERIFY(doc->isLoading());
+        doc->reload();
+        QVERIFY(filled(doc));
+        QCOMPARE(doc->text(), QStringLiteral("small\n"));
+        QCOMPARE(editText(doc), QStringLiteral("small\n"));
+        QVERIFY(!doc->isModified());
+    }
+
+    void detachMidFillKeepsTheText()
+    {
+        const QByteArray bytes = bigText(false);
+        const QString expected = expectedOf(bytes);
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        QQuickItem *first = attach(doc);
+        QVERIFY(doc->isLoading());
+        QTest::qWait(5);
+        QVERIFY(doc->isLoading());
+        QSignalSpy loading(doc, &Document::loadingChanged);
+        doc->setTextEdit(nullptr);
+        QVERIFY(!doc->isLoading());
+        QCOMPARE(loading.size(), 1);
+        QVERIFY(doc->d->hasPending);
+        QCOMPARE(doc->text(), expected);
+        QVERIFY(!doc->isModified());
+        QTest::qWait(30); // no timer fires into the detached text
+        QCOMPARE(doc->text(), expected);
+        QVERIFY(first->property("length").toInt() < expected.size());
+        // Another TextEdit gets all of it.
+        attach(doc);
+        QVERIFY(doc->isLoading());
+        QVERIFY(filled(doc));
+        QCOMPARE(doc->text(), expected);
+        QVERIFY(editText(doc) == expected);
+        QVERIFY(!doc->isModified());
+    }
+
+    void otherTextEditMidFillGetsAllOfIt()
+    {
+        const QByteArray bytes = bigText(false);
+        const QString expected = expectedOf(bytes);
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        attach(doc);
+        QTest::qWait(5);
+        QSignalSpy loading(doc, &Document::loadingChanged);
+        attach(doc);
+        QVERIFY(doc->isLoading());
+        QCOMPARE(loading.size(), 0); // never looked finished in between
+        QCOMPARE(doc->text(), expected);
+        QVERIFY(filled(doc));
+        QVERIFY(editText(doc) == expected);
+    }
+
+    // The TextEdit dies mid-fill (no setTextEdit(nullptr)) and another comes
+    // before the next piece: it gets all of the text, not the rest of it.
+    void editDiesMidFillNextGetsAllOfIt()
+    {
+        const QByteArray bytes = bigText(false);
+        const QString expected = expectedOf(bytes);
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        QQuickItem *first = attach(doc);
+        QTest::qWait(5);
+        QVERIFY(doc->isLoading());
+        std::erase_if(m_edits, [first](const auto &e) { return e.get() == first; });
+        attach(doc);
+        QVERIFY(filled(doc));
+        QCOMPARE(doc->text(), expected);
+        QVERIFY(editText(doc) == expected);
+        QVERIFY(!doc->isModified());
+    }
+
+    // Reloading a modified document with a big text tells that it isn't
+    // modified any more (the tab's mark goes).
+    void bigReloadOfModifiedTellsModified()
+    {
+        const QString path = write(QStringLiteral("big.txt"), "small\n");
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        attach(doc);
+        QVERIFY(filled(doc));
+        insert(doc, 0, QStringLiteral("x"));
+        QVERIFY(doc->isModified());
+        write(QStringLiteral("big.txt"), bigText(false));
+        QSignalSpy modified(doc, &Document::modifiedChanged);
+        doc->reload();
+        QVERIFY(filled(doc));
+        QVERIFY(!doc->isModified());
+        QCOMPARE(modified.size(), 1); // once, from the fill
+    }
+
+    // Find mid-fill looks only in what the editor has.
+    void findMidFillStaysInTheEditor()
+    {
+        QByteArray bytes = bigText(false);
+        bytes.append("needle at the very end\n");
+        Document *doc = openBig(bytes);
+        QVERIFY(doc);
+        attach(doc);
+        QTest::qWait(5);
+        QVERIFY(doc->isLoading());
+        QCOMPARE(doc->find(QStringLiteral("needle"), 0, 0, false).value(QStringLiteral("count")).toInt(), 0);
+        QVERIFY(filled(doc));
+        QCOMPARE(doc->find(QStringLiteral("needle"), 0, 0, false).value(QStringLiteral("count")).toInt(), 1);
+    }
+
+    // A TextEdit as EditorView has it: read-only while the document is
+    // read-only or loading, and saving its caret to the document.
+    QQuickItem *attachAsView(Document *doc)
+    {
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nTextEdit {\n"
+                          "    property QtObject doc\n"
+                          "    textFormat: TextEdit.PlainText\n"
+                          "    readOnly: doc !== null && (doc.readOnly || doc.loading)\n"
+                          "    onCursorPositionChanged: if (doc) doc.cursorPosition = cursorPosition\n"
+                          "}",
+                          QUrl());
+        auto *edit = qobject_cast<QQuickItem *>(component.createWithInitialProperties({{QStringLiteral("doc"), QVariant::fromValue(doc)}}));
+        m_edits.emplace_back(edit);
+        doc->setTextEdit(edit);
+        return edit;
+    }
+
+    // QQuickTextEdit::setReadOnly moves the caret to the end: a load, which
+    // makes the editor read-only and then not, must not leave it there.
+    void openStartsAtTheTop_data()
+    {
+        QTest::addColumn<QByteArray>("bytes");
+        QTest::newRow("small") << QByteArray("one\ntwo\nthree\n").repeated(100);
+        QTest::newRow("filled") << bigText(false);
+        QTest::newRow("read-only") << QByteArray("bin\0ary\nmore\n", 13).repeated(100);
+    }
+
+    void openStartsAtTheTop()
+    {
+        QFETCH(QByteArray, bytes);
+        DocumentList *list = newList();
+        list->open({QUrl::fromLocalFile(write(QStringLiteral("top.txt"), bytes))});
+        Document *doc = list->current();
+        QVERIFY(doc);
+        QQuickItem *edit = attachAsView(doc); // before the text is read, as the window does
+        QVERIFY(doc->isLoading());
+        QVERIFY(edit->property("readOnly").toBool());
+        QVERIFY(filled(doc));
+        QVERIFY(doc->text().size() > 100);
+        QCOMPARE(edit->property("cursorPosition").toInt(), 0);
+        QCOMPARE(doc->cursorPosition(), 0);
+    }
+
+    // And a reload keeps the caret where it was.
+    void reloadKeepsTheCaret()
+    {
+        const QString path = write(QStringLiteral("caret.txt"), QByteArray("one\ntwo\nthree\n").repeated(100));
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        QQuickItem *edit = attachAsView(doc);
+        edit->setProperty("cursorPosition", 9);
+        QSignalSpy readOnly(edit, SIGNAL(readOnlyChanged(bool)));
+        doc->reload();
+        QVERIFY(filled(doc));
+        QCOMPARE(readOnly.size(), 2); // on and off again
+        QCOMPARE(edit->property("cursorPosition").toInt(), 9);
+        QCOMPARE(doc->cursorPosition(), 9);
+    }
+
+    // A click during the fill (read-only takes clicks) wins over the
+    // session's caret, and keeps the view; a scroll alone keeps the
+    // session's caret and the scroll; with neither, the session's caret is
+    // put back.
+    void moveMidFillWins_data()
+    {
+        QTest::addColumn<bool>("click");
+        QTest::addColumn<bool>("scroll");
+        QTest::newRow("neither") << false << false;
+        QTest::newRow("click") << true << false;
+        QTest::newRow("scroll") << false << true;
+        QTest::newRow("both") << true << true;
+    }
+
+    void moveMidFillWins()
+    {
+        QFETCH(bool, click);
+        QFETCH(bool, scroll);
+        Document *doc = openBig(bigText(false));
+        QVERIFY(doc);
+        doc->d->cursor = doc->d->anchor = 1000; // as the session had it
+        QQuickItem *flick = attachInFlickable(doc);
+        QVERIFY(flick);
+        QQuickItem *edit = doc->textEdit();
+        QVERIFY(doc->isLoading());
+        // What a move is told from: the first piece leaves the caret at 0.
+        QCOMPARE(edit->property("cursorPosition").toInt(), 0);
+        QCOMPARE(doc->d->fillBaseCursor, 0);
+        if (click) {
+            edit->setProperty("cursorPosition", 5);
+        }
+        if (scroll) {
+            flick->setProperty("contentY", 5000.0);
+        }
+        QVERIFY(filled(doc));
+        const int caret = click ? 5 : 1000;
+        QCOMPARE(edit->property("cursorPosition").toInt(), caret);
+        QCOMPARE(doc->cursorPosition(), caret);
+        QCOMPARE(doc->d->cursor, caret);
+        if (scroll) {
+            QTest::qWait(50); // past applyView's queued scroll
+            QCOMPARE(flick->property("contentY").toReal(), 5000.0);
+            QCOMPARE(doc->scrollY(), 5000.0);
+        }
+    }
+
+    // A TextEdit in a Flickable as EditorView has them: the view saves the
+    // caret and scroll on a caret move, and keeps the scroll in bounds.
+    QQuickItem *attachInFlickable(Document *doc)
+    {
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nFlickable {\n"
+                          "    id: flick\n"
+                          "    property QtObject doc\n"
+                          "    property alias edit: e\n"
+                          "    width: 200; height: 100\n"
+                          "    contentHeight: e.height\n"
+                          "    onContentHeightChanged: contentY = Math.max(0, Math.min(contentY, contentHeight - height))\n"
+                          "    TextEdit {\n"
+                          "        id: e\n"
+                          "        textFormat: TextEdit.PlainText\n"
+                          "        readOnly: flick.doc !== null && (flick.doc.readOnly || flick.doc.loading)\n"
+                          "        onCursorPositionChanged: if (flick.doc) { flick.doc.cursorPosition = cursorPosition; flick.doc.scrollY = flick.contentY; }\n"
+                          "    }\n"
+                          "}",
+                          QUrl());
+        auto *flick = qobject_cast<QQuickItem *>(component.createWithInitialProperties({{QStringLiteral("doc"), QVariant::fromValue(doc)}}));
+        if (!flick) {
+            return nullptr;
+        }
+        m_edits.emplace_back(flick);
+        doc->setTextEdit(flick->property("edit").value<QQuickItem *>());
+        return flick;
+    }
+
+    // The saved scroll comes back with a caret that isn't at 0, though
+    // moving the caret makes the view save its (top) scroll.
+    void scrollComesBackWithTheCaret()
+    {
+        Document *doc = openFile(newList(), write(QStringLiteral("scroll.txt"), QByteArray("one\ntwo\nthree\n").repeated(100)));
+        QVERIFY(doc);
+        doc->d->cursor = doc->d->anchor = 500;
+        doc->d->scrollY = 300;
+        QQuickItem *flick = attachInFlickable(doc);
+        QVERIFY(flick);
+        QTRY_COMPARE(flick->property("contentY").toReal(), 300.0);
+        QCOMPARE(doc->textEdit()->property("cursorPosition").toInt(), 500);
+    }
+
+    // A reload of a big text keeps a scroll past the first piece, though the
+    // view clamps it to the first piece meanwhile: that isn't the user's.
+    void reloadKeepsAScrollPastTheFirstPiece()
+    {
+        Document *doc = openBig(bigText(false));
+        QVERIFY(doc);
+        QQuickItem *flick = attachInFlickable(doc);
+        QVERIFY(flick);
+        QVERIFY(filled(doc));
+        QVERIFY(flick->property("contentHeight").toReal() > 300'000);
+        flick->setProperty("contentY", 200'000.0); // the wheel: the caret stays at 0
+        doc->reload();
+        QVERIFY(doc->isLoading());
+        QVERIFY(filled(doc));
+        QTRY_COMPARE(flick->property("contentY").toReal(), 200'000.0);
+        QCOMPARE(doc->scrollY(), 200'000.0);
+        QCOMPARE(doc->cursorPosition(), 0);
+    }
+
+    void closingMidFillIsClean()
+    {
+        Document *doc = openBig(bigText(false));
+        QVERIFY(doc);
+        attach(doc);
+        QTest::qWait(5);
+        QVERIFY(doc->isLoading());
+        newList()->close(newList()->currentIndex());
+        m_edits.clear();
+        QTest::qWait(50); // a timer that outlived it would crash here
+        restart();
+    }
+
+    void destroyedMidFillIsClean()
+    {
+        Document *doc = openBig(bigText(false));
+        QVERIFY(doc);
+        attach(doc);
+        QTest::qWait(5);
+        QVERIFY(doc->isLoading());
+        restart();
+        QTest::qWait(50);
     }
 };
 

@@ -65,40 +65,26 @@ QTextDocument *Bench::document() const
 
 void Bench::start()
 {
-    QFile f(m_file);
-    if (!f.open(QIODevice::ReadOnly)) {
-        fprintf(stderr, "bench: can't read %s\n", qPrintable(m_file));
-        QCoreApplication::exit(2);
-        return;
-    }
-    const QString text = QString::fromUtf8(f.readAll());
     // A blinking caret would add frames of its own.
     QGuiApplication::styleHints()->setCursorFlashTime(0);
     m_clock.start();
-    m_loading = true;
-    m_loadStart = m_clock.nsecsElapsed();
-    m_edit->setProperty("text", text);
+    // The file is already open (main.cpp times that): let the delayed first
+    // highlight and layout run, then start.
+    QTimer::singleShot(800, this, [this] {
+        const qint64 t = m_clock.nsecsElapsed();
+        m_editor->rehighlightNow();
+        m_highlightMs = double(m_clock.nsecsElapsed() - t) / 1e6;
+        QTextDocument *doc = document();
+        const QTextBlock middle = doc->findBlockByNumber(doc->blockCount() / 2);
+        m_edit->forceActiveFocus();
+        m_edit->setProperty("cursorPosition", middle.position() + middle.length() - 1);
+        QTimer::singleShot(500, this, &Bench::next);
+    });
 }
 
 void Bench::frame()
 {
     const qint64 now = m_clock.nsecsElapsed();
-    if (m_loading) {
-        m_loading = false;
-        m_loadMs = double(now - m_loadStart) / 1e6;
-        // Let the delayed first highlight and layout run, then start.
-        QTimer::singleShot(800, this, [this] {
-            const qint64 t = m_clock.nsecsElapsed();
-            m_editor->rehighlightNow();
-            m_highlightMs = double(m_clock.nsecsElapsed() - t) / 1e6;
-            QTextDocument *doc = document();
-            const QTextBlock middle = doc->findBlockByNumber(doc->blockCount() / 2);
-            m_edit->forceActiveFocus();
-            m_edit->setProperty("cursorPosition", middle.position() + middle.length() - 1);
-            QTimer::singleShot(500, this, &Bench::next);
-        });
-        return;
-    }
     if (m_sent < 0) {
         return;
     }
@@ -168,7 +154,7 @@ void Bench::finish()
     QTextDocument *doc = document();
     printf("file: %s (%d characters, %d lines), window %dx%d at %.2fx\n", qPrintable(m_file), doc->characterCount(), doc->blockCount(),
            m_window->width(), m_window->height(), m_window->effectiveDevicePixelRatio());
-    printf("load to first frame: %.1f ms; highlight all: %.1f ms\n", m_loadMs, m_highlightMs);
+    printf("highlight all: %.1f ms\n", m_highlightMs);
     for (int g = 0; g < Groups; ++g) {
         line(groupNames[g], m_total[g], m_handle[g]);
     }

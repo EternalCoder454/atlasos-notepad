@@ -142,15 +142,75 @@ int main(int argc, char *argv[])
     }
     if (bench) {
         notepad.setSessionEnabled(false);
+        auto *deadline = new QElapsedTimer;
+        deadline->start();
         notepad.start({parser.value(benchOption)});
         DocumentList *list = notepad.windows().value(0);
         Document *doc = list ? list->current() : nullptr;
         if (!doc) {
             return 2;
         }
+        // Opening as the user sees it: the first frame with text, the frame
+        // with all of it, and the longest the event loop was blocked once
+        // the window was up (a 1 ms timer that should tick on time).
+        // NP_BENCH_OPEN_ONLY=1 adds the longest in the next 2 s and stops.
+        struct Open {
+            qint64 firstFrame = -1, firstText = -1, lastTick = -1, longest = 0;
+        };
+        auto *open = new Open;
+        if (qEnvironmentVariableIntValue("NP_BENCH_OPEN_ONLY")) {
+            QTimer::singleShot(60000, &app, [] {
+                fprintf(stderr, "atlas-notepad: the file never showed\n");
+                QCoreApplication::exit(1);
+            });
+        }
+        auto *tick = new QTimer(&app);
+        tick->setTimerType(Qt::PreciseTimer);
+        tick->setInterval(1);
+        QObject::connect(tick, &QTimer::timeout, &app, [open, deadline] {
+            const qint64 now = deadline->nsecsElapsed();
+            if (open->lastTick >= 0) {
+                open->longest = qMax(open->longest, now - open->lastTick);
+            }
+            open->lastTick = now;
+        });
+        tick->start();
+        if (auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0))) {
+            auto *once = new QObject(window);
+            QObject::connect(window, &QQuickWindow::frameSwapped, once, [once, open, tick, deadline, doc] {
+                const qint64 now = deadline->nsecsElapsed();
+                if (open->firstFrame < 0) {
+                    open->firstFrame = now;
+                    open->lastTick = now; // start-up isn't counted
+                    open->longest = 0;
+                }
+                QQuickItem *edit = doc->textEdit();
+                if (open->firstText < 0 && edit && edit->property("length").toInt() > 0) {
+                    open->firstText = now;
+                }
+                if (open->firstText < 0 || doc->isLoading()) {
+                    return;
+                }
+                open->longest = qMax(open->longest, now - open->lastTick); // a stall this frame ended
+                printf("open: window %.1f ms, first text %.1f ms, all text %.1f ms after start; longest stall %.1f ms\n", double(open->firstFrame) / 1e6,
+                       double(open->firstText) / 1e6, double(now) / 1e6, double(open->longest) / 1e6);
+                fflush(stdout);
+                delete once;
+                if (!qEnvironmentVariableIntValue("NP_BENCH_OPEN_ONLY")) {
+                    tick->stop(); // it would wake the typing bench
+                    return;
+                }
+                // And what follows the text (highlighting, spell check).
+                open->longest = 0;
+                QTimer::singleShot(2000, tick, [open, tick] {
+                    printf("open: longest stall in the 2 s after %.1f ms\n", double(open->longest) / 1e6);
+                    fflush(stdout);
+                    tick->stop();
+                    QCoreApplication::exit(0);
+                });
+            });
+        }
         auto *poll = new QTimer(&app);
-        auto *deadline = new QElapsedTimer;
-        deadline->start();
         const QString file = parser.value(benchOption);
         QObject::connect(poll, &QTimer::timeout, &app, [&, poll, deadline, doc, file] {
             // The window is ready when the file is read and its TextEdit, view
@@ -165,7 +225,9 @@ int main(int argc, char *argv[])
                     view = item;
                 }
                 for (auto *candidate : item->findChildren<MarkdownEditor *>(Qt::FindDirectChildrenOnly)) {
-                    if (candidate->textEdit() == edit) {
+                    // Not attached when the file opens as plain text (over
+                    // Limits::formattedBytes, or not Markdown).
+                    if (candidate->textEdit() == edit || (!candidate->textEdit() && !doc->isMarkdown())) {
                         editor = candidate;
                     }
                 }
@@ -179,6 +241,9 @@ int main(int argc, char *argv[])
                 return;
             }
             poll->stop();
+            if (qEnvironmentVariableIntValue("NP_BENCH_OPEN_ONLY")) {
+                return;
+            }
             // The baseline: the same TextEdit without Markdown.
             if (qEnvironmentVariableIntValue("NP_BENCH_PLAIN")) {
                 editor->setTextEdit(nullptr);

@@ -714,7 +714,7 @@ QQC2.ApplicationWindow {
 
         StatusBarItem {
             readonly property point lineColumn: {
-                const edit = root.view ? root.view.edit : null;
+                const edit = root.view && root.document ? root.view.edit : null;
                 return edit ? root.document.lineColumn(edit.cursorPosition) : Qt.point(1, 1);
             }
             text: qsTr("Ln %1, Col %2").arg(lineColumn.x).arg(lineColumn.y)
