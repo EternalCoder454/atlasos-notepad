@@ -111,6 +111,11 @@ struct Document::Private {
     std::map<Banner, QString> banners;
     QUrl moveFrom, moveTo; // what the Moved banner offers
     bool validating = false; // a KDirNotify move is being checked (one at a time)
+    quint64 validateGen = 0; // which check; a late answer from an older one is ignored
+    QUrl validateTarget; // where the check in flight says the file went
+    QPointer<KJob> validateJob;
+    bool hasPendingMove = false; // a notice that came meanwhile, run after this check
+    QUrl pendingTo; // with hasPendingMove
     void offerMove(const QUrl &from, const QUrl &to);
 
     QPointer<QQuickItem> textEdit;

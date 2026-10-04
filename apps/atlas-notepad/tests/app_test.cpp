@@ -877,9 +877,60 @@ private Q_SLOTS:
         OrgKdeKDirNotifyInterface::emitFileMoved(QUrl::fromLocalFile(a), QUrl::fromLocalFile(b));
         QTRY_COMPARE_WITH_TIMEOUT(doc->banner(), Document::Moved, 20000);
         QCOMPARE(doc->path(), Remote::display(QUrl::fromLocalFile(a))); // not followed by itself
-        doc->followMove();
-        QCOMPARE(doc->path(), Remote::display(QUrl::fromLocalFile(b)));
+        doc->followMove(); // checks the new place first, then goes
+        QTRY_COMPARE_WITH_TIMEOUT(doc->path(), Remote::display(QUrl::fromLocalFile(b)), 20000);
         QTRY_VERIFY_WITH_TIMEOUT(doc->banner() != Document::Moved && doc->banner() != Document::Deleted, 20000);
+    }
+
+    void dirNotifyChainedRenames()
+    {
+        if (!haveBus()) {
+            QSKIP("no session bus");
+        }
+        for (const bool kio : {false, true}) {
+            const QString a = write(QStringLiteral("xa%1.txt").arg(kio), "one\n");
+            const QString b = m_dir + QStringLiteral("/xb%1.txt").arg(kio);
+            const QString c = m_dir + QStringLiteral("/xc%1.txt").arg(kio);
+            DocumentList *list = newList();
+            Document *doc = kio ? openKio(list, a) : openFile(list, a);
+            QVERIFY(doc);
+            // a to b to c in one batch: the tab ends at c.
+            QVERIFY(QFile::rename(a, b));
+            OrgKdeKDirNotifyInterface::emitFileRenamed(QUrl::fromLocalFile(a), QUrl::fromLocalFile(b));
+            QVERIFY(QFile::rename(b, c));
+            OrgKdeKDirNotifyInterface::emitFileRenamed(QUrl::fromLocalFile(b), QUrl::fromLocalFile(c));
+            const QString shown = kio ? Remote::display(QUrl::fromLocalFile(c)) : c;
+            QTRY_COMPARE_WITH_TIMEOUT(doc->path(), shown, 20000);
+            QTRY_VERIFY_WITH_TIMEOUT(doc->banner() != Document::Deleted, 20000);
+        }
+        // While a check is running a notice for where it is heading is kept.
+        const QString a = write(QStringLiteral("ya.txt"), "one\n");
+        Document *doc = openKio(newList(), a);
+        QVERIFY(doc);
+        const QUrl b = QUrl::fromLocalFile(m_dir + QStringLiteral("/yb.txt"));
+        const QUrl c = QUrl::fromLocalFile(m_dir + QStringLiteral("/yc.txt"));
+        doc->d->validating = true;
+        doc->d->validateTarget = b;
+        QVERIFY(QFile::rename(a, c.toLocalFile()));
+        OrgKdeKDirNotifyInterface::emitFileRenamed(b, c);
+        QTRY_VERIFY_WITH_TIMEOUT(doc->d->hasPendingMove, 5000);
+        QCOMPARE(doc->d->pendingTo, c);
+    }
+
+    void movedBannerClearsOnReload()
+    {
+        const QString a = write(QStringLiteral("mb.txt"), "one\n");
+        Document *doc = openFile(newList(), a);
+        QVERIFY(doc);
+        doc->d->offerMove(QUrl::fromLocalFile(a), QUrl::fromLocalFile(a + QStringLiteral(".x")));
+        QCOMPARE(doc->banner(), Document::Moved);
+        // Control and bidi characters never reach the text; long ones are cut.
+        QVERIFY(!doc->bannerText().contains(QChar(0x202E)));
+        doc->d->offerMove(QUrl::fromLocalFile(a), QUrl::fromLocalFile(QStringLiteral("/tmp/") + QString(200, QLatin1Char('x')) + QChar(0x202E) + QStringLiteral(".txt")));
+        QVERIFY(!doc->bannerText().contains(QChar(0x202E)));
+        QVERIFY(doc->bannerText().size() < 200);
+        doc->reload();
+        QTRY_VERIFY(doc->banner() != Document::Moved);
     }
 
     void dirNotifyMovesAreChecked()

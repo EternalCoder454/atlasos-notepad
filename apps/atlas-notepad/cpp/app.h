@@ -184,7 +184,7 @@ public:
         Unencodable,     // the text has characters `encoding` can't store: Save as UTF-8
         ChangedOnDisk,   // modified here and changed outside: Reload, Keep Mine
                          // (save() refuses to overwrite until Keep Mine)
-        Moved,           // a remote file went to another folder: Follow (and close)
+        Moved,           // a remote file went elsewhere (another folder, or no time to compare): Follow, or close it
         Deleted,         // the file is gone: Save (recreates it), Close
         TooLarge,        // over the size limit: nothing loaded, Close
         Unrecovered,     // the session lost this tab's unsaved text

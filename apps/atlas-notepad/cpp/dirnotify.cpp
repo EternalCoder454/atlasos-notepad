@@ -10,11 +10,16 @@
 #include <QHash>
 #include <QWindow>
 #include <QPointer>
+#include <QTimer>
+
+#include <KJob>
 
 namespace
 {
 // A notice lists at most this many files; the rest is dropped.
 constexpr int maxListed = 1000;
+// A check of a move that gets no answer is dropped after this long.
+constexpr int validateTimeoutMs = 30000;
 
 QString trimmed(const QString &path)
 {
@@ -124,63 +129,105 @@ void DirNotifyListener::queueMove(const QString &srcText, const QString &dstText
 // old place is empty; otherwise the usual stat shows what happened to it.
 // A remote file that went to another folder is only offered (a banner with
 // Follow): a program on the bus must not steer a tab to a place of its choice.
-void DirNotifyListener::follow(Document *doc, const QUrl &old, const QUrl &to)
+void DirNotifyListener::follow(Document *doc, const QUrl &old, const QUrl &toGiven)
 {
-    if (doc->d->validating || old.scheme() != to.scheme() || !Remote::unsupported(to, false).isEmpty() || !doc->d->hasStamp) {
+    if (old.scheme() != toGiven.scheme() || !Remote::unsupported(toGiven, false).isEmpty() || !doc->d->hasStamp) {
+        return;
+    }
+    if (doc->d->validating) {
+        // Another check is running: this notice goes next, not away.
+        doc->d->hasPendingMove = true;
+        doc->d->pendingTo = toGiven;
         return;
     }
     if (!doc->d->isRemote()) {
-        if (!to.isLocalFile()) {
+        if (!toGiven.isLocalFile()) {
             return;
         }
+        // One cleaned, absolute path, for the check and for the relocate.
+        const QString toPath = QDir::cleanPath(QFileInfo(toGiven.toLocalFile()).absoluteFilePath());
         NpStamp atNew = {}, atOld = {};
-        if (np_file_stamp(to.toLocalFile().toUtf8().constData(), &atNew) != 0 || !sameStamp(atNew, doc->d->stamp)) {
+        if (np_file_stamp(toPath.toUtf8().constData(), &atNew) != 0 || !sameStamp(atNew, doc->d->stamp)) {
             return;
         }
         const int err = np_file_stamp(old.toLocalFile().toUtf8().constData(), &atOld);
         if (err != ENOENT && err != ENOTDIR) {
             return;
         }
-        apply(doc, old, to);
+        apply(doc, old, QUrl::fromLocalFile(toPath));
         return;
     }
     // The same server and login: alice's file isn't bob's.
-    if (old.host() != to.host() || old.port() != to.port() || ((!to.userName().isEmpty() || !old.userName().isEmpty()) && old.userName() != to.userName())) {
+    if (old.host() != toGiven.host() || old.port() != toGiven.port() || ((!toGiven.userName().isEmpty() || !old.userName().isEmpty()) && old.userName() != toGiven.userName())) {
         return;
     }
     // The old URL's scheme, host, port and login with the new path only.
     QUrl target = old;
-    target.setPath(QDir::cleanPath(to.path()));
+    target.setPath(QDir::cleanPath(toGiven.path()));
     target.setQuery(QString());
     target.setFragment(QString());
     const QPointer<Document> guard(doc);
     const QPointer<QWindow> window(doc->d->window());
+    const quint64 gen = ++doc->d->validateGen;
     doc->d->validating = true;
-    Remote::stat(target, this, window, [this, guard, window, old, target](const Remote::StatInfo &atNew) {
-        if (!guard) {
+    doc->d->validateTarget = target;
+    // A server that never answers must not hold the tab's checks for ever.
+    QTimer::singleShot(validateTimeoutMs, this, [this, guard, gen] {
+        if (guard && guard->d->validating && guard->d->validateGen == gen) {
+            if (guard->d->validateJob) {
+                guard->d->validateJob->kill(KJob::Quietly);
+            }
+            finishValidation(guard);
+        }
+    });
+    doc->d->validateJob = Remote::stat(target, this, window, [this, guard, window, gen, old, target](const Remote::StatInfo &atNew) {
+        if (!guard || guard->d->validateGen != gen) {
             return;
         }
         if (atNew.error || atNew.isDir || atNew.stamp.size != guard->d->stamp.size || atNew.stamp.mtimeNs != guard->d->stamp.mtimeNs) {
-            guard->d->validating = false;
+            finishValidation(guard);
             return;
         }
-        Remote::stat(old, this, window, [this, guard, old, target](const Remote::StatInfo &atOld) {
-            if (!guard) {
+        // No time from the server (-1): a size alone doesn't prove the same file.
+        const bool noTime = atNew.stamp.mtimeNs == -1 || guard->d->stamp.mtimeNs == -1;
+        guard->d->validateJob = Remote::stat(old, this, window, [this, guard, gen, old, target, noTime](const Remote::StatInfo &atOld) {
+            if (!guard || guard->d->validateGen != gen) {
                 return;
             }
-            guard->d->validating = false;
-            if (atOld.error != ENOENT) {
-                return;
-            }
+            const bool gone = atOld.error == ENOENT;
             const QUrl folderOld = old.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
             const QUrl folderNew = target.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
-            if (folderOld.path() == folderNew.path()) {
-                apply(guard, old, target);
-            } else if (locationOf(guard) == old) {
-                guard->d->offerMove(old, target);
+            const bool same = locationOf(guard) == old;
+            const bool pending = guard->d->hasPendingMove;
+            if (gone && same) {
+                if (!noTime && folderOld.path() == folderNew.path()) {
+                    apply(guard, old, target);
+                } else if (!pending) {
+                    guard->d->offerMove(old, target);
+                }
             }
+            finishValidation(guard);
         });
     });
+}
+
+// One check ends (answered, failed or timed out): the notice that came
+// while it ran is looked at next.
+void DirNotifyListener::finishValidation(Document *doc)
+{
+    doc->d->validating = false;
+    doc->d->validateTarget = QUrl();
+    doc->d->validateJob = nullptr;
+    ++doc->d->validateGen; // a late answer of this check is ignored
+    if (doc->d->hasPendingMove) {
+        const QUrl to = doc->d->pendingTo;
+        doc->d->hasPendingMove = false;
+        doc->d->pendingTo = QUrl();
+        const QUrl at = locationOf(doc);
+        if (at.isValid() && at != to) {
+            follow(doc, at, to);
+        }
+    }
 }
 
 void DirNotifyListener::apply(Document *doc, const QUrl &old, const QUrl &to)
@@ -219,30 +266,38 @@ void DirNotifyListener::flush()
     const QStringList changed = std::exchange(m_changed, {});
     const auto moves = std::exchange(m_moves, {});
     const auto docs = allDocuments(m_app);
-    // Closed tabs follow a rename of local files (see renameClosed); each
-    // tab, the latest notice that concerns it.
-    QHash<Document *, QPair<QUrl, QUrl>> latest;
+    // Closed tabs follow a rename of local files (see renameClosed). Each tab
+    // goes through the notices in the order they came, so a rename and a
+    // rename of the result (a to b to c) end at c. A tab whose own check is
+    // running continues from the place that check is about.
     for (const auto &move : moves) {
         for (DocumentList *list : m_app->windows()) {
             list->renameClosed(keyOf(move.first), keyOf(move.second));
         }
-        const QString base = trimmed(move.second.path()) == QLatin1String("/") ? QString() : trimmed(move.second.path());
-        for (Document *doc : docs) {
-            const QUrl old = locationOf(doc);
-            if (!old.isValid()) {
-                continue;
-            }
-            const QString rest = below(old, move.first);
+    }
+    for (Document *doc : docs) {
+        const QUrl start = locationOf(doc);
+        if (!start.isValid()) {
+            continue;
+        }
+        QUrl at = doc->d->validating && doc->d->validateTarget.isValid() ? doc->d->validateTarget : start;
+        const QUrl from = at;
+        for (const auto &move : moves) {
+            const QString rest = below(at, move.first);
             if (rest.isNull()) {
                 continue;
             }
+            const QString base = trimmed(move.second.path()) == QLatin1String("/") ? QString() : trimmed(move.second.path());
             QUrl to = move.second;
             to.setPath(base + rest);
-            latest.insert(doc, {old, to});
+            if (at.userName().size() && to.userName().isEmpty()) {
+                to.setUserInfo(at.userInfo());
+            }
+            at = to;
         }
-    }
-    for (auto it = latest.cbegin(); it != latest.cend(); ++it) {
-        follow(it.key(), it.value().first, it.value().second);
+        if (at != from) {
+            follow(doc, start, at);
+        }
     }
     for (const QString &text : removed) {
         const QUrl gone(text);

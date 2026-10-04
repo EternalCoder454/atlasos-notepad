@@ -340,10 +340,16 @@ void DocumentList::saveAsDialog(Document *document, const QUrl &folder, const QS
     QFileDialog *dialog = newFileDialog(d->window, tr("Save As"), folder, nameFilters);
     dialog->setAcceptMode(QFileDialog::AcceptSave);
     dialog->setFileMode(QFileDialog::AnyFile);
-    // A full URL (folder and name), so a remote folder keeps its server.
-    QUrl full = folder.isValid() && !folder.isEmpty() ? folder : dialog->directoryUrl();
-    full.setPath(QDir::cleanPath(full.path() + QLatin1Char('/') + fileName));
-    dialog->selectUrl(full);
+    // The folder as the QML passes it: empty, a file: URL or a remote one.
+    const QUrl where = folder.isValid() && !folder.isEmpty() ? folder : dialog->directoryUrl();
+    if (where.isLocalFile()) {
+        dialog->selectFile(QDir(where.toLocalFile()).filePath(fileName));
+    } else {
+        // A remote folder keeps its server: a full URL, folder and name.
+        QUrl full = where;
+        full.setPath(QDir::cleanPath(full.path() + QLatin1Char('/') + fileName));
+        dialog->selectUrl(full);
+    }
     const QPointer<Document> guard(document);
     auto chosen = std::make_shared<bool>(false);
     connect(dialog, &QFileDialog::urlSelected, this, [guard, chosen](const QUrl &url) {

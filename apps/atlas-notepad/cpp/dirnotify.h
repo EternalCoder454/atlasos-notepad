@@ -33,6 +33,7 @@ private:
     static QUrl locationOf(Document *doc);
     void queueMove(const QString &src, const QString &dst);
     void follow(Document *doc, const QUrl &old, const QUrl &to);
+    void finishValidation(Document *doc);
     void apply(Document *doc, const QUrl &old, const QUrl &to);
     void flush();
 

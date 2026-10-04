@@ -1079,6 +1079,7 @@ void Document::Private::applyDiskStat(int err, const NpStamp &now)
     }
     if (banners.count(Deleted)) {
         clearBanner(Deleted);
+        clearBanner(Moved); // back at the old name: nothing moved
         // Gone only for a moment (a save by another program, a checkout):
         // untouched since, it is clean again and may reload silently.
         if (cleanBeforeDelete && sessionKey() == deleteRevision) {
@@ -1142,6 +1143,7 @@ void Document::Private::finishLoad(const LoadResult &r, LoadMode mode)
         ~Settle() { p->syncLoading(); }
     } settle{this};
     loading = false;
+    clearBanner(Moved); // the text is read again from where the tab is
     if (mode == SilentReload && isModified()) {
         // Typed while the file was being read: it is a conflict now.
         if (!keepMine) {
@@ -1279,7 +1281,7 @@ void Document::Private::finishSave(const SaveResult &r, const SaveSnapshot &snap
         // goes unseen: the time KIO gives is whole seconds. A known limit.)
         keepMine = false;
         loaded = true;
-        for (const Banner b : {ChangedOnDisk, SaveFailed, SaveUnchecked, ReadFailed, Unrecovered, Unencodable, Deleted, Lossy, MixedLineEndings}) {
+        for (const Banner b : {ChangedOnDisk, SaveFailed, SaveUnchecked, Moved, ReadFailed, Unrecovered, Unencodable, Deleted, Lossy, MixedLineEndings}) {
             banners.erase(b);
         }
         Q_EMIT q->bannerChanged();
@@ -2311,23 +2313,63 @@ void Document::keepMine()
     d->setModified(true);
 }
 
+namespace
+{
+// For a banner: no bidi controls or other control characters (they could
+// make a path read as another), elided in the middle to about 80 characters.
+QString safeShown(const QString &text)
+{
+    QString out;
+    for (const QChar c : text) {
+        const char16_t u = c.unicode();
+        const bool bidi = (u >= 0x202A && u <= 0x202E) || (u >= 0x2066 && u <= 0x2069) || u == 0x200E || u == 0x200F;
+        if (!bidi && c.category() != QChar::Other_Control) {
+            out += c;
+        }
+    }
+    constexpr int maxChars = 80;
+    if (out.size() > maxChars) {
+        const int keep = (maxChars - 1) / 2;
+        out = out.left(keep) + QChar(0x2026) + out.right(maxChars - 1 - keep);
+    }
+    return out;
+}
+}
+
 void Document::Private::offerMove(const QUrl &from, const QUrl &to)
 {
     moveFrom = from;
     moveTo = to;
-    setBanner(Moved, QObject::tr("“%1” was moved to %2.").arg(q->title(), Remote::display(to.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash))));
+    setBanner(Moved, QObject::tr("“%1” was moved to %2.").arg(safeShown(q->title()), safeShown(Remote::display(to))));
 }
 
+// Follow was offered: the same check as an automatic follow, now, since the
+// file may have changed or moved again since the banner went up.
 void Document::followMove()
 {
     const QUrl at = d->isRemote() ? d->url : QUrl::fromLocalFile(d->path);
     const QUrl to = d->moveTo;
     d->clearBanner(Moved);
-    if (to.isValid() && at == d->moveFrom && d->relocate(to)) {
-        if (App *app = App::instance()) {
-            Q_EMIT app->notice(tr("Following “%1”.").arg(title()));
-        }
+    if (!to.isValid() || at != d->moveFrom || !d->isRemote() || !d->hasStamp) {
+        return;
     }
+    const QPointer<Document> guard(this);
+    const NpStamp seen = d->stamp;
+    Remote::stat(to, this, d->window(), [guard, to, at, seen](const Remote::StatInfo &st) {
+        if (!guard) {
+            return;
+        }
+        App *app = App::instance();
+        if (st.error || st.isDir || st.stamp.size != seen.size || st.stamp.mtimeNs != seen.mtimeNs || guard->d->url != at || !guard->d->relocate(to)) {
+            if (app) {
+                Q_EMIT app->notice(tr("“%1” is no longer at that place, so it was not followed.").arg(guard->title()));
+            }
+            return;
+        }
+        if (app) {
+            Q_EMIT app->notice(tr("Following “%1”.").arg(guard->title()));
+        }
+    });
 }
 
 void Document::dismissBanner()
