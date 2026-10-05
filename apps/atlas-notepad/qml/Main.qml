@@ -135,12 +135,21 @@ AtlasWindow {
         shortcut: App.hasGlobalMenu || editorOnly ? undefined : keys
     }
     // The editor-only keys act unless another text field (Find, Replace, Go
-    // To) has the focus: that field keeps its own keys. The tab row having the
-    // focus (Atlas.Ui gives it to the current tab) still leaves them on.
+    // To) or a popup or dialog has the focus: the field keeps its own keys,
+    // and nothing edits the text behind a dialog. The tab row having the focus
+    // (Atlas.Ui gives it to the current tab) still leaves them on.
     readonly property bool editorKeysNow: {
         const item = root.activeFocusItem;
-        return root.view !== null && !(item instanceof TextInput)
-            && (!(item instanceof TextEdit) || item === root.view.edit);
+        if (root.view === null || item instanceof TextInput
+                || (item instanceof TextEdit && item !== root.view.edit)) {
+            return false;
+        }
+        for (let p = item; p; p = p.parent) {
+            if (p === QQC2.Overlay.overlay) {
+                return false;
+            }
+        }
+        return true;
     }
     // With a global menu its items hold the editor-only keys too (so it shows
     // them). Opening that menu takes the focus from the window, so this keeps

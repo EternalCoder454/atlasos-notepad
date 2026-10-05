@@ -76,6 +76,9 @@ private:
     // how long its reading may take.
     QTextCursor m_pass;
     bool m_all = false;
+    // The pass under way does a whole document (a load, a language or a
+    // theme): its end hands freed memory back.
+    bool m_trim = false;
     QTimer m_passTimer;
     qint64 m_readBudgetNs = 2'000'000;
     // Formats set by slices the layout hasn't been told of (see flushDirty).

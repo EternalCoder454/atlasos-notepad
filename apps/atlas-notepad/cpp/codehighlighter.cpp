@@ -5,6 +5,8 @@
 #include <QElapsedTimer>
 #include <QTextDocument>
 
+#include <utility>
+
 #ifdef __GLIBC__
 #include <malloc.h>
 #endif
@@ -290,6 +292,7 @@ void CodeHighlighter::documentChanged(int from, int removed, int added)
         const QTextBlock before = first.previous();
         if (added > bigInsert) {
             m_all = true;
+            m_trim = true;
             m_passTimer.start(settleMs);
             return;
         }
@@ -310,6 +313,8 @@ void CodeHighlighter::documentChanged(int from, int removed, int added)
     }
     if (next.isValid()) {
         // Lines of the edit not done yet: everything after them is stale.
+        // A big insert is a file coming in.
+        m_trim = m_trim || added > bigInsert;
         schedule(next, next.position() <= through);
     }
 }
@@ -367,6 +372,7 @@ void CodeHighlighter::rehighlightAll(bool now)
     m_passTimer.stop();
     m_pass = QTextCursor();
     m_all = false;
+    m_trim = false;
     flushDirty(true);
     QTextDocument *doc = document();
     if (!doc || !definition().isValid()) {
@@ -382,6 +388,7 @@ void CodeHighlighter::rehighlightAll(bool now)
     }
     m_pass = QTextCursor(doc);
     m_all = true;
+    m_trim = true;
     runPass();
 }
 
@@ -415,8 +422,11 @@ void CodeHighlighter::runPass()
     } else {
         m_pass = QTextCursor();
         m_all = false;
+        // Only after a whole-document pass: one an edit started ends often,
+        // and trimming costs milliseconds.
+        const bool trim = std::exchange(m_trim, false);
 #ifdef __GLIBC__
-        if (doc->characterCount() >= trimFrom) {
+        if (trim && doc->characterCount() >= trimFrom) {
             malloc_trim(0);
         }
 #endif
