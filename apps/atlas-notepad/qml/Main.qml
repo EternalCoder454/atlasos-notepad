@@ -20,6 +20,8 @@ QQC2.ApplicationWindow {
     property EditorView view: null
     readonly property Settings settings: App.settings
     readonly property bool markdown: document !== null && document.markdown
+    readonly property bool code: document !== null && document.code
+    readonly property bool codeEnabled: code && editable && !settingsOpen
     readonly property bool editable: view !== null && !view.edit.readOnly
     readonly property bool formatEnabled: markdown && editable && !settingsOpen
     property bool settingsOpen: false
@@ -82,7 +84,16 @@ QQC2.ApplicationWindow {
             bulletList: bulletListAction,
             numberedList: numberedListAction,
             checklist: checklistAction,
-            quote: quoteAction
+            quote: quoteAction,
+            toggleComment: toggleCommentAction,
+            indent: indentAction,
+            outdent: outdentAction,
+            sortLines: sortLinesAction,
+            upperCase: upperCaseAction,
+            lowerCase: lowerCaseAction,
+            titleCase: titleCaseAction,
+            trimSpaces: trimSpacesAction,
+            codeLineNumbers: codeLineNumbersAction
         })
 
     width: Kirigami.Units.gridUnit * 50
@@ -334,6 +345,64 @@ QQC2.ApplicationWindow {
         checkable: true
         checked: root.settings.lineNumbers
         onTriggered: root.settings.lineNumbers = !root.settings.lineNumbers
+    }
+    // Code files: each acts on the current tab's CodeEditor.
+    KeyedAction {
+        id: toggleCommentAction
+        text: qsTr("Toggle Comment")
+        keys: "Ctrl+/"
+        enabled: root.codeEnabled
+        onTriggered: root.view.toggleComment()
+    }
+    KeyedAction {
+        id: indentAction
+        text: qsTr("Indent")
+        enabled: root.codeEnabled
+        onTriggered: root.view.indentLines()
+    }
+    KeyedAction {
+        id: outdentAction
+        text: qsTr("Outdent")
+        enabled: root.codeEnabled
+        onTriggered: root.view.outdentLines()
+    }
+    KeyedAction {
+        id: sortLinesAction
+        text: qsTr("Sort Lines")
+        enabled: root.codeEnabled
+        onTriggered: root.view.sortLines()
+    }
+    KeyedAction {
+        id: upperCaseAction
+        text: qsTr("Upper Case")
+        enabled: root.codeEnabled
+        onTriggered: root.view.changeCase(0)
+    }
+    KeyedAction {
+        id: lowerCaseAction
+        text: qsTr("Lower Case")
+        enabled: root.codeEnabled
+        onTriggered: root.view.changeCase(1)
+    }
+    KeyedAction {
+        id: titleCaseAction
+        text: qsTr("Title Case")
+        enabled: root.codeEnabled
+        onTriggered: root.view.changeCase(2)
+    }
+    KeyedAction {
+        id: trimSpacesAction
+        text: qsTr("Trim Trailing Spaces")
+        enabled: root.codeEnabled
+        onTriggered: root.view.trimTrailingSpaces()
+    }
+    KeyedAction {
+        id: codeLineNumbersAction
+        text: qsTr("Line Numbers in Code")
+        checkable: true
+        checked: root.settings.codeLineNumbers
+        enabled: root.code && !root.settingsOpen
+        onTriggered: root.settings.codeLineNumbers = !root.settings.codeLineNumbers
     }
     KeyedAction {
         id: statusBarAction
@@ -738,7 +807,7 @@ QQC2.ApplicationWindow {
                         document: tab.document
                         current: tab.current
                         // Room for the tool capsule, so text and scrollbar stay clear of it.
-                        rightInset: document.markdown && root.settings.formattingToolbar ? capsule.reserve : 0
+                        rightInset: (document.markdown || document.code) && root.settings.formattingToolbar ? capsule.reserve : 0
                         onLinkRequested: root.openLinkDialog()
                     }
                 }
@@ -750,8 +819,11 @@ QQC2.ApplicationWindow {
 
             ToolCapsule {
                 id: capsule
-                visible: root.markdown && root.settings.formattingToolbar && !root.settingsOpen
+                visible: (root.markdown || root.code) && root.settings.formattingToolbar && !root.settingsOpen
                 z: 5
+                code: root.code
+                popoverOpen: codePopover.visible
+                onCodeSettingsRequested: button => codePopover.openAt(button, "left")
                 pointerNear: editorsHover.hovered && editorsHover.point.position.x >= x - nearDistance && editorsHover.point.position.y >= y - nearDistance && editorsHover.point.position.y <= y + height + nearDistance
                 actions: root.actions
                 heading: root.view ? root.view.heading : 0
@@ -763,6 +835,18 @@ QQC2.ApplicationWindow {
                 onEditorFocusRequested: force => {
                     const holder = root.activeFocusItem;
                     if (root.view && (force || holder === null || holder === root.contentItem)) {
+                        root.view.focusEditor();
+                    }
+                }
+            }
+
+            CodePopover {
+                id: codePopover
+                document: root.document
+                editor: root.view ? root.view.code : null
+                // The editor gets the keyboard back.
+                onClosed: {
+                    if (root.view) {
                         root.view.focusEditor();
                     }
                 }
@@ -885,6 +969,24 @@ QQC2.ApplicationWindow {
             }
             // Right: where a remote file is, zoom (only when changed), line
             // endings, encoding.
+            // Code files: the language and the indentation, which open the
+            // same popover as the capsule's button.
+            StatusCell {
+                id: languageCell
+                visible: root.code
+                text: root.code ? root.document.language : ""
+                clickable: true
+                toolTip: qsTr("Language")
+                onClicked: codePopover.openAt(languageCell, "above")
+            }
+            StatusCell {
+                id: indentCell
+                visible: root.code
+                text: !root.code ? "" : root.document.insertSpaces ? qsTr("Spaces: %1").arg(root.document.indentWidth) : qsTr("Tabs")
+                clickable: true
+                toolTip: qsTr("Indentation")
+                onClicked: codePopover.openAt(indentCell, "above")
+            }
             StatusCell {
                 visible: root.document !== null && root.document.isRemote
                 symbol: "cloud"

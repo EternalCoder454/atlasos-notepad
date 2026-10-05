@@ -18,6 +18,7 @@ FocusScope {
 
     readonly property alias edit: edit
     readonly property alias md: md
+    readonly property alias code: code
     readonly property alias flickable: flick
     readonly property Settings settings: App.settings
     readonly property bool formatted: document.markdown && document.formatted
@@ -29,6 +30,11 @@ FocusScope {
         edit.length; // re-read on edits too
         return md.headingAt(edit.cursorPosition);
     }
+
+    // Line numbers show for every file when asked, and for code files by
+    // their own setting.
+    readonly property bool showNumbers: settings.lineNumbers || (document.code && settings.codeLineNumbers)
+    readonly property bool dark: Kirigami.ColorUtils.brightnessForColor(Kirigami.Theme.backgroundColor) === Kirigami.ColorUtils.Dark
 
     // The live scrollbar's width, so the text clears it beside the capsule.
     readonly property real scrollbarWidth: verticalBar.implicitWidth
@@ -66,6 +72,27 @@ FocusScope {
     function select(start, end) {
         edit.select(start, end);
     }
+    // Code commands, on the selection (the caret's line without one).
+    function toggleComment() {
+        code.toggleComment(edit.selectionStart, edit.selectionEnd);
+    }
+    function indentLines() {
+        code.indentLines(edit.selectionStart, edit.selectionEnd);
+    }
+    function outdentLines() {
+        code.outdentLines(edit.selectionStart, edit.selectionEnd);
+    }
+    // The whole text without a selection.
+    function sortLines() {
+        code.sortLines(edit.selectionStart, edit.selectionEnd);
+    }
+    // mode: 0 upper, 1 lower, 2 title.
+    function changeCase(mode) {
+        code.changeCase(edit.selectionStart, edit.selectionEnd, mode);
+    }
+    function trimTrailingSpaces() {
+        code.trimTrailingSpaces();
+    }
 
     // What the session keeps: the caret, the selection and the scroll.
     function saveViewState() {
@@ -92,10 +119,36 @@ FocusScope {
         // while the layout still grows.
     }
 
+    // MarkdownEditor and CodeEditor must never hold the TextEdit together
+    // (a rename can turn a Markdown file into code): plain bindings could
+    // attach the new one before the old lets go, so the old goes first.
+    function syncEditors() {
+        const wantMarkdown = document.markdown;
+        const wantCode = document.code && !wantMarkdown;
+        if (!wantMarkdown) {
+            md.textEdit = null;
+        }
+        if (!wantCode) {
+            code.textEdit = null;
+        }
+        if (wantMarkdown) {
+            md.textEdit = edit;
+        }
+        if (wantCode) {
+            code.textEdit = edit;
+        }
+    }
+
     Connections {
         target: view.document
         function onLoadingChanged() {
             view.restoreViewState();
+        }
+        function onMarkdownChanged() {
+            view.syncEditors();
+        }
+        function onCodeChanged() {
+            view.syncEditors();
         }
     }
 
@@ -109,7 +162,7 @@ FocusScope {
 
     LineNumbers {
         id: gutter
-        visible: view.settings.lineNumbers
+        visible: view.showNumbers
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: parent.left
@@ -218,8 +271,8 @@ FocusScope {
             readOnly: view.document.readOnly || view.document.loading
             selectByMouse: true
             persistentSelection: true
-            // Four spaces, as Windows Notepad.
-            tabStopDistance: fontInfo.advanceWidth(" ") * 4
+            // Four spaces, as Windows Notepad; a code file's own width.
+            tabStopDistance: fontInfo.advanceWidth(" ") * (view.document.code ? view.document.indentWidth : 4)
             // Set one by one: Qt.font({pointSize}) cuts a fractional size
             // (9 * 110% = 9.9) down to a whole one, so 110% looked like 100%.
             font.family: (view.formatted ? Kirigami.Theme.defaultFont : view.settings.font).family
@@ -228,7 +281,7 @@ FocusScope {
             color: Kirigami.Theme.textColor
             selectionColor: Kirigami.Theme.highlightColor
             selectedTextColor: Kirigami.Theme.highlightedTextColor
-            leftPadding: view.settings.lineNumbers ? Kirigami.Units.largeSpacing : Kirigami.Units.gridUnit
+            leftPadding: view.showNumbers ? Kirigami.Units.largeSpacing : Kirigami.Units.gridUnit
             // The capsule's margin already keeps text clear of the edge, but
             // not of the overlay scrollbar, which sits inside the view.
             rightPadding: view.rightInset > 0 ? scrollbarWidth + Kirigami.Units.smallSpacing : Kirigami.Units.gridUnit
@@ -327,6 +380,54 @@ FocusScope {
                 }
             }
 
+            // Code: the caret's line, behind the text (not while selecting).
+            Rectangle {
+                z: -1
+                visible: view.document.code && edit.selectionStart === edit.selectionEnd
+                x: 0
+                y: edit.cursorRectangle.y
+                width: edit.width
+                height: edit.cursorRectangle.height
+                color: Qt.alpha(Kirigami.Theme.textColor, view.dark ? 0.07 : 0.05)
+            }
+
+            // Code: boxes round the bracket at the caret and its partner.
+            // Recomputed a moment after a change, once per burst of typing.
+            Repeater {
+                model: view.document.code ? view.bracketAt.length : 0
+                delegate: Rectangle {
+                    required property int index
+                    readonly property int position: view.bracketAt[index]
+                    readonly property rect box: {
+                        edit.length; // the layout moves with the text
+                        return edit.positionToRectangle(position);
+                    }
+                    readonly property real charWidth: {
+                        const next = edit.positionToRectangle(position + 1);
+                        return next.y === box.y && next.x > box.x ? next.x - box.x : fontInfo.averageCharacterWidth;
+                    }
+                    visible: position >= 0
+                    x: box.x
+                    y: box.y
+                    width: charWidth
+                    height: box.height
+                    radius: 3
+                    color: Qt.alpha(Kirigami.Theme.highlightColor, 0.15)
+                    border.width: 1
+                    border.color: Qt.alpha(Kirigami.Theme.highlightColor, 0.8)
+                }
+            }
+            Connections {
+                target: edit
+                enabled: view.document.code
+                function onCursorPositionChanged() {
+                    bracketTimer.restart();
+                }
+                function onTextChanged() {
+                    bracketTimer.restart();
+                }
+            }
+
             // Over the text, the visible part only.
             SpellUnderlines {
                 visible: spell.active
@@ -356,6 +457,22 @@ FocusScope {
         onTriggered: view.saveViewState()
     }
 
+    // The two bracket positions to box, or none.
+    property var bracketAt: []
+    function updateBrackets() {
+        if (!document.code || edit.selectionStart !== edit.selectionEnd) {
+            bracketAt = [];
+            return;
+        }
+        const pair = code.bracketPair(edit.cursorPosition);
+        bracketAt = pair.x >= 0 && pair.y >= 0 ? [pair.x, pair.y] : [];
+    }
+    Timer {
+        id: bracketTimer
+        interval: 30
+        onTriggered: view.updateBrackets()
+    }
+
     SpellChecker {
         id: spell
         textEdit: edit
@@ -366,7 +483,6 @@ FocusScope {
 
     MarkdownEditor {
         id: md
-        textEdit: view.document.markdown ? edit : null
         spellChecker: spell
         formatted: view.document.formatted
         font: edit.font
@@ -375,6 +491,14 @@ FocusScope {
         linkColor: Kirigami.Theme.linkColor
         codeColor: Kirigami.ColorUtils.linearInterpolation(Kirigami.Theme.backgroundColor, Kirigami.Theme.textColor, 0.07)
         accentColor: Kirigami.Theme.highlightColor
+    }
+
+    CodeEditor {
+        id: code
+        language: view.document.language
+        dark: view.dark
+        insertSpaces: view.document.insertSpaces
+        indentWidth: view.document.indentWidth
     }
 
     ContextMenu {
@@ -505,6 +629,7 @@ FocusScope {
 
     Component.onCompleted: {
         document.textEdit = edit;
+        syncEditors();
         restoreViewState();
     }
     Component.onDestruction: saveViewState()

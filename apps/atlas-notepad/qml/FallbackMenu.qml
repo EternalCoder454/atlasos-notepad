@@ -16,6 +16,14 @@ ContextMenu {
     height: Math.min(implicitHeight, (QQC2.Overlay.overlay ? QQC2.Overlay.overlay.height : implicitHeight) - topMargin - bottomMargin)
 
     signal openRecent(string path)
+    Component.onCompleted: contentItem.interactive = Qt.binding(() => contentItem.contentHeight + topPadding + bottomPadding > height)
+
+    // A submenu: inside the window, scrolling when it doesn't fit. (Atlas.Ui
+    // scrolls only past the window's height, not past it less the margins.)
+    component SubMenu: ContextMenu {
+        height: Math.min(implicitHeight, (QQC2.Overlay.overlay ? QQC2.Overlay.overlay.height : implicitHeight) - topMargin - bottomMargin)
+        Component.onCompleted: contentItem.interactive = Qt.binding(() => contentItem.contentHeight + topPadding + bottomPadding > height)
+    }
 
     component Item: ContextMenuItem {
         // The shortcut lives on the action; this only shows it.
@@ -25,7 +33,7 @@ ContextMenu {
     Item { action: menu.actions.newTab }
     Item { action: menu.actions.newWindow }
     Item { action: menu.actions.open }
-    ContextMenu {
+    SubMenu {
         id: recent
         title: qsTr("Open Recent")
         // Where the recent files go: just after the separator that ends the
@@ -69,7 +77,7 @@ ContextMenu {
     Item { action: menu.actions.saveAs }
     Item { action: menu.actions.saveAll }
     // One submenu: the whole menu then fits a default-size window.
-    ContextMenu {
+    SubMenu {
         title: qsTr("File Location")
         Item { action: menu.actions.openWith }
         Item { action: menu.actions.showInFolder }
@@ -78,7 +86,7 @@ ContextMenu {
     }
     Item { action: menu.actions.print }
     ContextMenuSeparator {}
-    ContextMenu {
+    SubMenu {
         title: qsTr("Edit")
         Item { action: menu.actions.undo }
         Item { action: menu.actions.redo }
@@ -95,16 +103,19 @@ ContextMenu {
         Item { action: menu.actions.timeDate }
         Item { action: menu.actions.font }
     }
-    ContextMenu {
+    SubMenu {
         title: qsTr("Format")
         enabled: menu.actions.bold.enabled
-        Item { action: menu.actions.heading1 }
-        Item { action: menu.actions.heading2 }
-        Item { action: menu.actions.heading3 }
-        Item { action: menu.actions.heading4 }
-        Item { action: menu.actions.heading5 }
-        Item { action: menu.actions.heading6 }
-        Item { action: menu.actions.bodyText }
+        SubMenu {
+            title: qsTr("Heading")
+            Item { action: menu.actions.heading1 }
+            Item { action: menu.actions.heading2 }
+            Item { action: menu.actions.heading3 }
+            Item { action: menu.actions.heading4 }
+            Item { action: menu.actions.heading5 }
+            Item { action: menu.actions.heading6 }
+            Item { action: menu.actions.bodyText }
+        }
         ContextMenuSeparator {}
         Item { action: menu.actions.bold }
         Item { action: menu.actions.italic }
@@ -119,7 +130,22 @@ ContextMenu {
         ContextMenuSeparator {}
         Item { action: menu.actions.clearFormatting }
     }
-    ContextMenu {
+    SubMenu {
+        title: qsTr("Code")
+        enabled: menu.actions.toggleComment.enabled
+        Item { action: menu.actions.toggleComment }
+        Item { action: menu.actions.indent }
+        Item { action: menu.actions.outdent }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.sortLines }
+        Item { action: menu.actions.upperCase }
+        Item { action: menu.actions.lowerCase }
+        Item { action: menu.actions.titleCase }
+        Item { action: menu.actions.trimSpaces }
+        ContextMenuSeparator {}
+        Item { action: menu.actions.codeLineNumbers }
+    }
+    SubMenu {
         title: qsTr("View")
         Item { action: menu.actions.zoomIn }
         Item { action: menu.actions.zoomOut }
@@ -131,7 +157,7 @@ ContextMenu {
         Item { action: menu.actions.lineNumbers }
         Item { action: menu.actions.wordWrap }
     }
-    ContextMenu {
+    SubMenu {
         title: qsTr("Help")
         Item { action: menu.actions.keyboardShortcuts }
         Item { action: menu.actions.about }

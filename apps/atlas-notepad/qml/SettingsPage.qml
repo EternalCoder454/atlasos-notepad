@@ -94,6 +94,13 @@ AtlasPage {
             onSwitchToggled: checked => page.settings.lineNumbers = checked
         }
         CompactRow {
+            title: qsTr("Line numbers in code files")
+            subtitle: qsTr("Shown for code even when line numbers are off above")
+            showSwitch: true
+            switchChecked: page.settings.codeLineNumbers
+            onSwitchToggled: checked => page.settings.codeLineNumbers = checked
+        }
+        CompactRow {
             title: qsTr("Status bar")
             showSwitch: true
             switchChecked: page.settings.statusBar

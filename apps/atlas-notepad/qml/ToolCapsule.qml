@@ -1,4 +1,4 @@
-// The Markdown tool capsule: a tall rounded strip of icon buttons floating at
+// The tool capsule, for Markdown or (with `code`) for code files: a tall rounded strip of icon buttons floating at
 // the editor's right edge. It stays quiet (faded) until the pointer comes
 // within `nearDistance` of it or one of its menus is open. It acts through the
 // window's actions, so the capsule, the menus and the shortcuts do the same
@@ -23,6 +23,10 @@ Item {
     required property bool formatted
     // MarkdownEditor.Format bits at the caret or selection.
     required property int formats
+    // A code file is open: the code tools show instead of the Markdown ones.
+    property bool code: false
+    // The code popover (language, indentation) is open.
+    property bool popoverOpen: false
     // Room kept free above (a find bar), in pixels.
     property real topInset: 0
 
@@ -36,9 +40,12 @@ Item {
     property bool pointerNear: false
     // A button has the keyboard focus (Tab): full strength, like the pointer.
     property bool focusInside: false
-    readonly property bool near: pointerNear || focusInside || headingMenu.visible || moreMenu.visible
+    readonly property bool near: pointerNear || focusInside || headingMenu.visible || moreMenu.visible || caseMenu.visible || popoverOpen
     readonly property real nearDistance: 80
 
+    // The language and indentation button was pressed (the popover opens
+    // beside it).
+    signal codeSettingsRequested(Item button)
     // `force`: a menu item ran, so the editor takes the focus back; else it
     // does only when nothing else (the find bar) took it.
     signal editorFocusRequested(bool force)
@@ -47,7 +54,7 @@ Item {
 
     readonly property real gap: Kirigami.Units.smallSpacing
     readonly property real pitch: buttonSize + gap
-    readonly property int buttonCount: 9
+    readonly property int buttonCount: code ? 8 : 9
     // The height with everything showing, from sizes alone (the two dividers
     // are 1px with a gap above and below).
     readonly property real fullHeight: buttonCount * buttonSize + (buttonCount - 1) * gap + 2 * (1 + 3 * gap) + inset * 2
@@ -61,8 +68,9 @@ Item {
 
     // fullHeight is worked out by hand: when everything shows, the layout
     // must agree.
+    // Only while shown: a hidden capsule's layout counts none of its items.
     function checkFullHeight() {
-        if (!scrolls && Math.abs(column.implicitHeight + inset * 2 - fullHeight) > 1) {
+        if (visible && !scrolls && Math.abs(column.implicitHeight + inset * 2 - fullHeight) > 1) {
             console.warn("ToolCapsule: fullHeight", fullHeight, "differs from the layout's", column.implicitHeight + inset * 2);
         }
     }
@@ -75,6 +83,8 @@ Item {
     }
     onFullHeightChanged: heightCheck.restart()
     onScrollsChanged: heightCheck.restart()
+    onVisibleChanged: heightCheck.restart()
+    onCodeChanged: heightCheck.restart()
     Component.onCompleted: heightCheck.restart()
 
     width: Math.round(Kirigami.Units.gridUnit * 2.2)
@@ -84,7 +94,7 @@ Item {
     y: Math.round(topInset + edgeMargin + Math.max(0, ((parent ? parent.height : 0) - topInset - edgeMargin * 2 - height) / 2))
     opacity: near ? 1 : 0.35
     Accessible.role: Accessible.ToolBar
-    Accessible.name: qsTr("Markdown tools")
+    Accessible.name: capsule.code ? qsTr("Code tools") : qsTr("Markdown tools")
 
     Behavior on opacity {
         NumberAnimation {
@@ -96,6 +106,11 @@ Item {
         property string iconName
         // The MarkdownEditor.Format bit that makes it look on.
         property int bit: 0
+        // For a toggle that is not a format bit (line numbers).
+        property bool on: false
+        // Which variant of the capsule shows it.
+        property bool forCode: false
+        visible: forCode === capsule.code
         // Not `action`: AbstractButton's own would trigger it a second time.
         property QQC2.Action command
         round: true
@@ -104,7 +119,7 @@ Item {
         implicitWidth: capsule.buttonSize
         implicitHeight: capsule.buttonSize
         symbol: iconName
-        checked: bit !== 0 && (capsule.formats & bit) !== 0
+        checked: on || (bit !== 0 && (capsule.formats & bit) !== 0)
         text: command ? command.text.replace("&", "") : ""
         shortcutText: command ? App.shortcutText(command.keys ?? command.shortcut) : ""
         enabled: command ? command.enabled : false
@@ -112,8 +127,9 @@ Item {
         Keys.onEscapePressed: capsule.editorFocusRequested(true) // the editor keeps Tab
     }
     component Divider: Rectangle {
+        property bool forCode: false
         Layout.alignment: Qt.AlignHCenter
-        visible: !capsule.scrolls
+        visible: !capsule.scrolls && forCode === capsule.code
         Layout.topMargin: Kirigami.Units.smallSpacing
         Layout.bottomMargin: Kirigami.Units.smallSpacing
         implicitWidth: Math.round(capsule.buttonSize * 0.55)
@@ -238,6 +254,7 @@ Item {
                 implicitWidth: capsule.buttonSize
                 implicitHeight: capsule.buttonSize
                 symbol: "format_h1"
+                visible: !capsule.code
                 Keys.onEscapePressed: capsule.editorFocusRequested(true)
                 text: qsTr("Heading")
                 tipEnabled: !headingMenu.visible
@@ -294,6 +311,7 @@ Item {
                 implicitWidth: capsule.buttonSize
                 implicitHeight: capsule.buttonSize
                 symbol: "add"
+                visible: !capsule.code
                 Keys.onEscapePressed: capsule.editorFocusRequested(true)
                 text: qsTr("More")
                 tipEnabled: !moreMenu.visible
@@ -314,6 +332,96 @@ Item {
                         marked: !capsule.formatted
                     }
                 }
+            }
+
+            // Code tools.
+            Tool {
+                forCode: true
+                Layout.alignment: Qt.AlignHCenter
+                iconName: "comment"
+                command: capsule.actions.toggleComment
+            }
+            Tool {
+                forCode: true
+                Layout.alignment: Qt.AlignHCenter
+                iconName: "format_indent_increase"
+                command: capsule.actions.indent
+            }
+            Tool {
+                forCode: true
+                Layout.alignment: Qt.AlignHCenter
+                iconName: "format_indent_decrease"
+                command: capsule.actions.outdent
+            }
+            Divider {
+                forCode: true
+            }
+            Tool {
+                forCode: true
+                Layout.alignment: Qt.AlignHCenter
+                iconName: "sort"
+                command: capsule.actions.sortLines
+            }
+            SymbolButton {
+                id: caseButton
+                keyboardFocus: true
+                visible: capsule.code
+                Layout.alignment: Qt.AlignHCenter
+                round: true
+                tipSide: "left"
+                implicitWidth: capsule.buttonSize
+                implicitHeight: capsule.buttonSize
+                symbol: "text_fields"
+                Keys.onEscapePressed: capsule.editorFocusRequested(true)
+                text: qsTr("Change Case")
+                tipEnabled: !caseMenu.visible
+                enabled: capsule.actions.upperCase.enabled
+                onClicked: capsule.popupLeft(caseMenu, caseButton)
+                ContextMenu {
+                    id: caseMenu
+                    onClosed: capsule.menuClosed()
+                    Entry {
+                        command: capsule.actions.upperCase
+                    }
+                    Entry {
+                        command: capsule.actions.lowerCase
+                    }
+                    Entry {
+                        command: capsule.actions.titleCase
+                    }
+                }
+            }
+            Tool {
+                forCode: true
+                Layout.alignment: Qt.AlignHCenter
+                iconName: "space_bar"
+                command: capsule.actions.trimSpaces
+            }
+            Divider {
+                forCode: true
+            }
+            Tool {
+                forCode: true
+                Layout.alignment: Qt.AlignHCenter
+                iconName: "format_list_numbered"
+                command: capsule.actions.codeLineNumbers
+                on: capsule.actions.codeLineNumbers.checked
+            }
+            SymbolButton {
+                id: languageButton
+                keyboardFocus: true
+                visible: capsule.code
+                Layout.alignment: Qt.AlignHCenter
+                round: true
+                tipSide: "left"
+                implicitWidth: capsule.buttonSize
+                implicitHeight: capsule.buttonSize
+                symbol: "data_object"
+                Keys.onEscapePressed: capsule.editorFocusRequested(true)
+                text: qsTr("Language and Indentation")
+                tipEnabled: !capsule.popoverOpen
+                checked: capsule.popoverOpen
+                onClicked: capsule.codeSettingsRequested(languageButton)
             }
         }
     }

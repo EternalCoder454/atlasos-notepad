@@ -95,6 +95,21 @@ Platform.MenuBar {
     }
 
     Platform.Menu {
+        title: qsTr("&Code")
+        Item { action: bar.actions.toggleComment }
+        Item { action: bar.actions.indent }
+        Item { action: bar.actions.outdent }
+        Separator {}
+        Item { action: bar.actions.sortLines }
+        Item { action: bar.actions.upperCase }
+        Item { action: bar.actions.lowerCase }
+        Item { action: bar.actions.titleCase }
+        Item { action: bar.actions.trimSpaces }
+        Separator {}
+        Item { action: bar.actions.codeLineNumbers }
+    }
+
+    Platform.Menu {
         title: qsTr("F&ormat")
         Item { action: bar.actions.heading1 }
         Item { action: bar.actions.heading2 }
