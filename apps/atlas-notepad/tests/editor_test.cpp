@@ -1246,30 +1246,36 @@ private Q_SLOTS:
     }
 
     // The input method's text being composed keeps its underline through a
-    // highlight.
+    // highlight, and the line's colours move past it, as the stock one has it.
     void codeHighlighterKeepsPreedit()
     {
+        const QString text = QStringLiteral("int a = 1; // x \"s\"\n");
         QTextDocument doc;
         (void)doc.documentLayout(); // contentsChange is only sent with a layout
-        doc.setPlainText(QStringLiteral("int a; // x\n"));
+        doc.setPlainText(text);
         CodeHighlighter highlighter(&doc);
         highlighter.setTheme(themeFor(false));
         highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
-        QTextLayout *layout = doc.begin().layout();
-        layout->setPreeditArea(3, QStringLiteral("xy"));
+        Stock stock(text, QStringLiteral("C++"), false);
         QTextLayout::FormatRange preedit;
-        preedit.start = 3;
+        preedit.start = 6;
         preedit.length = 2;
         preedit.format.setFontUnderline(true);
         preedit.format.setUnderlineStyle(QTextCharFormat::DashUnderline);
-        layout->setFormats(layout->formats() << preedit);
+        for (QTextDocument *d : {&doc, &stock.doc}) {
+            QTextLayout *layout = d->begin().layout();
+            layout->setPreeditArea(6, QStringLiteral("xy"));
+            layout->setFormats(layout->formats() << preedit);
+        }
         highlighter.rehighlightAll(true);
-        const auto formats = layout->formats();
-        const bool kept = std::any_of(formats.cbegin(), formats.cend(), [&](const QTextLayout::FormatRange &r) {
-            return r.start == 3 && r.length == 2 && r.format.underlineStyle() == QTextCharFormat::DashUnderline;
+        stock.highlighter->rehighlight();
+        const auto formats = doc.begin().layout()->formats();
+        const bool kept = std::any_of(formats.cbegin(), formats.cend(), [](const QTextLayout::FormatRange &r) {
+            return r.start == 6 && r.length == 2 && r.format.underlineStyle() == QTextCharFormat::DashUnderline;
         });
         QVERIFY(kept);
-        QVERIFY(formats.size() > 1); // and highlighted
+        QString why;
+        QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
     }
 
     // Blocks may carry another highlighter's data (the Markdown one, before a

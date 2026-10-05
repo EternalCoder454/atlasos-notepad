@@ -172,15 +172,26 @@ State CodeHighlighter::highlightOne(QTextBlock block, const State &in, bool *cha
     data->end = end;
     QTextLayout *layout = block.layout();
     const QList<QTextLayout::FormatRange> old = layout->formats();
-    // The input method's text being composed keeps its formats (its
-    // underline), as QSyntaxHighlighter keeps them.
-    if (const int preeditLength = layout->preeditAreaText().size(); preeditLength > 0 && !old.isEmpty()) {
+    // While the input method composes text in the line, its formats (the
+    // underline) stay and the line's are moved past it: what
+    // QSyntaxHighlighter does.
+    if (const int preeditLength = layout->preeditAreaText().size(); preeditLength > 0) {
         const int preedit = layout->preeditAreaPosition();
+        QList<QTextLayout::FormatRange> ranges;
         for (const QTextLayout::FormatRange &r : old) {
             if (r.start >= preedit && r.start + r.length <= preedit + preeditLength) {
-                m_ranges.append(r);
+                ranges.append(r);
             }
         }
+        for (QTextLayout::FormatRange r : std::as_const(m_ranges)) {
+            if (r.start >= preedit) {
+                r.start += preeditLength;
+            } else if (r.start + r.length >= preedit) {
+                r.length += preeditLength;
+            }
+            ranges.append(r);
+        }
+        m_ranges = std::move(ranges);
     }
     // Plain before and after: the layout has nothing to learn (a 5 MB line
     // would be laid out again for it).
