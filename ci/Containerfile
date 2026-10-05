@@ -2,13 +2,13 @@
 # `publish` job of .github/workflows/ci.yml from the repo root, on main only.
 # Context: framework-rpms/ holds atlas-ui and atlas-symbols-fonts, built from
 # atlas-framework at the rev Cargo.toml pins. ci/install-deps.sh does the work
-# (packages, Atlas.Ui, the spec's build dependencies) and leaves the RPMs in
-# /opt/atlas-rpms for packaging/build-rpm.sh. Nothing secret goes in: the
-# inputs are bind-mounted for the one RUN, so they add no layer.
+# (packages, Atlas.Ui, the spec's build dependencies). Nothing secret goes in:
+# the inputs are bind-mounted for the one RUN, so they add no layer.
+# Pull by digest only: tags are informational and not trusted.
 FROM registry.fedoraproject.org/fedora:44
 
 LABEL org.opencontainers.image.source="https://github.com/EternalCoder454/atlasos-notepad" \
-      org.opencontainers.image.description="Build image for CI of Atlas Notepad: Fedora 44, Qt 6, Kirigami, Atlas.Ui" \
+      org.opencontainers.image.description="CI build image for atlas-notepad. Pull by digest only; tags are informational and not trusted." \
       org.opencontainers.image.licenses="MIT AND Apache-2.0"
 
 RUN --mount=type=bind,source=ci,target=/src/ci \
