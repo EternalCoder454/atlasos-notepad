@@ -139,7 +139,7 @@ jobs:
           cmake --build build/ci
 
       - name: ctest
-        run: ctest --test-dir build/ci --output-on-failure
+        run: ctest --test-dir build/ci -j4 --output-on-failure
 
       - name: Save the Cargo cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
