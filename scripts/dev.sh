@@ -95,8 +95,9 @@ tty=()
 [ -t 0 ] && tty=(-it)
 # SELinux labelling is off for the container (label=disable) rather than
 # relabelling the mounts with :z or :Z, which would change the labels of the
-# repo on the host.
-exec podman run --rm "${tty[@]}" --security-opt label=disable \
+# repo on the host. --init: a real init as PID 1, which reaps and forwards
+# signals; GNU timeout, for one, exits 125 at once when it is PID 1.
+exec podman run --rm --init "${tty[@]}" --security-opt label=disable \
     -v "$repo":/src -w /src \
     -v atlas-cargo:/root/.cargo/registry \
     -v atlas-cargo-git:/root/.cargo/git \
