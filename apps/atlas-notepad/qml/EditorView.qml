@@ -381,14 +381,23 @@ FocusScope {
             }
 
             // Code: the caret's line, behind the text (not while selecting).
-            Rectangle {
+            // A Loader: any extra z: -1 child of the TextEdit, even a hidden
+            // one, stops a Markdown code block's text from being drawn.
+            Loader {
                 z: -1
-                visible: view.document.code && edit.selectionStart === edit.selectionEnd
+                active: view.document.code
+                sourceComponent: currentLine
+            }
+            Component {
+                id: currentLine
+                Rectangle {
+                visible: edit.selectionStart === edit.selectionEnd
                 x: 0
                 y: edit.cursorRectangle.y
                 width: edit.width
                 height: edit.cursorRectangle.height
                 color: Qt.alpha(Kirigami.Theme.textColor, view.dark ? 0.07 : 0.05)
+                }
             }
 
             // Code: boxes round the bracket at the caret and its partner.
