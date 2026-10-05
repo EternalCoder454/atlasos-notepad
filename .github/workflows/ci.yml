@@ -3,38 +3,64 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: &ignored
+      - '**.md'
+      - 'docs/**'
+      - 'out/**'
+      - 'LICENSE'
+      - 'NOTICE'
   pull_request:
+    paths-ignore: *ignored
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A new push cancels the older run of a branch or pull request, never a run on main.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/eternalcoder454/atlas-notepad-dev
 
 # Everything runs in Fedora 44, the release AtlasOS is built on, as scripts/dev.sh
 # does locally. Actions are pinned by commit.
+#
+#   image -> lint -> check
+#              `---> rpm
+#
+# `image` makes sure the build image exists on GHCR (building it, with Atlas.Ui,
+# only when its inputs changed), so no job installs packages. `lint` fails fast.
 
 jobs:
-  # Atlas.Ui (atlas-ui, atlas-symbols-fonts) is not in any repository: build its
-  # RPMs from atlas-framework at the commit Cargo.toml pins, once per commit.
-  framework:
-    name: atlas-framework RPMs
+  # The tag is a hash of everything the image is made from: the spec (build
+  # dependencies), the atlas-framework rev (Atlas.Ui), ci/ (the Containerfile)
+  # and the ISO week (Fedora's updates). An existing tag is reused as it is.
+  #
+  # Pull requests from forks have a read-only token and cannot push. If the
+  # image for their tag is missing (they changed the spec, the rev or ci/, or a
+  # new week began before any push to main), this job fails with a message; a
+  # maintainer re-runs it from a branch of this repository. The package must be
+  # public, so those jobs can still pull an image that exists.
+  image:
+    name: build image
     runs-on: ubuntu-latest
-    container: registry.fedoraproject.org/fedora:44
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - name: Install the tools the actions need
-        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # The same rev as the crates, so Atlas.Ui and the crash code match.
-      - name: Read the atlas-framework rev
-        id: rev
+      - name: Read the atlas-framework rev and compute the tag
+        id: tag
         run: |
           url='https://github.com/EternalCoder454/atlas-framework'
           revs=$(sed -n "s|^atlas-framework-[a-z]* = { git = \"$url\", rev = \"\([0-9a-f]\{40\}\)\" }\$|\1|p" Cargo.toml | sort -u)
@@ -44,85 +70,112 @@ jobs:
             echo "Cargo.toml must pin every atlas-framework crate to $url at one 40-character rev" >&2
             exit 1
           fi
-          echo "rev=$revs" >>"$GITHUB_OUTPUT"
-          # Rebuilt weekly too, to follow Fedora's Qt updates.
-          echo "week=$(date -u +%G-W%V)" >>"$GITHUB_OUTPUT"
+          week=$(date -u +%G-W%V)
+          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/atlas-notepad.spec; find ci -type f | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
+          {
+            echo "rev=$revs"
+            echo "week=$week"
+            echo "tag=f44-$sum"
+          } >>"$GITHUB_OUTPUT"
 
+      # Not for fork pull requests: the token cannot push, and a public package
+      # needs no login to be read.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Does the image exist?
+        id: exists
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "found=true" >>"$GITHUB_OUTPUT"
+            echo "$IMAGE:$TAG exists"
+          else
+            echo "found=false" >>"$GITHUB_OUTPUT"
+            echo "$IMAGE:$TAG is missing: building it"
+          fi
+
+      - name: Fork pull requests cannot build the image
+        if: steps.exists.outputs.found != 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::The build image $IMAGE:${{ steps.tag.outputs.tag }} does not exist yet and this pull request's token cannot push it. A maintainer must re-run CI from a branch of ${{ github.repository }}."
+          exit 1
+
+      # atlas-framework's RPMs, once per rev and week (also when only the spec
+      # changed and the image is rebuilt).
       - name: Cache the RPMs
         id: cache
+        if: steps.exists.outputs.found != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: framework-rpms
-          key: atlas-framework-rpms-f44-${{ steps.rev.outputs.rev }}-${{ steps.rev.outputs.week }}
+          key: atlas-framework-rpms-f44-${{ steps.tag.outputs.rev }}-${{ steps.tag.outputs.week }}
 
       - name: Check out atlas-framework
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.exists.outputs.found != 'true' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EternalCoder454/atlas-framework
-          ref: ${{ steps.rev.outputs.rev }}
+          ref: ${{ steps.tag.outputs.rev }}
           path: atlas-framework
           persist-credentials: false
 
+      # In a Fedora container, as its build-rpm.sh installs packages as root.
       - name: Build the RPMs
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: atlas-framework/packaging/build-rpm.sh "$PWD/framework-rpms"
+        if: steps.exists.outputs.found != 'true' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir framework-rpms
+          docker run --rm \
+            -v "$PWD/atlas-framework":/src:ro \
+            -v "$PWD/framework-rpms":/out \
+            registry.fedoraproject.org/fedora:44 \
+            /src/packaging/build-rpm.sh /out
+          ls -l framework-rpms
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Build and push the image
+        if: steps.exists.outputs.found != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          name: framework-rpms
-          path: framework-rpms/*.rpm
-          if-no-files-found: error
-          retention-days: 1
+          context: .
+          file: ci/Containerfile
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
-  check:
-    name: fmt · clippy · test · ctest
-    needs: framework
+  lint:
+    name: fmt · clippy · qmllint
+    needs: image
     runs-on: ubuntu-latest
-    container: registry.fedoraproject.org/fedora:44
-    timeout-minutes: 60
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/eternalcoder454/atlas-notepad-dev:${{ needs.image.outputs.tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     env:
       CARGO_TARGET_DIR: target/ci
-      CARGO_TERM_COLOR: always
     steps:
-      - name: Install the tools the actions need
-        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: framework-rpms
-          # Outside the checkout, so the RPM's source tarball doesn't take it in.
-          path: ${{ runner.temp }}/framework-rpms
-
-      # The package list of scripts/dev.sh, then Atlas.Ui, then the spec's
-      # build dependencies.
-      - name: Install the build dependencies
-        run: |
-          dnf -y install dnf5-plugins rpm-build clippy rustfmt dbus-daemon \
-              qt6-qtbase-gui kf6-qqc2-desktop-style breeze-icon-theme default-fonts-core-sans
-          rpms=$RUNNER_TEMP/framework-rpms
-          dnf -y install "$rpms"/atlas-ui-[0-9]*.rpm "$rpms"/atlas-symbols-fonts-[0-9]*.rpm
-          dnf -y builddep packaging/atlas-notepad.spec
-
       # Restored on every run, saved only from main: a save per pull request
-      # would crowd the framework RPMs out of the repository's 10 GB.
-      - name: Restore the Cargo cache
-        id: cargo-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # would crowd the other caches out of the repository's 10 GB.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/ci
-          key: cargo-f44-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            cargo-f44-${{ hashFiles('Cargo.lock') }}-
-            cargo-f44-
+          workspaces: ". -> target/ci"
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: cargo fmt
         run: cargo fmt --all --check
@@ -130,55 +183,104 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      # Not verified offline: whether qmllint resolves Atlas.Ui and Kirigami from
+      # the installed modules and passes on the current QML. Reported but not
+      # blocking until a run shows it is clean; then drop continue-on-error.
+      # No clang-format step: the repository has no .clang-format.
+      - name: qmllint
+        continue-on-error: true
+        run: |
+          qmllint=$(command -v qmllint-qt6 || command -v qmllint || echo /usr/lib64/qt6/bin/qmllint)
+          "$qmllint" -I /usr/lib64/qt6/qml apps/atlas-notepad/qml/*.qml
+
+  check:
+    name: test · build · ctest
+    needs: [image, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/eternalcoder454/atlas-notepad-dev:${{ needs.image.outputs.tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      CARGO_TARGET_DIR: target/ci
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: '1'
+      CCACHE_MAXSIZE: 500M
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target/ci"
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      # Restored on every run, saved only from main, as the Cargo cache.
+      - name: Restore the ccache
+        id: ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-f44-${{ github.sha }}
+          restore-keys: |
+            ccache-f44-
+
       - name: cargo test
         run: cargo test --locked --workspace
 
       - name: CMake build
         run: |
+          ccache -z
           cmake -S apps/atlas-notepad -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build/ci
+          ccache -s
 
       - name: ctest
         run: ctest --test-dir build/ci -j4 --output-on-failure
 
-      - name: Save the Cargo cache
+      - name: Save the ccache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/ci
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+          path: .ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
+  # No ccache here: %cmake runs in a fresh mktemp directory and the spec's
+  # -ffile-prefix-map=$PWD flags would make most hits miss anyway.
   rpm:
     name: RPM
-    needs: framework
+    needs: [image, lint]
     runs-on: ubuntu-latest
-    container: registry.fedoraproject.org/fedora:44
-    timeout-minutes: 60
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/eternalcoder454/atlas-notepad-dev:${{ needs.image.outputs.tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Install the tools the actions need
-        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: framework-rpms
-          # Outside the checkout, so the RPM's source tarball doesn't take it in.
-          path: ${{ runner.temp }}/framework-rpms
-
+      # Atlas.Ui's RPMs are in the image, outside the checkout so the RPM's
+      # source tarball doesn't take them in.
       - name: Build the RPM
-        run: ATLAS_LOCAL_RPMS="$RUNNER_TEMP/framework-rpms" packaging/build-rpm.sh "$PWD/out/rpm"
+        run: ATLAS_LOCAL_RPMS=/opt/atlas-rpms packaging/build-rpm.sh "$PWD/out/rpm"
 
       - name: rpmlint
-        run: |
-          dnf -y install rpmlint
-          rpmlint out/rpm/*.rpm
+        run: rpmlint out/rpm/*.rpm
 
       # The package installs, and dnf then refuses to remove it (protected.d).
       - name: Install, then try to remove
