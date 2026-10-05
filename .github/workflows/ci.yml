@@ -32,7 +32,7 @@ env:
 # Everything runs in Fedora 44, the release AtlasOS is built on, as scripts/dev.sh
 # does locally. Actions are pinned by commit.
 #
-#   image -> lint, check, rpm   (in parallel; prune after image on main)
+#   image -> lint, check, rpm   (in parallel)
 #
 # `image` makes sure the build image exists on GHCR (building it, with Atlas.Ui,
 # only when its inputs changed), so no job installs packages. `lint` fails fast.
@@ -185,38 +185,6 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
-  # Keeps the newest versions of the package: 6 trusted ones, 3 untrusted.
-  # Best effort: a failure here must not fail CI.
-  prune:
-    name: prune old images
-    needs: image
-    if: needs.image.outputs.trusted == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Prune untrusted-* versions
-        continue-on-error: true
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
-        with:
-          package-name: atlas-notepad-dev
-          package-type: container
-          min-versions-to-keep: 3
-          ignore-versions: '^(?!untrusted-).*$'
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prune old f44-* versions
-        continue-on-error: true
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
-        with:
-          package-name: atlas-notepad-dev
-          package-type: container
-          min-versions-to-keep: 6
-          ignore-versions: '^untrusted-.*$'
-          token: ${{ secrets.GITHUB_TOKEN }}
-
   lint:
     name: fmt · clippy · qmllint
     needs: image
@@ -265,9 +233,7 @@ jobs:
           fi
 
   check:
-    # The name is the old one, so required-check settings keep working; clippy
-    # now runs in `lint`.
-    name: fmt · clippy · test · ctest
+    name: fmt · test · build · ctest
     needs: image
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
