@@ -78,6 +78,7 @@ private:
     bool closingBracket(const QString &text);
     void applyHighlighting();
     void firstLast(int from, int to, QTextBlock *first, QTextBlock *last) const;
+    void replaceLines(const QTextBlock &first, const QStringList &old, const QStringList &lines);
 
     QPointer<QQuickItem> m_edit;
     QPointer<QTextDocument> m_doc;

@@ -24,7 +24,7 @@ Platform.MenuBar {
         enabled: action.enabled
         checkable: action.checkable
         checked: action.checked
-        shortcut: bar.withShortcuts ? action.keys : undefined
+        shortcut: bar.withShortcuts && !action.editorOnly ? action.keys : undefined
         onTriggered: action.trigger()
     }
     component Separator: Platform.MenuSeparator {}

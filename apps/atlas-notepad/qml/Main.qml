@@ -129,7 +129,16 @@ AtlasWindow {
     // global menu's item when there is one (so the menu shows it), else here.
     component KeyedAction: QQC2.Action {
         property var keys
-        shortcut: App.hasGlobalMenu ? undefined : keys
+        // Keys that act only while the editor has focus (EditorShortcut below),
+        // so the Find field keeps its own Ctrl and Alt keys.
+        property bool editorOnly: false
+        shortcut: App.hasGlobalMenu || editorOnly ? undefined : keys
+    }
+    component EditorShortcut: Shortcut {
+        required property QQC2.Action action
+        sequence: action.keys
+        enabled: action.enabled && root.view !== null && root.view.edit.activeFocus
+        onActivated: action.trigger()
     }
 
     KeyedAction {
@@ -371,6 +380,7 @@ AtlasWindow {
         id: toggleCommentAction
         text: qsTr("Toggle Comment")
         keys: "Ctrl+/"
+        editorOnly: true
         enabled: root.codeEnabled
         onTriggered: root.view.toggleComment()
     }
@@ -390,6 +400,7 @@ AtlasWindow {
         id: duplicateLinesAction
         text: qsTr("Duplicate Line")
         keys: "Ctrl+D"
+        editorOnly: true
         enabled: root.linesEnabled
         onTriggered: root.view.duplicateLines()
     }
@@ -397,6 +408,7 @@ AtlasWindow {
         id: moveLineUpAction
         text: qsTr("Move Line Up")
         keys: "Alt+Up"
+        editorOnly: true
         enabled: root.linesEnabled
         onTriggered: root.view.moveLines(false)
     }
@@ -404,6 +416,7 @@ AtlasWindow {
         id: moveLineDownAction
         text: qsTr("Move Line Down")
         keys: "Alt+Down"
+        editorOnly: true
         enabled: root.linesEnabled
         onTriggered: root.view.moveLines(true)
     }
@@ -411,6 +424,7 @@ AtlasWindow {
         id: deleteLinesAction
         text: qsTr("Delete Line")
         keys: "Ctrl+Shift+K"
+        editorOnly: true
         enabled: root.linesEnabled
         onTriggered: root.view.deleteLines()
     }
@@ -418,6 +432,7 @@ AtlasWindow {
         id: joinLinesAction
         text: qsTr("Join Lines")
         keys: "Ctrl+J"
+        editorOnly: true
         enabled: root.linesEnabled
         onTriggered: root.view.joinLines()
     }
@@ -708,6 +723,13 @@ AtlasWindow {
         enabled: root.formatEnabled
         onTriggered: root.view.md.toggleBlock("quote")
     }
+
+    EditorShortcut { action: toggleCommentAction }
+    EditorShortcut { action: duplicateLinesAction }
+    EditorShortcut { action: moveLineUpAction }
+    EditorShortcut { action: moveLineDownAction }
+    EditorShortcut { action: deleteLinesAction }
+    EditorShortcut { action: joinLinesAction }
 
     // Second keys for some actions.
     Shortcut {

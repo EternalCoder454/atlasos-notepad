@@ -59,6 +59,14 @@ public:
     // The selected text; the word at the caret when from == to.
     Q_INVOKABLE void changeCase(int from, int to, int mode);
 
+    // Replaces the old lines (first block `first`) with the new ones in one
+    // edit; only the span that differs is touched. False when nothing differs.
+    static bool applyLines(QTextDocument *doc, const QTextBlock &first, const QStringList &oldLines, const QStringList &newLines);
+    // Where a position (before the edit) lands after oldLines became newLines
+    // (the same count): a caret or selection can follow an edit.
+    static int mapPosition(const QTextBlock &first, const QStringList &oldLines, const QStringList &newLines, int pos);
+    static int mapColumn(const QString &oldLine, const QString &newLine, int column);
+
     // The text in the given case (CaseMode); paragraph breaks may be U+2029.
     static QString convertCase(const QString &text, int mode);
 
@@ -71,9 +79,6 @@ private:
     // The blocks [from, to) touches; all of them when whole and from == to.
     bool lineRange(int from, int to, bool whole, QTextBlock *first, QTextBlock *last) const;
     QStringList textOf(const QTextBlock &first, const QTextBlock &last) const;
-    // Replaces the old lines (first block `first`) with the new ones in one
-    // edit; only the span that differs is touched.
-    bool applyLines(const QTextBlock &first, const QStringList &oldLines, const QStringList &newLines);
     // Runs a whole-or-selected-lines transform; the lines it leaves are selected.
     template<typename F>
     void transform(int from, int to, bool whole, F &&fn);

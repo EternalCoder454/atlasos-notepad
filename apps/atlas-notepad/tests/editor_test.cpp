@@ -1051,12 +1051,12 @@ private Q_SLOTS:
     {
         openPlain(QStringLiteral("pear\nApple\napple\nbanana"));
         m_lines->sortLines(0, 0, 0);
-        QVERIFY(text() == QStringLiteral("Apple\napple\nbanana\npear") || text() == QStringLiteral("apple\nApple\nbanana\npear"));
+        QCOMPARE(text(), QStringLiteral("Apple\napple\nbanana\npear")); // ordinal: capitals first
         undoesTo(QStringLiteral("pear\nApple\napple\nbanana"));
         m_lines->sortLines(0, 0, LineTools::CaseInsensitive);
         QCOMPARE(text(), QStringLiteral("Apple\napple\nbanana\npear")); // stable
         m_lines->sortLines(0, 0, LineTools::CaseInsensitive | LineTools::Descending);
-        QVERIFY(text() == QStringLiteral("pear\nbanana\nApple\napple") || text() == QStringLiteral("pear\nbanana\napple\nApple"));
+        QCOMPARE(text(), QStringLiteral("pear\nbanana\nApple\napple")); // ties keep their order
         openPlain(QStringLiteral("z\nc\nb\na"));
         m_lines->sortLines(2, 5, 0); // lines 2..4 only
         QCOMPARE(text(), QStringLiteral("z\nb\nc\na"));
@@ -1300,6 +1300,98 @@ private Q_SLOTS:
         m_lines->sortLines(0, 0, 0);
         m_lines->duplicateLines(0, 0);
     }
+    void lineMoveOverEqualLines()
+    {
+        openPlain(QStringLiteral("x\n\n\n\ny"));
+        m_lines->moveLines(2, 2, true); // blank line down past a blank line
+        QCOMPARE(text(), QStringLiteral("x\n\n\n\ny"));
+        QCOMPARE(caret(), 3);
+        m_lines->moveLines(3, 3, true);
+        QCOMPARE(caret(), 4);
+        m_lines->moveLines(4, 4, false);
+        QCOMPARE(caret(), 3);
+    }
+    void lineSelectionEndsAtColumnZero()
+    {
+        openPlain(QStringLiteral("c\nb\na\nz"));
+        m_lines->sortLines(0, 6, 0); // "c\nb\na\n" selected
+        QCOMPARE(text(), QStringLiteral("a\nb\nc\nz"));
+        QCOMPARE(selStart(), 0);
+        QCOMPARE(selEnd(), 6);
+        openCode(QStringLiteral("a\nb\nc"));
+        select(0, 4); // "a\nb\n"
+        m_code->indentLines(0, 4);
+        QCOMPARE(text(), QStringLiteral("    a\n    b\nc"));
+        QCOMPARE(selStart(), 4);
+        QCOMPARE(selEnd(), 12); // still the start of "c"
+    }
+    void lineCaretStaysOnItsLine()
+    {
+        openPlain(QStringLiteral("a\na\nb\nb\nc"));
+        place(8); // "c"
+        m_lines->removeDuplicateLines(8, 8);
+        QCOMPARE(text(), QStringLiteral("a\nb\nc"));
+        QCOMPARE(caret(), 4); // the same line number, clamped to the new count
+        openPlain(QStringLiteral("a\na\nb"));
+        place(0);
+        m_lines->removeDuplicateLines(0, 0);
+        QCOMPARE(caret(), 0);
+    }
+    void lineCaseKeepsSelection()
+    {
+        openPlain(QStringLiteral("one two"));
+        select(0, 3);
+        m_lines->changeCase(0, 3, LineTools::UpperCase);
+        QCOMPARE(text(), QStringLiteral("ONE two"));
+        QCOMPARE(selStart(), 0);
+        QCOMPARE(selEnd(), 3);
+        openPlain(QStringLiteral("straße"));
+        select(0, 6);
+        m_lines->changeCase(0, 6, LineTools::UpperCase);
+        QCOMPARE(text(), QStringLiteral("STRASSE"));
+        QCOMPARE(selEnd(), 7);
+        openPlain(QStringLiteral("one two"));
+        place(5);
+        m_lines->changeCase(5, 5, LineTools::UpperCase); // the word at the caret
+        QCOMPARE(text(), QStringLiteral("one TWO"));
+        QCOMPARE(caret(), 5);
+    }
+    void lineCaseUnicode()
+    {
+        auto n = [](const QString &s) { return s.normalized(QString::NormalizationForm_C); };
+        QCOMPARE(LineTools::convertCase(QStringLiteral("cafés au lait"), LineTools::TitleCase), QStringLiteral("Cafés Au Lait"));
+        QCOMPARE(n(LineTools::convertCase(QStringLiteral("İSTANBUL"), LineTools::TitleCase)), n(QStringLiteral("İstanbul")));
+        QCOMPARE(LineTools::convertCase(QStringLiteral("DON’T don't"), LineTools::TitleCase), QStringLiteral("Don’t Don't"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010428\U00010429 \U00010428\U00010429"), LineTools::TitleCase), QString::fromUcs4(U"\U00010400\U00010429 \U00010400\U00010429"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010428\U00010429"), LineTools::UpperCase), QString::fromUcs4(U"\U00010400\U00010401"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010400a"), LineTools::InvertCase), QString::fromUcs4(U"\U00010428A"));
+        QCOMPARE(LineTools::convertCase(QStringLiteral("ßtraße"), LineTools::TitleCase), QStringLiteral("SStraße"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010428a. \U00010428b"), LineTools::SentenceCase), QString::fromUcs4(U"\U00010400a. \U00010400b"));
+    }
+    void lineSortNumberForms()
+    {
+        openPlain(QStringLiteral("1e2\n.5\n-.5\n3\n1e999\n-1e999\n2e-999\nx"));
+        m_lines->sortLines(0, 0, LineTools::Numeric);
+        QCOMPARE(text(), QStringLiteral("x\n-1e999\n-.5\n2e-999\n.5\n3\n1e2\n1e999"));
+    }
+    void lineTabsCountCodePoints()
+    {
+        openPlain(QString::fromUcs4(U"\U0001F600\tx"));
+        m_lines->tabsToSpaces(0, 0);
+        QCOMPARE(text(), QString::fromUcs4(U"\U0001F600") + QStringLiteral("   x"));
+    }
+    void codeEditsAreOneStepAndKeepCaret()
+    {
+        openCode(QStringLiteral("a\nb\nc"));
+        place(3); // before "b"... after its start
+        m_code->indentLines(3, 3);
+        QCOMPARE(text(), QStringLiteral("a\n    b\nc"));
+        QCOMPARE(caret(), 7); // follows the text
+        undoesTo(QStringLiteral("a\nb\nc"));
+        m_code->toggleComment(0, 5);
+        QCOMPARE(text(), QStringLiteral("// a\n// b\n// c"));
+        undoesTo(QStringLiteral("a\nb\nc"));
+    }
     // Time on a big file: NP_LINES_FILE=/path/to/log. Skipped without it.
     void lineToolsLargeFile()
     {
@@ -1332,6 +1424,34 @@ private Q_SLOTS:
             const qint64 ms = timer.elapsed();
             QMetaObject::invokeMethod(m_edit.get(), "undo");
             qInfo().noquote() << "LINES" << c.name << ms << "ms," << (text() == big ? "undo ok" : "undo DIFFERS");
+        }
+    }
+    // Time on a big file: NP_CODE_FILE=/path/to/code.cpp. Skipped without it.
+    void codeBigIndentAndComment()
+    {
+        const QByteArray path = qgetenv("NP_CODE_FILE");
+        if (path.isEmpty()) {
+            QSKIP("set NP_CODE_FILE to time indent and comment on a big file");
+        }
+        QFile f(QString::fromLocal8Bit(path));
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QString big = QString::fromUtf8(f.readAll());
+        const struct {
+            const char *name;
+            std::function<void()> run;
+        } cases[] = {
+            {"indent", [&] { m_code->indentLines(0, int(big.size())); }},
+            {"outdent", [&] { m_code->outdentLines(0, int(big.size())); }},
+            {"toggle comment", [&] { m_code->toggleComment(0, int(big.size())); }},
+        };
+        for (const auto &c : cases) {
+            openCode(big);
+            QElapsedTimer timer;
+            timer.start();
+            c.run();
+            const qint64 ms = timer.elapsed();
+            QMetaObject::invokeMethod(m_edit.get(), "undo");
+            qInfo().noquote() << "CODE" << c.name << ms << "ms," << (text() == big ? "undo ok" : "undo DIFFERS");
         }
     }
     void codeAutoIndentColonAndComments()

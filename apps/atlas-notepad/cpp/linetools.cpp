@@ -2,10 +2,11 @@
 #include "linetools.h"
 
 #include <algorithm>
+#include <charconv>
+#include <limits>
 #include <numeric>
 #include <vector>
 
-#include <QCollator>
 #include <QLocale>
 #include <QQuickTextDocument>
 #include <QSet>
@@ -45,18 +46,60 @@ qsizetype joinedSize(const QStringList &lines)
     return n;
 }
 
+void appendCp(QString &out, char32_t cp)
+{
+    if (QChar::requiresSurrogates(cp)) {
+        out += QChar(QChar::highSurrogate(cp));
+        out += QChar(QChar::lowSurrogate(cp));
+    } else {
+        out += QChar(char16_t(cp));
+    }
+}
+
+// The code point at i; i moves past it.
+char32_t takeCp(QStringView s, qsizetype &i)
+{
+    const QChar c = s[i++];
+    if (c.isHighSurrogate() && i < s.size() && s[i].isLowSurrogate()) {
+        return QChar::surrogateToUcs4(c, s[i++]);
+    }
+    return c.unicode();
+}
+
+bool isMark(char32_t cp)
+{
+    const QChar::Category c = QChar::category(cp);
+    return c == QChar::Mark_NonSpacing || c == QChar::Mark_SpacingCombining || c == QChar::Mark_Enclosing;
+}
+
+// The full upper case (ß is SS).
+QString upperFull(char32_t cp)
+{
+    return QString::fromUcs4(&cp, 1).toUpper();
+}
+
+// Lower case, then a capital on each word's first letter. Combining marks,
+// ' and U+2019 continue a word.
 QString titleCase(const QString &s)
 {
-    QString out = s.toLower();
+    const QString lower = s.toLower();
+    QString out;
+    out.reserve(lower.size());
     bool start = true;
-    for (QChar &c : out) {
-        if (c.isLetterOrNumber()) {
+    for (qsizetype i = 0; i < lower.size();) {
+        const char32_t cp = takeCp(lower, i);
+        if (QChar::isLetterOrNumber(cp)) {
             if (start) {
-                c = c.toUpper();
+                out += upperFull(cp);
+            } else {
+                appendCp(out, cp);
             }
             start = false;
-        } else if (c != u'\'') {
-            start = true;
+        } else {
+            appendCp(out, cp);
+            if (!isMark(cp) && cp != u'\'' && cp != 0x2019) {
+                start = true;
+            }
         }
     }
     return out;
@@ -66,22 +109,30 @@ QString titleCase(const QString &s)
 // after ". ", "! " and "? ".
 QString sentenceCase(const QString &s)
 {
-    QString out = s.toLower();
+    const QString lower = s.toLower();
+    QString out;
+    out.reserve(lower.size());
     bool cap = true;
     bool ended = false;
-    for (QChar &c : out) {
-        if (c.isLetterOrNumber()) {
+    for (qsizetype i = 0; i < lower.size();) {
+        const char32_t cp = takeCp(lower, i);
+        if (QChar::isLetterOrNumber(cp)) {
             if (cap) {
-                c = c.toUpper();
+                out += upperFull(cp);
+            } else {
+                appendCp(out, cp);
             }
             cap = false;
             ended = false;
-        } else if (c == u'.' || c == u'!' || c == u'?') {
+            continue;
+        }
+        appendCp(out, cp);
+        if (cp == u'.' || cp == u'!' || cp == u'?') {
             ended = true;
-        } else if (c == u'\n' || c == QChar::ParagraphSeparator) {
+        } else if (cp == u'\n' || cp == QChar::ParagraphSeparator) {
             cap = true;
             ended = false;
-        } else if (c.isSpace() && ended) {
+        } else if (ended && QChar::isSpace(cp)) {
             cap = true;
             ended = false;
         }
@@ -91,13 +142,11 @@ QString sentenceCase(const QString &s)
 
 QString invertCase(const QString &s)
 {
-    QString out = s;
-    for (QChar &c : out) {
-        if (c.isUpper()) {
-            c = c.toLower();
-        } else if (c.isLower()) {
-            c = c.toUpper();
-        }
+    QString out;
+    out.reserve(s.size());
+    for (qsizetype i = 0; i < s.size();) {
+        const char32_t cp = takeCp(s, i);
+        appendCp(out, QChar::isUpper(cp) ? QChar::toLower(cp) : QChar::isLower(cp) ? QChar::toUpper(cp) : cp);
     }
     return out;
 }
@@ -107,30 +156,56 @@ struct Number {
     double value = 0;
 };
 
-// The number a line starts with (after blanks): -12, +3.5, 7.
+// The number a line starts with (after blanks): -12, +3.5, .5, 1e5. Too big
+// a value is infinite and too small is zero, so the order stays consistent.
 Number leadingNumber(QStringView line)
 {
-    int i = leadingLength(line);
-    const int start = i;
+    auto digit = [&](qsizetype k) { return k < line.size() && line[k].unicode() >= u'0' && line[k].unicode() <= u'9'; };
+    qsizetype i = leadingLength(line);
+    bool negative = false;
     if (i < line.size() && (line[i] == u'-' || line[i] == u'+')) {
+        negative = line[i] == u'-';
         ++i;
     }
-    const int digits = i;
-    while (i < line.size() && line[i].isDigit() && line[i].unicode() < 128) {
+    const qsizetype first = i;
+    int digits = 0;
+    while (digit(i)) {
         ++i;
+        ++digits;
     }
-    if (i == digits) {
-        return {};
-    }
-    if (i + 1 < line.size() && line[i] == u'.' && line[i + 1].isDigit() && line[i + 1].unicode() < 128) {
+    if (i < line.size() && line[i] == u'.' && digit(i + 1)) {
         ++i;
-        while (i < line.size() && line[i].isDigit() && line[i].unicode() < 128) {
+        while (digit(i)) {
             ++i;
+            ++digits;
         }
     }
-    bool ok = false;
-    const double v = QLocale::c().toDouble(line.mid(start, i - start), &ok);
-    return ok ? Number{true, v} : Number{};
+    if (digits == 0) {
+        return {};
+    }
+    bool negativeExponent = false;
+    if (i < line.size() && (line[i] == u'e' || line[i] == u'E')) {
+        qsizetype j = i + 1;
+        if (j < line.size() && (line[j] == u'-' || line[j] == u'+')) {
+            negativeExponent = line[j] == u'-';
+            ++j;
+        }
+        if (digit(j)) {
+            while (digit(j)) {
+                ++j;
+            }
+            i = j;
+        }
+    }
+    const QByteArray ascii = line.mid(first, i - first).toLatin1();
+    double value = 0;
+    const auto result = std::from_chars(ascii.constData(), ascii.constData() + ascii.size(), value);
+    if (result.ec == std::errc::result_out_of_range) {
+        value = negativeExponent ? 0.0 : std::numeric_limits<double>::infinity();
+    } else if (result.ec != std::errc()) {
+        return {};
+    }
+    return {true, negative ? -value : value};
 }
 } // namespace
 
@@ -198,7 +273,7 @@ QStringList LineTools::textOf(const QTextBlock &first, const QTextBlock &last) c
     return lines;
 }
 
-bool LineTools::applyLines(const QTextBlock &first, const QStringList &oldLines, const QStringList &newLines)
+bool LineTools::applyLines(QTextDocument *doc, const QTextBlock &first, const QStringList &oldLines, const QStringList &newLines)
 {
     const qsizetype n = oldLines.size();
     const qsizetype m = newLines.size();
@@ -216,7 +291,7 @@ bool LineTools::applyLines(const QTextBlock &first, const QStringList &oldLines,
         return false;
     }
     const int firstNo = first.blockNumber();
-    auto block = [&](qsizetype k) { return m_doc->findBlockByNumber(firstNo + int(k)); };
+    auto block = [&](qsizetype k) { return doc->findBlockByNumber(firstNo + int(k)); };
     auto start = [&](qsizetype k) { return block(k).position(); };
     auto end = [&](qsizetype k) {
         const QTextBlock bl = block(k);
@@ -227,7 +302,7 @@ bool LineTools::applyLines(const QTextBlock &first, const QStringList &oldLines,
         text = QStringList(newLines.mid(p, b - p)).join(u'\n');
     }
 
-    QTextCursor c(m_doc);
+    QTextCursor c(doc);
     c.beginEditBlock();
     if (a > p && b > p) {
         c.setPosition(start(p));
@@ -255,6 +330,45 @@ bool LineTools::applyLines(const QTextBlock &first, const QStringList &oldLines,
     return true;
 }
 
+int LineTools::mapColumn(const QString &oldLine, const QString &newLine, int column)
+{
+    qsizetype p = 0;
+    while (p < oldLine.size() && p < newLine.size() && oldLine[p] == newLine[p]) {
+        ++p;
+    }
+    qsizetype s = 0;
+    while (s < oldLine.size() - p && s < newLine.size() - p && oldLine[oldLine.size() - 1 - s] == newLine[newLine.size() - 1 - s]) {
+        ++s;
+    }
+    const qsizetype oldEnd = oldLine.size() - s; // [p, oldEnd) became [p, newEnd)
+    const qsizetype newEnd = newLine.size() - s;
+    if (column < p) {
+        return column;
+    }
+    if (column >= oldEnd) { // after the change, or at an insert: after it
+        return int(column + newEnd - oldEnd);
+    }
+    return int(qMin<qsizetype>(column, newEnd));
+}
+
+int LineTools::mapPosition(const QTextBlock &first, const QStringList &oldLines, const QStringList &newLines, int pos)
+{
+    int oldStart = first.position();
+    int newStart = oldStart;
+    if (pos < oldStart || oldLines.size() != newLines.size()) {
+        return pos;
+    }
+    for (qsizetype i = 0; i < oldLines.size(); ++i) {
+        const int oldEnd = oldStart + int(oldLines[i].size());
+        if (pos <= oldEnd) {
+            return newStart + mapColumn(oldLines[i], newLines[i], pos - oldStart);
+        }
+        oldStart = oldEnd + 1;
+        newStart += int(newLines[i].size()) + 1;
+    }
+    return pos + (newStart - oldStart); // after the lines: they moved by the size change
+}
+
 void LineTools::select(int start, int end)
 {
     if (!m_edit || !m_doc) {
@@ -264,7 +378,9 @@ void LineTools::select(int start, int end)
     start = qBound(0, start, len);
     end = qBound(0, end, len);
     if (start == end) {
-        m_edit->setProperty("cursorPosition", start);
+        if (m_edit->property("cursorPosition").toInt() != start || m_edit->property("selectionStart").toInt() != m_edit->property("selectionEnd").toInt()) {
+            m_edit->setProperty("cursorPosition", start); // the view stays when nothing moves
+        }
     } else {
         QMetaObject::invokeMethod(m_edit, "select", Q_ARG(int, start), Q_ARG(int, end));
     }
@@ -281,19 +397,25 @@ void LineTools::transform(int from, int to, bool whole, F &&fn)
     QStringList lines = old;
     fn(lines);
     const int start = first.position(); // read before the edit invalidates the block
-    // A caret stays on its line and column when the line count holds.
-    const QTextBlock caretBlock = m_doc->findBlock(m_edit->property("cursorPosition").toInt());
-    const int caretLine = caretBlock.blockNumber() - first.blockNumber();
-    const int caretColumn = m_edit->property("cursorPosition").toInt() - caretBlock.position();
     const int firstNo = first.blockNumber();
-    if (!applyLines(first, old, lines)) {
+    // A selection that ends after the last line's newline still does.
+    const int extra = from != to && qMax(from, to) > last.position() + last.length() - 1 ? 1 : 0;
+    // A caret stays on its line (clamped to the new count) and column.
+    const int cursor = m_edit->property("cursorPosition").toInt();
+    const QTextBlock caretBlock = m_doc->findBlock(cursor);
+    const int caretLine = caretBlock.blockNumber() - firstNo;
+    const int caretColumn = cursor - caretBlock.position();
+    if (!applyLines(m_doc, first, old, lines)) {
         return;
     }
     if (from != to) { // keep the selection over the lines left
-        select(start, start + int(joinedSize(lines)));
-    } else if (lines.size() == old.size() && caretLine >= 0 && caretLine < lines.size()) {
-        const QTextBlock b = m_doc->findBlockByNumber(firstNo + caretLine);
-        const int at = b.position() + qMin(caretColumn, int(lines[caretLine].size()));
+        select(start, start + int(joinedSize(lines)) + (lines.isEmpty() ? 0 : extra));
+    } else if (lines.isEmpty()) {
+        select(0, 0);
+    } else if (caretLine >= 0) {
+        const int line = qMin<int>(caretLine, int(lines.size()) - 1);
+        const QTextBlock b = m_doc->findBlockByNumber(firstNo + line);
+        const int at = b.position() + qMin(line == caretLine ? caretColumn : 0, int(lines[line].size()));
         select(at, at);
     }
 }
@@ -308,7 +430,7 @@ void LineTools::duplicateLines(int from, int to)
     QStringList lines = old;
     lines += old;
     const int shift = int(joinedSize(old)) + 1;
-    if (applyLines(first, old, lines)) {
+    if (applyLines(m_doc, first, old, lines)) {
         select(qMin(from, to) + shift, qMax(from, to) + shift);
     }
 }
@@ -329,10 +451,9 @@ void LineTools::moveLines(int from, int to, bool down)
     const QTextBlock top = down ? first : other;
     const QStringList old = down ? moving + across : across + moving;
     const QStringList lines = down ? across + moving : moving + across;
-    if (applyLines(top, old, lines)) {
-        const int d = down ? shift : -shift;
-        select(qMin(from, to) + d, qMax(from, to) + d);
-    }
+    applyLines(m_doc, top, old, lines); // equal neighbours change nothing, the selection still moves
+    const int d = down ? shift : -shift;
+    select(qMin(from, to) + d, qMax(from, to) + d);
 }
 
 void LineTools::deleteLines(int from, int to)
@@ -342,7 +463,7 @@ void LineTools::deleteLines(int from, int to)
         return;
     }
     const int firstNo = first.blockNumber();
-    if (applyLines(first, textOf(first, last), {})) {
+    if (applyLines(m_doc, first, textOf(first, last), {})) {
         const QTextBlock b = m_doc->findBlockByNumber(qMin(firstNo, m_doc->blockCount() - 1));
         select(b.position(), b.position());
     }
@@ -379,7 +500,7 @@ void LineTools::joinLines(int from, int to)
     }
     point = qMax(point, 0);
     const int start = first.position();
-    if (applyLines(first, old, {out})) {
+    if (applyLines(m_doc, first, old, {out})) {
         if (from != to) {
             select(start, start + int(out.size()));
         } else {
@@ -392,13 +513,12 @@ void LineTools::sortLines(int from, int to, int flags)
 {
     transform(from, to, true, [flags](QStringList &lines) {
         const qsizetype n = lines.size();
-        QCollator collator;
-        collator.setCaseSensitivity(flags & CaseInsensitive ? Qt::CaseInsensitive : Qt::CaseSensitive);
-        // Sort keys are worked out once per line, not once per comparison.
-        std::vector<QCollatorSortKey> keys;
+        // Ordinal, so every machine and locale gives the same order; the
+        // case-insensitive ones compare the case-folded text.
+        std::vector<QString> keys;
         keys.reserve(n);
         for (const QString &l : std::as_const(lines)) {
-            keys.push_back(collator.sortKey(l));
+            keys.push_back(flags & CaseInsensitive ? l.toCaseFolded() : l);
         }
         std::vector<Number> numbers;
         if (flags & Numeric) {
@@ -421,7 +541,7 @@ void LineTools::sortLines(int from, int to, int flags)
                     return a.value < b.value;
                 }
             }
-            return keys[x].compare(keys[y]) < 0;
+            return keys[x] < keys[y];
         };
         if (flags & Descending) {
             std::stable_sort(order.begin(), order.end(), [&](qsizetype x, qsizetype y) { return less(y, x); });
@@ -497,11 +617,17 @@ void LineTools::tabsToSpaces(int from, int to)
             }
             QString out;
             out.reserve(l.size() + 8);
+            int col = 0; // in code points
             for (QChar c : std::as_const(l)) {
                 if (c == u'\t') {
-                    out.append(QString(width - out.size() % width, u' '));
+                    const int n = width - col % width;
+                    out.append(QString(n, u' '));
+                    col += n;
                 } else {
                     out.append(c);
+                    if (!c.isLowSurrogate()) {
+                        ++col;
+                    }
                 }
             }
             l = out;
@@ -569,7 +695,14 @@ void LineTools::changeCase(int from, int to, int mode)
         return;
     }
     const QString out = convertCase(text, mode);
-    if (out != text) {
-        c.insertText(out);
+    if (out == text) {
+        return;
+    }
+    const int start = qMin(from, to);
+    c.insertText(out);
+    if (from != to) { // the selection stays over the new text
+        select(start, start + int(out.size()));
+    } else {
+        select(from, from);
     }
 }
