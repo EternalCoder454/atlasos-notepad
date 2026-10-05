@@ -318,7 +318,7 @@ jobs:
           fi
 
   check:
-    name: fmt · test · build · ctest
+    name: test · build · ctest
     needs: [plan, publish, rpms]
     if: ${{ !cancelled() && github.event_name != 'schedule' && needs.plan.result == 'success' && needs.publish.result != 'failure' && needs.rpms.result != 'failure' }}
     runs-on: ubuntu-latest
