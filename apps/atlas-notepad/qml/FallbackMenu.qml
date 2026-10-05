@@ -102,6 +102,43 @@ ContextMenu {
         Item { action: menu.actions.selectAll }
         Item { action: menu.actions.timeDate }
         Item { action: menu.actions.font }
+        ContextMenuSeparator {}
+        SubMenu {
+            title: qsTr("Line Operations")
+            Item { action: menu.actions.duplicateLines }
+            Item { action: menu.actions.moveLineUp }
+            Item { action: menu.actions.moveLineDown }
+            Item { action: menu.actions.deleteLines }
+            Item { action: menu.actions.joinLines }
+            Item { action: menu.actions.reverseLines }
+            Item { action: menu.actions.removeDuplicateLines }
+            Item { action: menu.actions.removeEmptyLines }
+        }
+        SubMenu {
+            title: qsTr("Sort Lines")
+            Item { action: menu.actions.sortLines }
+            Item { action: menu.actions.sortLinesDescending }
+            Item { action: menu.actions.sortLinesNoCase }
+            Item { action: menu.actions.sortLinesNoCaseDescending }
+            Item { action: menu.actions.sortLinesNumeric }
+            Item { action: menu.actions.sortLinesNumericDescending }
+        }
+        SubMenu {
+            title: qsTr("Whitespace")
+            Item { action: menu.actions.trimSpaces }
+            Item { action: menu.actions.trimLeadingSpaces }
+            Item { action: menu.actions.trimBothSpaces }
+            Item { action: menu.actions.tabsToSpaces }
+            Item { action: menu.actions.spacesToTabs }
+        }
+        SubMenu {
+            title: qsTr("Convert Case")
+            Item { action: menu.actions.upperCase }
+            Item { action: menu.actions.lowerCase }
+            Item { action: menu.actions.titleCase }
+            Item { action: menu.actions.sentenceCase }
+            Item { action: menu.actions.invertCase }
+        }
     }
     SubMenu {
         title: qsTr("Format")
@@ -136,12 +173,6 @@ ContextMenu {
         Item { action: menu.actions.toggleComment }
         Item { action: menu.actions.indent }
         Item { action: menu.actions.outdent }
-        ContextMenuSeparator {}
-        Item { action: menu.actions.sortLines }
-        Item { action: menu.actions.upperCase }
-        Item { action: menu.actions.lowerCase }
-        Item { action: menu.actions.titleCase }
-        Item { action: menu.actions.trimSpaces }
         ContextMenuSeparator {}
         Item { action: menu.actions.codeLineNumbers }
     }

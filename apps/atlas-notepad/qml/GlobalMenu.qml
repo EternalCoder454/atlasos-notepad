@@ -15,6 +15,9 @@ Platform.MenuBar {
 
     required property var actions
     property bool withShortcuts: false
+    // Whether the editor has the keys: the editor-only actions' keys are held
+    // (and shown) only then, so the Find field keeps its own.
+    property bool editorKeys: false
 
     signal openRecent(string path)
 
@@ -24,7 +27,7 @@ Platform.MenuBar {
         enabled: action.enabled
         checkable: action.checkable
         checked: action.checked
-        shortcut: bar.withShortcuts ? action.keys : undefined
+        shortcut: bar.withShortcuts && (!action.editorOnly || bar.editorKeys) ? action.keys : undefined
         onTriggered: action.trigger()
     }
     component Separator: Platform.MenuSeparator {}
@@ -92,6 +95,43 @@ Platform.MenuBar {
         Item { action: bar.actions.selectAll }
         Item { action: bar.actions.timeDate }
         Item { action: bar.actions.font }
+        Separator {}
+        Platform.Menu {
+            title: qsTr("Line Operations")
+            Item { action: bar.actions.duplicateLines }
+            Item { action: bar.actions.moveLineUp }
+            Item { action: bar.actions.moveLineDown }
+            Item { action: bar.actions.deleteLines }
+            Item { action: bar.actions.joinLines }
+            Item { action: bar.actions.reverseLines }
+            Item { action: bar.actions.removeDuplicateLines }
+            Item { action: bar.actions.removeEmptyLines }
+        }
+        Platform.Menu {
+            title: qsTr("Sort Lines")
+            Item { action: bar.actions.sortLines }
+            Item { action: bar.actions.sortLinesDescending }
+            Item { action: bar.actions.sortLinesNoCase }
+            Item { action: bar.actions.sortLinesNoCaseDescending }
+            Item { action: bar.actions.sortLinesNumeric }
+            Item { action: bar.actions.sortLinesNumericDescending }
+        }
+        Platform.Menu {
+            title: qsTr("Whitespace")
+            Item { action: bar.actions.trimSpaces }
+            Item { action: bar.actions.trimLeadingSpaces }
+            Item { action: bar.actions.trimBothSpaces }
+            Item { action: bar.actions.tabsToSpaces }
+            Item { action: bar.actions.spacesToTabs }
+        }
+        Platform.Menu {
+            title: qsTr("Convert Case")
+            Item { action: bar.actions.upperCase }
+            Item { action: bar.actions.lowerCase }
+            Item { action: bar.actions.titleCase }
+            Item { action: bar.actions.sentenceCase }
+            Item { action: bar.actions.invertCase }
+        }
     }
 
     Platform.Menu {
@@ -99,12 +139,6 @@ Platform.MenuBar {
         Item { action: bar.actions.toggleComment }
         Item { action: bar.actions.indent }
         Item { action: bar.actions.outdent }
-        Separator {}
-        Item { action: bar.actions.sortLines }
-        Item { action: bar.actions.upperCase }
-        Item { action: bar.actions.lowerCase }
-        Item { action: bar.actions.titleCase }
-        Item { action: bar.actions.trimSpaces }
         Separator {}
         Item { action: bar.actions.codeLineNumbers }
     }

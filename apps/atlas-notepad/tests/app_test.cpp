@@ -428,6 +428,28 @@ private Q_SLOTS:
         return done && guard ? doc : nullptr;
     }
 
+    void chooseLineEnding()
+    {
+        // Choosing an ending marks the tab modified and the save writes it.
+        const QString path = write(QStringLiteral("endings.txt"), "a\r\nb\r\nc");
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        QCOMPARE(int(doc->lineEnding()), int(NP_CRLF));
+        QVERIFY(!doc->isModified());
+        doc->setLineEnding(Document::CrLf); // already so: nothing changes
+        QVERIFY(!doc->isModified());
+        for (const auto &[ending, bytes] : {std::pair{Document::Lf, QByteArray("a\nb\nc")},
+                                            std::pair{Document::Cr, QByteArray("a\rb\rc")},
+                                            std::pair{Document::CrLf, QByteArray("a\r\nb\r\nc")}}) {
+            doc->setLineEnding(ending);
+            QVERIFY(doc->isModified());
+            QCOMPARE(doc->text(), QStringLiteral("a\nb\nc")); // the text keeps \n in memory
+            QVERIFY(saveAndWait(doc));
+            QVERIFY(!doc->isModified());
+            QCOMPARE(read(path), bytes);
+        }
+    }
+
     void kioRoundTrip()
     {
         const QString text = QStringLiteral("h\u00e9llo\r\nworld\r\n");

@@ -1,9 +1,13 @@
 // MarkdownEditor's edits on a real TextEdit: keys go through its event filter
 // and toolbar calls through its invokables, and the test reads back the text.
 #include "codeeditor.h"
+#include "codehighlighter.h"
+#include "linetools.h"
 #include "markdown.h"
 
 #include <QClipboard>
+#include <QElapsedTimer>
+#include <QFile>
 #include <QGuiApplication>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
@@ -17,7 +21,117 @@
 #include <QTextDocument>
 #include <QTest>
 
+#include <KSyntaxHighlighting/Repository>
+#include <KSyntaxHighlighting/SyntaxHighlighter>
+#include <KSyntaxHighlighting/Theme>
+
+#include <algorithm>
+#include <functional>
 #include <memory>
+
+namespace
+{
+// A document's formats, block by block (start, length, look of each range).
+bool sameFormats(QTextDocument &a, QTextDocument &b, QString *why = nullptr)
+{
+    if (a.blockCount() != b.blockCount()) {
+        return false;
+    }
+    QTextBlock x = a.begin(), y = b.begin();
+    for (int n = 0; x.isValid() && y.isValid(); x = x.next(), y = y.next(), ++n) {
+        const auto fa = x.layout()->formats();
+        const auto fb = y.layout()->formats();
+        bool same = fa.size() == fb.size();
+        for (qsizetype i = 0; same && i < fa.size(); ++i) {
+            same = fa[i].start == fb[i].start && fa[i].length == fb[i].length && fa[i].format == fb[i].format;
+        }
+        if (!same) {
+            if (why) {
+                auto dump = [](const QList<QTextLayout::FormatRange> &f) {
+                    QString d;
+                    for (const auto &r : f) {
+                        d += QStringLiteral(" [%1+%2").arg(r.start).arg(r.length);
+                        const auto props = r.format.properties();
+                        for (auto it = props.cbegin(); it != props.cend(); ++it) {
+                            d += QStringLiteral(" %1=%2").arg(it.key()).arg(it.value().toString());
+                        }
+                        d += u']';
+                    }
+                    return d;
+                };
+                *why = QStringLiteral("line %1 (%2 and %3 ranges): %4 | mine%5 | stock%6").arg(n).arg(fa.size()).arg(fb.size()).arg(x.text(), dump(fa), dump(fb));
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+KSyntaxHighlighting::Theme themeFor(bool dark)
+{
+    return codeRepository().defaultTheme(dark ? KSyntaxHighlighting::Repository::DarkTheme : KSyntaxHighlighting::Repository::LightTheme);
+}
+
+// What KSyntaxHighlighting's own highlighter makes of `text`.
+struct Stock {
+    QTextDocument doc;
+    std::unique_ptr<KSyntaxHighlighting::SyntaxHighlighter> highlighter;
+    Stock(const QString &text, const QString &language, bool dark)
+    {
+        (void)doc.documentLayout();
+        doc.setPlainText(text);
+        highlighter = std::make_unique<KSyntaxHighlighting::SyntaxHighlighter>(&doc);
+        highlighter->setTheme(themeFor(dark));
+        highlighter->setDefinition(codeRepository().definitionForName(language));
+        highlighter->rehighlight();
+    }
+};
+
+QString cppSample()
+{
+    return QStringLiteral(
+        "#include <vector>\n#define MAX(a, b) ((a) > (b) ? (a) : (b))\n\n"
+        "/* a block\n   comment */\nnamespace n {\n"
+        "template <class T> struct Box { T v = T(); };\n"
+        "int main(int argc, char **argv) // entry\n{\n"
+        "    const char *s = \"text \\\" more\"; char c = 'x';\n"
+        "    for (int i = 0; i < 10; ++i) { if (i % 2) continue; }\n"
+        "    auto r = R\"(raw\nstring)\"; return 0x1F + 3.5e2;\n}\n}\n");
+}
+
+QString pythonSample()
+{
+    return QStringLiteral(
+        "import os\n\n@decorator\ndef f(a, b=2, *args):\n"
+        "    \"\"\"doc\n    string\"\"\"\n    x = [i for i in range(10) if i % 2]  # c\n"
+        "    return f'{a} {b}' + \"s\"\n\nclass A(B):\n    pass\n");
+}
+
+QString jsonSample()
+{
+    return QStringLiteral("{\n  \"name\": \"atlas\",\n  \"n\": [1, 2.5, -3e4, true, null],\n  \"o\": {\"k\": \"v\\n\"}\n}\n");
+}
+
+QString shellSample()
+{
+    return QStringLiteral(
+        "#!/bin/bash\nset -euo pipefail\nfor f in *.txt; do\n  echo \"$f: ${#f}\" | grep -v '^#' > out.$$\ndone\n"
+        "cat <<EOF\nhere $HOME\nEOF\nif [ -f x ]; then echo $(date); fi\n");
+}
+
+// Many lines of C++ with comments, up to about `chars` characters.
+QString generatedCpp(int chars, bool blockComments = true)
+{
+    QString out;
+    for (int i = 0; out.size() < chars; ++i) {
+        out += QStringLiteral("int f%1(int a) { return a * %1; } // line %1 \"s\"\n").arg(i);
+        if (blockComments && i % 50 == 7) {
+            out += QStringLiteral("/* a comment\n   over two lines */ static const char *k%1 = \"x\";\n").arg(i);
+        }
+    }
+    return out;
+}
+} // namespace
 
 class EditorTest : public QObject
 {
@@ -28,11 +142,13 @@ private:
     std::unique_ptr<QQuickItem> m_edit;
     std::unique_ptr<MarkdownEditor> m_editor;
     std::unique_ptr<CodeEditor> m_code;
+    std::unique_ptr<LineTools> m_lines;
 
     // A fresh TextEdit holding `text` with a CodeEditor on it.
     void openCode(const QString &text, const QString &language = QStringLiteral("C++"), bool spaces = true, int width = 4)
     {
         m_code.reset();
+        m_lines.reset();
         m_editor.reset();
         QQmlComponent component(&m_engine);
         component.setData("import QtQuick\nTextEdit { textFormat: TextEdit.PlainText }", QUrl());
@@ -45,6 +161,36 @@ private:
         m_code->setIndentWidth(width);
         m_code->setTextEdit(m_edit.get());
         QCoreApplication::processEvents();
+        attachLines(width);
+    }
+    // The line tools on the current TextEdit.
+    void attachLines(int width = 4)
+    {
+        m_lines = std::make_unique<LineTools>();
+        m_lines->setIndentWidth(width);
+        m_lines->setTextEdit(m_edit.get());
+    }
+    // A plain tab: a TextEdit with the line tools only, no CodeEditor.
+    void openPlain(const QString &text)
+    {
+        m_code.reset();
+        m_lines.reset();
+        m_editor.reset();
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nTextEdit { textFormat: TextEdit.PlainText }", QUrl());
+        m_edit.reset(qobject_cast<QQuickItem *>(component.create()));
+        QVERIFY2(m_edit, qPrintable(component.errorString()));
+        m_edit->setProperty("text", text);
+        QCoreApplication::processEvents();
+        attachLines();
+    }
+    int selStart() const { return m_edit->property("selectionStart").toInt(); }
+    int selEnd() const { return m_edit->property("selectionEnd").toInt(); }
+    // One undo must bring `before` back.
+    void undoesTo(const QString &before)
+    {
+        QMetaObject::invokeMethod(m_edit.get(), "undo");
+        QCOMPARE(text(), before);
     }
 
     // A fresh TextEdit holding `text`, read and formatted.
@@ -927,6 +1073,286 @@ private Q_SLOTS:
         m_code->setTextEdit(nullptr);
         QVERIFY(blockAt(0).layout()->formats().isEmpty());
     }
+    // ---- CodeHighlighter: the same look as KSyntaxHighlighting's, in linear time
+
+    void codeHighlighterMatchesStock_data()
+    {
+        QTest::addColumn<QString>("language");
+        QTest::addColumn<QString>("text");
+        QTest::newRow("C++") << QStringLiteral("C++") << cppSample();
+        QTest::newRow("Python") << QStringLiteral("Python") << pythonSample();
+        QTest::newRow("JSON") << QStringLiteral("JSON") << jsonSample();
+        QTest::newRow("Bash") << QStringLiteral("Bash") << shellSample();
+    }
+    void codeHighlighterMatchesStock()
+    {
+        QFETCH(QString, language);
+        QFETCH(QString, text);
+        for (const bool dark : {false, true}) {
+            Stock stock(text, language, dark);
+            QTextDocument doc;
+            (void)doc.documentLayout(); // contentsChange is only sent with a layout
+            doc.setPlainText(text);
+            CodeHighlighter highlighter(&doc);
+            highlighter.setTheme(themeFor(dark));
+            highlighter.setDefinition(codeRepository().definitionForName(language));
+            QVERIFY(!doc.begin().layout()->formats().isEmpty());
+            QString why;
+            QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
+            // Again, now.
+            highlighter.rehighlightAll(true);
+            QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
+        }
+    }
+
+    // Typing `/*` at the top: the lines after it become comment (the lines
+    // by the edit at once, the rest from the event loop), and deleting it
+    // gives them back. Past 64K characters the first pass is in slices too.
+    void codeHighlighterCarriesStateChanges()
+    {
+        // No `*/` in it: the comment runs to the end.
+        const QString text = generatedCpp(100 * 1024, false);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        {
+            Stock stock(text, QStringLiteral("C++"), false);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        QTextCursor cursor(&doc);
+        cursor.insertText(QStringLiteral("/*"));
+        {
+            Stock stock(doc.toPlainText(), QStringLiteral("C++"), false);
+            // A screenful after the edit is done before the event loop runs.
+            QTextBlock a = doc.findBlockByNumber(3), b = stock.doc.findBlockByNumber(3);
+            QCOMPARE(a.layout()->formats().size(), b.layout()->formats().size());
+            QVERIFY(!sameFormats(doc, stock.doc)); // the end isn't there yet
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        cursor.setPosition(0);
+        cursor.setPosition(2, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+        QCOMPARE(doc.toPlainText(), text);
+        Stock stock(text, QStringLiteral("C++"), false);
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // Text set on a big document (what a file filled in pieces does) is
+    // highlighted as the stock one would, without a pass over it per piece.
+    void codeHighlighterFollowsAppends()
+    {
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        const QString text = generatedCpp(150 * 1024);
+        QTextCursor cursor(&doc);
+        for (qsizetype pos = 0; pos < text.size();) {
+            const qsizetype end = text.indexOf(u'\n', qMin<qsizetype>(pos + 20000, text.size() - 1)) + 1;
+            cursor.movePosition(QTextCursor::End);
+            cursor.insertText(text.mid(pos, end - pos));
+            pos = end;
+        }
+        QCOMPARE(doc.toPlainText(), text);
+        Stock stock(text, QStringLiteral("C++"), false);
+        QString why;
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // A theme or language switch restyles every line, a big document too.
+    void codeHighlighterSwitchesThemeAndLanguage()
+    {
+        const QString text = generatedCpp(100 * 1024);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        highlighter.setTheme(themeFor(true));
+        {
+            Stock stock(text, QStringLiteral("C++"), true);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("Python")));
+        Stock stock(text, QStringLiteral("Python"), true);
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // The all-at-once pass is linear: 1 MB took 90 s through the stock one.
+    void codeHighlighterIsLinear()
+    {
+        const QString text = generatedCpp(1'000'000);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QElapsedTimer clock;
+        clock.start();
+        highlighter.rehighlightAll(true);
+        const qint64 ms = clock.elapsed();
+        qInfo() << "1 MB rehighlightAll:" << ms << "ms";
+        QVERIFY2(ms < 5000, qPrintable(QStringLiteral("took %1 ms").arg(ms)));
+        QVERIFY(!doc.lastBlock().previous().layout()->formats().isEmpty());
+    }
+
+    // A line over Limits::lineLength is left plain (and the lines after it
+    // still highlighted).
+    void codeHighlighterSkipsHugeLines()
+    {
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(QStringLiteral("int a; // x\n") + QString(150'000, u'a') + QStringLiteral("\nint b; // y\n"));
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QVERIFY(!doc.findBlockByNumber(0).layout()->formats().isEmpty());
+        QVERIFY(doc.findBlockByNumber(1).layout()->formats().isEmpty());
+        QVERIFY(!doc.findBlockByNumber(2).layout()->formats().isEmpty());
+    }
+
+    // A big paste after a pass that stops where the state matches again (the
+    // `*/`) is still highlighted: the pass goes to the end for it.
+    void codeHighlighterBigInsertDuringPass()
+    {
+        const QString head = generatedCpp(200 * 1024, false) + QStringLiteral("*/\n");
+        const QString text = head + generatedCpp(100 * 1024, false);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        {
+            Stock stock(text, QStringLiteral("C++"), false);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        QTextCursor cursor(&doc);
+        cursor.insertText(QStringLiteral("/*"));
+        // Before the pass gets to the `*/`: a paste well after it.
+        cursor.setPosition(doc.findBlockByNumber(doc.blockCount() - 100).position());
+        cursor.insertText(generatedCpp(8000, false));
+        Stock stock(doc.toPlainText(), QStringLiteral("C++"), false);
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // Typing in a big paste the pass hasn't done yet doesn't put the pass off:
+    // it goes on while the typing does, not only once it stops.
+    void codeHighlighterTypingDoesNotHoldBackPass()
+    {
+        const QString text = generatedCpp(100 * 1024, false);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        {
+            Stock stock(text, QStringLiteral("C++"), false);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        // A comment opened at the top leaves a pass due for the rest (the
+        // edit's own 2 ms reach a few dozen lines), then a big paste at the
+        // end is left to that pass, its lines not done.
+        QTextCursor cursor(&doc);
+        cursor.insertText(QStringLiteral("/*"));
+        const int paste = doc.blockCount() - 1;
+        cursor.movePosition(QTextCursor::End);
+        cursor.insertText(generatedCpp(8000, false));
+        // A key every 10 ms in the paste, for 300 ms.
+        QTextCursor typing(doc.findBlockByNumber(paste + 3));
+        for (int i = 0; i < 30; ++i) {
+            typing.insertText(QStringLiteral("x"));
+            QTest::qWait(10);
+        }
+        // Halfway down, a line is a comment by now: the pass ran meanwhile.
+        const QList<QTextLayout::FormatRange> comment = doc.findBlockByNumber(1).layout()->formats();
+        QCOMPARE(comment.size(), 1);
+        const QTextBlock middle = doc.findBlockByNumber(paste / 2);
+        const QList<QTextLayout::FormatRange> got = middle.layout()->formats();
+        QVERIFY2(got.size() == 1 && got.first().start == 0 && got.first().length == middle.length() - 1
+                     && got.first().format == comment.first().format,
+                 "the pass made no progress while typing went on");
+    }
+
+    // The input method's text being composed keeps its underline through a
+    // highlight, and the line's colours move past it, as the stock one has it.
+    void codeHighlighterKeepsPreedit()
+    {
+        const QString text = QStringLiteral("int a = 1; // x \"s\"\n");
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        Stock stock(text, QStringLiteral("C++"), false);
+        QTextLayout::FormatRange preedit;
+        preedit.start = 6;
+        preedit.length = 2;
+        preedit.format.setFontUnderline(true);
+        preedit.format.setUnderlineStyle(QTextCharFormat::DashUnderline);
+        for (QTextDocument *d : {&doc, &stock.doc}) {
+            QTextLayout *layout = d->begin().layout();
+            layout->setPreeditArea(6, QStringLiteral("xy"));
+            layout->setFormats(layout->formats() << preedit);
+        }
+        highlighter.rehighlightAll(true);
+        stock.highlighter->rehighlight();
+        const auto formats = doc.begin().layout()->formats();
+        const bool kept = std::any_of(formats.cbegin(), formats.cend(), [](const QTextLayout::FormatRange &r) {
+            return r.start == 6 && r.length == 2 && r.format.underlineStyle() == QTextCharFormat::DashUnderline;
+        });
+        QVERIFY(kept);
+        QString why;
+        QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
+    }
+
+    // Blocks may carry another highlighter's data (the Markdown one, before a
+    // language switch): it is replaced, not read as ours, and what isn't ours
+    // is left when we go.
+    void codeHighlighterForeignUserData()
+    {
+        struct Foreign : QTextBlockUserData {
+            int marker = 7;
+        };
+        const QString text = cppSample();
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        for (QTextBlock b = doc.begin(); b.isValid(); b = b.next()) {
+            b.setUserData(new Foreign);
+        }
+        auto highlighter = std::make_unique<CodeHighlighter>(&doc);
+        highlighter->setTheme(themeFor(false));
+        highlighter->setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        Stock stock(text, QStringLiteral("C++"), false);
+        QString why;
+        QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
+        // An edit in a comment, after its first line became someone else's
+        // again: its state isn't known from there.
+        QCOMPARE(doc.findBlockByNumber(3).text(), QStringLiteral("/* a block"));
+        doc.findBlockByNumber(3).setUserData(new Foreign);
+        QTextCursor cursor(doc.findBlockByNumber(4));
+        cursor.insertText(QStringLiteral(" "));
+        cursor.deletePreviousChar();
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 5000);
+        doc.findBlockByNumber(0).setUserData(new Foreign);
+        highlighter.reset();
+        QVERIFY(dynamic_cast<Foreign *>(doc.findBlockByNumber(0).userData()));
+        QVERIFY(!doc.findBlockByNumber(2).userData());
+    }
+
     void codeToggleComment()
     {
         openCode(QStringLiteral("  a\n    b\n\n  c"));
@@ -972,37 +1398,6 @@ private Q_SLOTS:
         m_code->outdentLines(0, 0);
         QCOMPARE(text(), QStringLiteral("a\n\tb"));
     }
-    void codeSortLines()
-    {
-        openCode(QStringLiteral("pear\nApple\napple\nbanana"));
-        m_code->sortLines(0, 0);
-        QCOMPARE(text(), QStringLiteral("Apple\napple\nbanana\npear")); // stable: Apple stays first
-        openCode(QStringLiteral("z\nc\nb\na"));
-        m_code->sortLines(2, 5); // lines 2..4 only
-        QCOMPARE(text(), QStringLiteral("z\nb\nc\na"));
-    }
-    void codeChangeCase()
-    {
-        openCode(QStringLiteral("hello wORLD foo"));
-        m_code->changeCase(0, 11, 0);
-        QCOMPARE(text(), QStringLiteral("HELLO WORLD foo"));
-        m_code->changeCase(0, 11, 1);
-        QCOMPARE(text(), QStringLiteral("hello world foo"));
-        m_code->changeCase(0, 15, 2);
-        QCOMPARE(text(), QStringLiteral("Hello World Foo"));
-        m_code->changeCase(7, 7, 0); // the word at the caret
-        QCOMPARE(text(), QStringLiteral("Hello WORLD Foo"));
-        m_code->changeCase(0, 5, 7); // a bad mode does nothing
-        QCOMPARE(text(), QStringLiteral("Hello WORLD Foo"));
-    }
-    void codeTrimTrailingSpaces()
-    {
-        openCode(QStringLiteral("a  \n\t\nb\t \nc"));
-        place(1);
-        m_code->trimTrailingSpaces();
-        QCOMPARE(text(), QStringLiteral("a\n\nb\nc"));
-        QCOMPARE(caret(), 1);
-    }
     void codeBracketPair()
     {
         openCode(QStringLiteral("f(a[1], {x})"));
@@ -1040,25 +1435,413 @@ private Q_SLOTS:
         m_code->setLanguage(QStringLiteral("Python"));
         m_code.reset();
     }
-    void codeReadOnlyIsNotEdited()
+    // --- Line tools (LineTools): plain, code and Markdown source tabs.
+    void lineSort()
     {
-        openCode(QStringLiteral("b\na  \n"));
-        m_edit->setProperty("readOnly", true);
-        m_code->indentLines(0, 5);
-        m_code->outdentLines(0, 5);
-        m_code->toggleComment(0, 5);
-        m_code->sortLines(0, 0);
-        m_code->changeCase(0, 3, 0);
-        m_code->trimTrailingSpaces();
-        QCOMPARE(text(), QStringLiteral("b\na  \n"));
-    }
-    void codeSortKeepsSelection()
-    {
-        openCode(QStringLiteral("z\nc\nb\na"));
-        m_code->sortLines(2, 7);
+        openPlain(QStringLiteral("pear\nApple\napple\nbanana"));
+        m_lines->sortLines(0, 0, 0);
+        QCOMPARE(text(), QStringLiteral("Apple\napple\nbanana\npear")); // ordinal: capitals first
+        undoesTo(QStringLiteral("pear\nApple\napple\nbanana"));
+        m_lines->sortLines(0, 0, LineTools::CaseInsensitive);
+        QCOMPARE(text(), QStringLiteral("Apple\napple\nbanana\npear")); // stable
+        m_lines->sortLines(0, 0, LineTools::CaseInsensitive | LineTools::Descending);
+        QCOMPARE(text(), QStringLiteral("pear\nbanana\nApple\napple")); // ties keep their order
+        openPlain(QStringLiteral("z\nc\nb\na"));
+        m_lines->sortLines(2, 5, 0); // lines 2..4 only
+        QCOMPARE(text(), QStringLiteral("z\nb\nc\na"));
+        openPlain(QStringLiteral("z\nc\nb\na"));
+        m_lines->sortLines(2, 7, 0);
         QCOMPARE(text(), QStringLiteral("z\na\nb\nc"));
-        QCOMPARE(m_edit->property("selectionStart").toInt(), 2);
-        QCOMPARE(m_edit->property("selectionEnd").toInt(), 7);
+        QCOMPARE(selStart(), 2);
+        QCOMPARE(selEnd(), 7);
+        openPlain(QStringLiteral("b\na")); // no newline at the end
+        m_lines->sortLines(0, 0, LineTools::Descending);
+        QCOMPARE(text(), QStringLiteral("b\na"));
+        m_lines->sortLines(0, 0, 0);
+        QCOMPARE(text(), QStringLiteral("a\nb"));
+        openPlain(QString());
+        m_lines->sortLines(0, 0, 0);
+        QCOMPARE(text(), QString());
+    }
+    void lineSortNumeric()
+    {
+        openPlain(QStringLiteral("10 c\n9 b\nnote\n-3\n 2.5\n9 a\nabc"));
+        m_lines->sortLines(0, 0, LineTools::Numeric);
+        QCOMPARE(text(), QStringLiteral("abc\nnote\n-3\n 2.5\n9 a\n9 b\n10 c"));
+        m_lines->sortLines(0, 0, LineTools::Numeric | LineTools::Descending);
+        QCOMPARE(text(), QStringLiteral("10 c\n9 b\n9 a\n 2.5\n-3\nnote\nabc"));
+    }
+    void lineReverseDuplicatesEmpty()
+    {
+        openPlain(QStringLiteral("a\nb\nc"));
+        m_lines->reverseLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("c\nb\na"));
+        undoesTo(QStringLiteral("a\nb\nc"));
+        openPlain(QStringLiteral("b\na\nb\n\na\n\nc\nb"));
+        m_lines->removeDuplicateLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("b\na\n\nc"));
+        undoesTo(QStringLiteral("b\na\nb\n\na\n\nc\nb"));
+        m_lines->removeEmptyLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("b\na\nb\na\nc\nb"));
+        openPlain(QStringLiteral("a\n  \n\t\nb\n"));
+        m_lines->removeEmptyLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("a\nb"));
+        openPlain(QStringLiteral("\n\n"));
+        m_lines->removeEmptyLines(0, 0); // every line goes
+        QCOMPARE(text(), QString());
+        undoesTo(QStringLiteral("\n\n"));
+        openPlain(QStringLiteral("x\nx\nx")); // a selection limits it
+        m_lines->removeDuplicateLines(0, 5);
+        QCOMPARE(text(), QStringLiteral("x"));
+        openPlain(QStringLiteral("a\na\nb\nb"));
+        m_lines->removeDuplicateLines(4, 7);
+        QCOMPARE(text(), QStringLiteral("a\na\nb"));
+    }
+    void lineDuplicate()
+    {
+        openPlain(QStringLiteral("a\nbb\nc"));
+        place(4); // caret in "bb"
+        m_lines->duplicateLines(4, 4);
+        QCOMPARE(text(), QStringLiteral("a\nbb\nbb\nc"));
+        QCOMPARE(caret(), 7); // on the copy
+        undoesTo(QStringLiteral("a\nbb\nc"));
+        m_lines->duplicateLines(0, 4); // selection over "a\nb"
+        QCOMPARE(text(), QStringLiteral("a\nbb\na\nbb\nc"));
+        QCOMPARE(selStart(), 5);
+        QCOMPARE(selEnd(), 9);
+        openPlain(QStringLiteral("a\nb")); // the last line has no newline
+        m_lines->duplicateLines(2, 2);
+        QCOMPARE(text(), QStringLiteral("a\nb\nb"));
+        QCOMPARE(caret(), 4);
+        openPlain(QString());
+        m_lines->duplicateLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("\n"));
+        openPlain(QStringLiteral("a\n"));
+        m_lines->duplicateLines(2, 2); // the empty last line
+        QCOMPARE(text(), QStringLiteral("a\n\n"));
+    }
+    void lineMove()
+    {
+        openPlain(QStringLiteral("a\nb\nc\nd"));
+        m_lines->moveLines(2, 2, false);
+        QCOMPARE(text(), QStringLiteral("b\na\nc\nd"));
+        QCOMPARE(caret(), 0);
+        undoesTo(QStringLiteral("a\nb\nc\nd"));
+        m_lines->moveLines(0, 0, false); // already first
+        QCOMPARE(text(), QStringLiteral("a\nb\nc\nd"));
+        m_lines->moveLines(2, 5, true); // "b\nc" down
+        QCOMPARE(text(), QStringLiteral("a\nd\nb\nc"));
+        QCOMPARE(selStart(), 4);
+        QCOMPARE(selEnd(), 7);
+        m_lines->moveLines(selStart(), selEnd(), true); // already last
+        QCOMPARE(text(), QStringLiteral("a\nd\nb\nc"));
+        m_lines->moveLines(selStart(), selEnd(), false);
+        QCOMPARE(text(), QStringLiteral("a\nb\nc\nd"));
+        QCOMPARE(selStart(), 2);
+        QCOMPARE(selEnd(), 5);
+        openPlain(QStringLiteral("a\nb")); // last line without newline moves up
+        m_lines->moveLines(2, 2, false);
+        QCOMPARE(text(), QStringLiteral("b\na"));
+        m_lines->moveLines(0, 0, true);
+        QCOMPARE(text(), QStringLiteral("a\nb"));
+        openPlain(QString());
+        m_lines->moveLines(0, 0, true);
+        m_lines->moveLines(0, 0, false);
+        QCOMPARE(text(), QString());
+    }
+    void lineDelete()
+    {
+        openPlain(QStringLiteral("a\nb\nc"));
+        m_lines->deleteLines(2, 2);
+        QCOMPARE(text(), QStringLiteral("a\nc"));
+        QCOMPARE(caret(), 2);
+        undoesTo(QStringLiteral("a\nb\nc"));
+        m_lines->deleteLines(0, 3); // "a\nb"
+        QCOMPARE(text(), QStringLiteral("c"));
+        undoesTo(QStringLiteral("a\nb\nc"));
+        m_lines->deleteLines(4, 4); // the last line, no newline
+        QCOMPARE(text(), QStringLiteral("a\nb"));
+        QCOMPARE(caret(), 2);
+        m_lines->deleteLines(0, 3);
+        QCOMPARE(text(), QString());
+        m_lines->deleteLines(0, 0);
+        QCOMPARE(text(), QString());
+        openPlain(QStringLiteral("a\nb\n")); // the empty last line
+        m_lines->deleteLines(4, 4);
+        QCOMPARE(text(), QStringLiteral("a\nb"));
+    }
+    void lineJoin()
+    {
+        openPlain(QStringLiteral("a  \n   b\n\t\n c\nd"));
+        m_lines->joinLines(0, 13);
+        QCOMPARE(text(), QStringLiteral("a b c\nd"));
+        undoesTo(QStringLiteral("a  \n   b\n\t\n c\nd"));
+        m_lines->joinLines(0, 0); // the caret's line and the next
+        QCOMPARE(text(), QStringLiteral("a b\n\t\n c\nd"));
+        QCOMPARE(caret(), 1);
+        openPlain(QStringLiteral("a\nb"));
+        m_lines->joinLines(2, 2); // the last line: nothing to join
+        QCOMPARE(text(), QStringLiteral("a\nb"));
+        openPlain(QStringLiteral("a\nb\nc"));
+        m_lines->joinLines(0, 5);
+        QCOMPARE(text(), QStringLiteral("a b c"));
+        QCOMPARE(selEnd(), 5);
+        openPlain(QStringLiteral("\n x"));
+        m_lines->joinLines(0, 0);
+        QCOMPARE(text(), QStringLiteral("x"));
+        openPlain(QString());
+        m_lines->joinLines(0, 0);
+        QCOMPARE(text(), QString());
+    }
+    void lineTrim()
+    {
+        openCode(QStringLiteral("a  \n\t\nb\t \nc"));
+        place(1);
+        m_lines->trimSpaces(1, 1, LineTools::TrimTrailing);
+        QCOMPARE(text(), QStringLiteral("a\n\nb\nc"));
+        QCOMPARE(caret(), 1);
+        undoesTo(QStringLiteral("a  \n\t\nb\t \nc"));
+        openPlain(QStringLiteral("  a \n\t b\n c"));
+        m_lines->trimSpaces(0, 0, LineTools::TrimLeading);
+        QCOMPARE(text(), QStringLiteral("a \nb\nc"));
+        openPlain(QStringLiteral("  a \n\t b\t\n   \n c"));
+        m_lines->trimSpaces(0, 0, LineTools::TrimBoth);
+        QCOMPARE(text(), QStringLiteral("a\nb\n\nc"));
+        openPlain(QStringLiteral(" a \n b \n c "));
+        m_lines->trimSpaces(4, 8, LineTools::TrimBoth); // the second line only
+        QCOMPARE(text(), QStringLiteral(" a \nb\n c "));
+        m_lines->trimSpaces(0, 0, 9); // a bad mode does nothing
+        QCOMPARE(text(), QStringLiteral(" a \nb\n c "));
+    }
+    void lineTabsAndSpaces()
+    {
+        openPlain(QStringLiteral("\ta\n  \tb\nc\td\n"));
+        m_lines->tabsToSpaces(0, 0);
+        QCOMPARE(text(), QStringLiteral("    a\n    b\nc   d\n"));
+        undoesTo(QStringLiteral("\ta\n  \tb\nc\td\n"));
+        openPlain(QStringLiteral("        a\n      b\n  c\n x  y\n\t  z"));
+        m_lines->spacesToLeadingTabs(0, 0);
+        QCOMPARE(text(), QStringLiteral("\t\ta\n\t  b\n  c\n x  y\n\t  z"));
+        openPlain(QStringLiteral("    a\n    b"));
+        attachLines(2); // the document's width
+        m_lines->spacesToLeadingTabs(0, 0);
+        QCOMPARE(text(), QStringLiteral("\t\ta\n\t\tb"));
+        m_lines->tabsToSpaces(0, 3); // the first line only
+        QCOMPARE(text(), QStringLiteral("    a\n\t\tb"));
+    }
+    void lineChangeCase()
+    {
+        openPlain(QStringLiteral("hello wORLD foo"));
+        m_lines->changeCase(0, 11, LineTools::UpperCase);
+        QCOMPARE(text(), QStringLiteral("HELLO WORLD foo"));
+        m_lines->changeCase(0, 11, LineTools::LowerCase);
+        QCOMPARE(text(), QStringLiteral("hello world foo"));
+        m_lines->changeCase(0, 15, LineTools::TitleCase);
+        QCOMPARE(text(), QStringLiteral("Hello World Foo"));
+        m_lines->changeCase(7, 7, LineTools::UpperCase); // the word at the caret
+        QCOMPARE(text(), QStringLiteral("Hello WORLD Foo"));
+        m_lines->changeCase(0, 5, 7); // a bad mode does nothing
+        QCOMPARE(text(), QStringLiteral("Hello WORLD Foo"));
+        m_lines->changeCase(0, 15, LineTools::InvertCase);
+        QCOMPARE(text(), QStringLiteral("hELLO world fOO"));
+        undoesTo(QStringLiteral("Hello WORLD Foo"));
+        openPlain(QStringLiteral("hELLO there. how ARE you? fine!ok\nnext line. 3.5 apples"));
+        m_lines->changeCase(0, text().size(), LineTools::SentenceCase);
+        QCOMPARE(text(), QStringLiteral("Hello there. How are you? Fine!ok\nNext line. 3.5 apples"));
+        QCOMPARE(LineTools::convertCase(QString(), LineTools::SentenceCase), QString());
+    }
+    void lineToolsReadOnlyAreNotEdited()
+    {
+        for (bool code : {false, true}) {
+            if (code) {
+                openCode(QStringLiteral("b\na  \n\tc"));
+            } else {
+                openPlain(QStringLiteral("b\na  \n\tc"));
+            }
+            m_edit->setProperty("readOnly", true);
+            m_lines->duplicateLines(0, 3);
+            m_lines->moveLines(0, 0, true);
+            m_lines->deleteLines(0, 3);
+            m_lines->joinLines(0, 3);
+            m_lines->sortLines(0, 0, 0);
+            m_lines->reverseLines(0, 0);
+            m_lines->removeDuplicateLines(0, 0);
+            m_lines->removeEmptyLines(0, 0);
+            m_lines->trimSpaces(0, 0, LineTools::TrimBoth);
+            m_lines->tabsToSpaces(0, 0);
+            m_lines->spacesToLeadingTabs(0, 0);
+            m_lines->changeCase(0, 3, LineTools::UpperCase);
+            QCOMPARE(text(), QStringLiteral("b\na  \n\tc"));
+        }
+    }
+    void lineToolsDetachedDoNothing()
+    {
+        LineTools tools;
+        tools.sortLines(0, 0, 0);
+        tools.duplicateLines(0, 0);
+        tools.changeCase(0, 1, 0);
+        openPlain(QStringLiteral("b\na"));
+        m_lines->setTextEdit(nullptr);
+        m_lines->sortLines(0, 0, 0);
+        QCOMPARE(text(), QStringLiteral("b\na"));
+        m_lines->setTextEdit(m_edit.get());
+        m_edit.reset(); // the TextEdit goes first
+        m_lines->sortLines(0, 0, 0);
+        m_lines->duplicateLines(0, 0);
+    }
+    void lineMoveOverEqualLines()
+    {
+        openPlain(QStringLiteral("x\n\n\n\ny"));
+        m_lines->moveLines(2, 2, true); // blank line down past a blank line
+        QCOMPARE(text(), QStringLiteral("x\n\n\n\ny"));
+        QCOMPARE(caret(), 3);
+        m_lines->moveLines(3, 3, true);
+        QCOMPARE(caret(), 4);
+        m_lines->moveLines(4, 4, false);
+        QCOMPARE(caret(), 3);
+    }
+    void lineSelectionEndsAtColumnZero()
+    {
+        openPlain(QStringLiteral("c\nb\na\nz"));
+        m_lines->sortLines(0, 6, 0); // "c\nb\na\n" selected
+        QCOMPARE(text(), QStringLiteral("a\nb\nc\nz"));
+        QCOMPARE(selStart(), 0);
+        QCOMPARE(selEnd(), 6);
+        openCode(QStringLiteral("a\nb\nc"));
+        select(0, 4); // "a\nb\n"
+        m_code->indentLines(0, 4);
+        QCOMPARE(text(), QStringLiteral("    a\n    b\nc"));
+        QCOMPARE(selStart(), 4);
+        QCOMPARE(selEnd(), 12); // still the start of "c"
+    }
+    void lineCaretStaysOnItsLine()
+    {
+        openPlain(QStringLiteral("a\na\nb\nb\nc"));
+        place(8); // "c"
+        m_lines->removeDuplicateLines(8, 8);
+        QCOMPARE(text(), QStringLiteral("a\nb\nc"));
+        QCOMPARE(caret(), 4); // the same line number, clamped to the new count
+        openPlain(QStringLiteral("a\na\nb"));
+        place(0);
+        m_lines->removeDuplicateLines(0, 0);
+        QCOMPARE(caret(), 0);
+    }
+    void lineCaseKeepsSelection()
+    {
+        openPlain(QStringLiteral("one two"));
+        select(0, 3);
+        m_lines->changeCase(0, 3, LineTools::UpperCase);
+        QCOMPARE(text(), QStringLiteral("ONE two"));
+        QCOMPARE(selStart(), 0);
+        QCOMPARE(selEnd(), 3);
+        openPlain(QStringLiteral("straße"));
+        select(0, 6);
+        m_lines->changeCase(0, 6, LineTools::UpperCase);
+        QCOMPARE(text(), QStringLiteral("STRASSE"));
+        QCOMPARE(selEnd(), 7);
+        openPlain(QStringLiteral("one two"));
+        place(5);
+        m_lines->changeCase(5, 5, LineTools::UpperCase); // the word at the caret
+        QCOMPARE(text(), QStringLiteral("one TWO"));
+        QCOMPARE(caret(), 5);
+    }
+    void lineCaseUnicode()
+    {
+        auto n = [](const QString &s) { return s.normalized(QString::NormalizationForm_C); };
+        QCOMPARE(LineTools::convertCase(QStringLiteral("cafés au lait"), LineTools::TitleCase), QStringLiteral("Cafés Au Lait"));
+        QCOMPARE(n(LineTools::convertCase(QStringLiteral("İSTANBUL"), LineTools::TitleCase)), n(QStringLiteral("İstanbul")));
+        QCOMPARE(LineTools::convertCase(QStringLiteral("DON’T don't"), LineTools::TitleCase), QStringLiteral("Don’t Don't"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010428\U00010429 \U00010428\U00010429"), LineTools::TitleCase), QString::fromUcs4(U"\U00010400\U00010429 \U00010400\U00010429"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010428\U00010429"), LineTools::UpperCase), QString::fromUcs4(U"\U00010400\U00010401"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010400a"), LineTools::InvertCase), QString::fromUcs4(U"\U00010428A"));
+        QCOMPARE(LineTools::convertCase(QStringLiteral("ßtraße"), LineTools::TitleCase), QStringLiteral("SStraße"));
+        QCOMPARE(LineTools::convertCase(QString::fromUcs4(U"\U00010428a. \U00010428b"), LineTools::SentenceCase), QString::fromUcs4(U"\U00010400a. \U00010400b"));
+    }
+    void lineSortNumberForms()
+    {
+        openPlain(QStringLiteral("1e2\n.5\n-.5\n3\n1e999\n-1e999\n2e-999\nx"));
+        m_lines->sortLines(0, 0, LineTools::Numeric);
+        QCOMPARE(text(), QStringLiteral("x\n-1e999\n-.5\n2e-999\n.5\n3\n1e2\n1e999"));
+    }
+    void lineTabsCountCodePoints()
+    {
+        openPlain(QString::fromUcs4(U"\U0001F600\tx"));
+        m_lines->tabsToSpaces(0, 0);
+        QCOMPARE(text(), QString::fromUcs4(U"\U0001F600") + QStringLiteral("   x"));
+    }
+    void codeEditsAreOneStepAndKeepCaret()
+    {
+        openCode(QStringLiteral("a\nb\nc"));
+        place(3); // before "b"... after its start
+        m_code->indentLines(3, 3);
+        QCOMPARE(text(), QStringLiteral("a\n    b\nc"));
+        QCOMPARE(caret(), 7); // follows the text
+        undoesTo(QStringLiteral("a\nb\nc"));
+        m_code->toggleComment(0, 5);
+        QCOMPARE(text(), QStringLiteral("// a\n// b\n// c"));
+        undoesTo(QStringLiteral("a\nb\nc"));
+    }
+    // Time on a big file: NP_LINES_FILE=/path/to/log. Skipped without it.
+    void lineToolsLargeFile()
+    {
+        const QByteArray path = qgetenv("NP_LINES_FILE");
+        if (path.isEmpty()) {
+            QSKIP("set NP_LINES_FILE to time the line tools on a big file");
+        }
+        QFile f(QString::fromLocal8Bit(path));
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QString big = QString::fromUtf8(f.readAll());
+        const struct {
+            const char *name;
+            std::function<void()> run;
+        } cases[] = {
+            {"remove duplicates", [&] { m_lines->removeDuplicateLines(0, 0); }},
+            {"sort", [&] { m_lines->sortLines(0, 0, 0); }},
+            {"sort numeric descending", [&] { m_lines->sortLines(0, 0, LineTools::Numeric | LineTools::Descending); }},
+            {"reverse", [&] { m_lines->reverseLines(0, 0); }},
+            {"join", [&] { m_lines->joinLines(0, int(big.size())); }},
+            {"trim both", [&] { m_lines->trimSpaces(0, 0, LineTools::TrimBoth); }},
+            {"remove empty", [&] { m_lines->removeEmptyLines(0, 0); }},
+            {"move down (one line)", [&] { m_lines->moveLines(0, 0, true); }},
+            {"duplicate (one line)", [&] { m_lines->duplicateLines(0, 0); }},
+        };
+        for (const auto &c : cases) {
+            openPlain(big);
+            QElapsedTimer timer;
+            timer.start();
+            c.run();
+            const qint64 ms = timer.elapsed();
+            QMetaObject::invokeMethod(m_edit.get(), "undo");
+            qInfo().noquote() << "LINES" << c.name << ms << "ms," << (text() == big ? "undo ok" : "undo DIFFERS");
+        }
+    }
+    // Time on a big file: NP_CODE_FILE=/path/to/code.cpp. Skipped without it.
+    void codeBigIndentAndComment()
+    {
+        const QByteArray path = qgetenv("NP_CODE_FILE");
+        if (path.isEmpty()) {
+            QSKIP("set NP_CODE_FILE to time indent and comment on a big file");
+        }
+        QFile f(QString::fromLocal8Bit(path));
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QString big = QString::fromUtf8(f.readAll());
+        const struct {
+            const char *name;
+            std::function<void()> run;
+        } cases[] = {
+            {"indent", [&] { m_code->indentLines(0, int(big.size())); }},
+            {"outdent", [&] { m_code->outdentLines(0, int(big.size())); }},
+            {"toggle comment", [&] { m_code->toggleComment(0, int(big.size())); }},
+        };
+        for (const auto &c : cases) {
+            openCode(big);
+            QElapsedTimer timer;
+            timer.start();
+            c.run();
+            const qint64 ms = timer.elapsed();
+            QMetaObject::invokeMethod(m_edit.get(), "undo");
+            qInfo().noquote() << "CODE" << c.name << ms << "ms," << (text() == big ? "undo ok" : "undo DIFFERS");
+        }
     }
     void codeAutoIndentColonAndComments()
     {

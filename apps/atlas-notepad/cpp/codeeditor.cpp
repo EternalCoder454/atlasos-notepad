@@ -1,6 +1,8 @@
 // Light coding: highlighting from KSyntaxHighlighting and the editing keys a
 // code file expects. See codeeditor.h.
 #include "codeeditor.h"
+#include "codehighlighter.h"
+#include "linetools.h"
 
 #include <algorithm>
 
@@ -11,7 +13,6 @@
 #include <QTextCursor>
 
 #include <KSyntaxHighlighting/Repository>
-#include <KSyntaxHighlighting/SyntaxHighlighter>
 #include <KSyntaxHighlighting/Theme>
 
 namespace
@@ -40,23 +41,6 @@ int columnOf(const QString &text, int pos, int width)
         col = text[i] == u'\t' ? col + width - col % width : col + 1;
     }
     return col;
-}
-
-QString titleCase(const QString &s)
-{
-    QString out = s.toLower();
-    bool start = true;
-    for (QChar &c : out) {
-        if (c.isLetterOrNumber()) {
-            if (start) {
-                c = c.toUpper();
-            }
-            start = false;
-        } else if (c != u'\'') {
-            start = true;
-        }
-    }
-    return out;
 }
 } // namespace
 
@@ -119,8 +103,7 @@ void CodeEditor::setDark(bool dark)
     m_dark = dark;
     if (m_highlighter) {
         m_highlighter->setTheme(codeRepository().defaultTheme(dark ? KSyntaxHighlighting::Repository::DarkTheme
-                                                                    : KSyntaxHighlighting::Repository::LightTheme));
-        m_highlighter->rehighlight();
+                                                                    : KSyntaxHighlighting::Repository::LightTheme)); // highlights again
     }
     Q_EMIT darkChanged();
 }
@@ -145,7 +128,7 @@ void CodeEditor::setIndentWidth(int width)
 void CodeEditor::rehighlightNow()
 {
     if (m_highlighter) {
-        m_highlighter->rehighlight();
+        m_highlighter->rehighlightAll(true);
     }
 }
 
@@ -161,7 +144,7 @@ void CodeEditor::applyHighlighting()
         return;
     }
     if (!m_highlighter) {
-        m_highlighter = new KSyntaxHighlighting::SyntaxHighlighter(m_doc);
+        m_highlighter = new CodeHighlighter(m_doc);
         m_highlighter->setTheme(codeRepository().defaultTheme(m_dark ? KSyntaxHighlighting::Repository::DarkTheme
                                                                       : KSyntaxHighlighting::Repository::LightTheme));
     }
@@ -222,6 +205,35 @@ void CodeEditor::firstLast(int from, int to, QTextBlock *first, QTextBlock *last
     *last = to > from ? m_doc->findBlock(to - 1) : *first;
 }
 
+// The text of the blocks first..last.
+static QStringList blockTexts(const QTextBlock &first, const QTextBlock &last)
+{
+    QStringList lines;
+    for (QTextBlock b = first; b.isValid() && b.blockNumber() <= last.blockNumber(); b = b.next()) {
+        lines << b.text();
+    }
+    return lines;
+}
+
+// Swaps the lines in one edit; the caret and the selection follow the text.
+void CodeEditor::replaceLines(const QTextBlock &first, const QStringList &old, const QStringList &lines)
+{
+    const int caret = m_edit->property("cursorPosition").toInt();
+    const int selStart = m_edit->property("selectionStart").toInt();
+    const int selEnd = m_edit->property("selectionEnd").toInt();
+    const int anchor = caret == selStart ? selEnd : selStart;
+    const int newCaret = LineTools::mapPosition(first, old, lines, caret);
+    const int newAnchor = LineTools::mapPosition(first, old, lines, anchor);
+    if (!LineTools::applyLines(m_doc, first, old, lines)) {
+        return;
+    }
+    if (selStart != selEnd) {
+        QMetaObject::invokeMethod(m_edit, "select", Q_ARG(int, newAnchor), Q_ARG(int, newCaret));
+    } else {
+        m_edit->setProperty("cursorPosition", newCaret);
+    }
+}
+
 void CodeEditor::indentLines(int from, int to)
 {
     if (!editable()) {
@@ -230,15 +242,14 @@ void CodeEditor::indentLines(int from, int to)
     QTextBlock first, last;
     firstLast(from, to, &first, &last);
     const QString unit = m_spaces ? QString(m_width, u' ') : QStringLiteral("\t");
-    QTextCursor c(m_doc);
-    c.beginEditBlock();
-    for (QTextBlock b = first; b.isValid() && b.blockNumber() <= last.blockNumber(); b = b.next()) {
-        if (!b.text().isEmpty()) {
-            c.setPosition(b.position());
-            c.insertText(unit);
+    const QStringList old = blockTexts(first, last);
+    QStringList lines = old;
+    for (QString &l : lines) {
+        if (!l.isEmpty()) {
+            l.prepend(unit);
         }
     }
-    c.endEditBlock();
+    replaceLines(first, old, lines);
 }
 
 void CodeEditor::outdentLines(int from, int to)
@@ -248,10 +259,9 @@ void CodeEditor::outdentLines(int from, int to)
     }
     QTextBlock first, last;
     firstLast(from, to, &first, &last);
-    QTextCursor c(m_doc);
-    c.beginEditBlock();
-    for (QTextBlock b = first; b.isValid() && b.blockNumber() <= last.blockNumber(); b = b.next()) {
-        const QString text = b.text();
+    const QStringList old = blockTexts(first, last);
+    QStringList lines = old;
+    for (QString &text : lines) {
         int n = 0;
         if (!text.isEmpty() && text[0] == u'\t') {
             n = 1;
@@ -260,13 +270,9 @@ void CodeEditor::outdentLines(int from, int to)
                 ++n;
             }
         }
-        if (n > 0) {
-            c.setPosition(b.position());
-            c.setPosition(b.position() + n, QTextCursor::KeepAnchor);
-            c.removeSelectedText();
-        }
+        text.remove(0, n);
     }
-    c.endEditBlock();
+    replaceLines(first, old, lines);
 }
 
 void CodeEditor::toggleComment(int from, int to)
@@ -288,16 +294,16 @@ void CodeEditor::toggleComment(int from, int to)
     firstLast(from, to, &first, &last);
 
     // The leading whitespace every non-blank line shares, and whether all are commented.
+    const QStringList old = blockTexts(first, last);
     QString shared;
     bool haveShared = false;
     bool allCommented = true;
-    QList<QTextBlock> blocks;
-    for (QTextBlock b = first; b.isValid() && b.blockNumber() <= last.blockNumber(); b = b.next()) {
-        const QString text = b.text();
+    bool any = false;
+    for (const QString &text : old) {
         if (isBlank(text)) {
             continue;
         }
-        blocks << b;
+        any = true;
         const QString lead = text.left(leadingLength(text));
         if (!haveShared) {
             shared = lead;
@@ -314,20 +320,20 @@ void CodeEditor::toggleComment(int from, int to)
             allCommented = false;
         }
     }
-    if (blocks.isEmpty()) {
+    if (!any) {
         return;
     }
 
-    QTextCursor c(m_doc);
-    c.beginEditBlock();
-    for (const QTextBlock &b : std::as_const(blocks)) {
-        const QString text = b.text();
+    QStringList lines = old;
+    for (QString &line : lines) {
+        const QString text = line;
+        if (isBlank(text)) {
+            continue;
+        }
         if (!allCommented) {
-            c.setPosition(b.position() + int(shared.size()));
-            c.insertText(open + u' ');
+            line.insert(shared.size(), open + u' ');
             if (!close.isEmpty()) {
-                c.setPosition(b.position() + b.length() - 1);
-                c.insertText(u' ' + close);
+                line += u' ' + close;
             }
             continue;
         }
@@ -341,104 +347,16 @@ void CodeEditor::toggleComment(int from, int to)
             if (end - len > 0 && text[end - len - 1] == u' ') {
                 ++len;
             }
-            c.setPosition(b.position() + end - len);
-            c.setPosition(b.position() + end, QTextCursor::KeepAnchor);
-            c.removeSelectedText();
+            line.remove(end - len, len);
         }
         const int start = leadingLength(text);
         int len = int(open.size());
         if (start + len < text.size() && text[start + len] == u' ') {
             ++len;
         }
-        c.setPosition(b.position() + start);
-        c.setPosition(b.position() + start + len, QTextCursor::KeepAnchor);
-        c.removeSelectedText();
+        line.remove(start, len);
     }
-    c.endEditBlock();
-}
-
-void CodeEditor::sortLines(int from, int to)
-{
-    if (!editable()) {
-        return;
-    }
-    QTextBlock first, last;
-    if (from == to) {
-        first = m_doc->firstBlock();
-        last = m_doc->lastBlock();
-    } else {
-        firstLast(from, to, &first, &last);
-    }
-    if (first.blockNumber() >= last.blockNumber()) {
-        return;
-    }
-    QStringList lines;
-    for (QTextBlock b = first; b.isValid() && b.blockNumber() <= last.blockNumber(); b = b.next()) {
-        lines << b.text();
-    }
-    QStringList sorted = lines;
-    QCollator collator;
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
-    std::stable_sort(sorted.begin(), sorted.end(), [&](const QString &a, const QString &b) { return collator.compare(a, b) < 0; });
-    if (sorted == lines) {
-        return;
-    }
-    const QString joined = sorted.join(u'\n');
-    const int start = first.position(); // read before the edit invalidates the block
-    QTextCursor c(m_doc);
-    c.setPosition(start);
-    c.setPosition(last.position() + last.length() - 1, QTextCursor::KeepAnchor);
-    c.insertText(joined);
-    // Keep the selection over the sorted lines.
-    QMetaObject::invokeMethod(m_edit, "select", Q_ARG(int, start), Q_ARG(int, start + int(joined.size())));
-}
-
-void CodeEditor::changeCase(int from, int to, int mode)
-{
-    if (!editable() || mode < 0 || mode > 2) {
-        return;
-    }
-    const int end = qMax(0, m_doc->characterCount() - 1);
-    from = qBound(0, from, end);
-    to = qBound(0, to, end);
-    QTextCursor c(m_doc);
-    c.setPosition(from);
-    if (from == to) {
-        c.select(QTextCursor::WordUnderCursor);
-    } else {
-        c.setPosition(qMin(from, to));
-        c.setPosition(qMax(from, to), QTextCursor::KeepAnchor);
-    }
-    const QString text = c.selectedText(); // paragraph breaks come back as U+2029
-    if (text.isEmpty()) {
-        return;
-    }
-    const QString out = mode == 0 ? text.toUpper() : mode == 1 ? text.toLower() : titleCase(text);
-    if (out != text) {
-        c.insertText(out);
-    }
-}
-
-void CodeEditor::trimTrailingSpaces()
-{
-    if (!editable()) {
-        return;
-    }
-    QTextCursor c(m_doc);
-    c.beginEditBlock();
-    for (QTextBlock b = m_doc->firstBlock(); b.isValid(); b = b.next()) {
-        const QString text = b.text();
-        int end = int(text.size());
-        while (end > 0 && (text[end - 1] == u' ' || text[end - 1] == u'\t')) {
-            --end;
-        }
-        if (end < text.size()) {
-            c.setPosition(b.position() + end);
-            c.setPosition(b.position() + int(text.size()), QTextCursor::KeepAnchor);
-            c.removeSelectedText();
-        }
-    }
-    c.endEditBlock();
+    replaceLines(first, old, lines);
 }
 
 QPoint CodeEditor::bracketPair(int cursor)

@@ -255,6 +255,36 @@ it; median of three; ms):
   the caret, selection and scroll back around those changes. A click or
   scroll during the fill wins over the session's position.
 
+**Code highlighting** (`CodeHighlighter`, `cpp/codehighlighter.cpp`).
+KSyntaxHighlighting's own `SyntaxHighlighter` goes through
+`QSyntaxHighlighter` block by block, each block tells the layout, and the
+layout walks the document from the top: quadratic. Highlighting a 1 MB,
+30k-line `.cpp` again (every theme switch, language change and open) took
+101 s. `CodeHighlighter` mutes `QSyntaxHighlighter` and sets the same formats
+(checked against the stock one in `editor_test`) and each block's start and
+end state straight on the blocks. A text up to 64 K characters is done at
+once, a bigger one in 8 ms slices from the event loop. An edit highlights its
+line; if the state after it changed (typing `/*`) it carries on for 2 ms,
+then the slices go on until a line starts in the state it had. The layout is
+told at most once in ten times what telling it costs (it walks the rest of
+the document each time), and not at all for a line that stays plain. A line
+over `Limits::lineLength` is not highlighted.
+
+| 1 MB `.cpp` (30k lines) | Before | After |
+| --- | --- | --- |
+| Highlight all (`rehighlightNow`) | 101 s | 0.45 to 0.83 s |
+| Type, mean / p95 (bench) | 8.1 / 9.1 ms | 6.7 to 9.2 / 7.7 to 10.6 ms |
+| Open, all text | 1.0 to 1.2 s | 0.9 to 1.3 s |
+| RSS | 230 MB | 234 to 257 MB |
+
+The machine was busy (load 6 to 13): typing and open are the same within
+noise, as are the 50 KB Markdown and C++ samples of `bench-s1.sh`. Not
+fixed: a 9.5 MB `.cpp` still takes 9 to 12 s to all text (1.8 s for a log of
+the same size; the rest is not the highlighter's reading, which is about 1 s,
+and was not traced), and the 5 MB single-line JSON still stalls about 1.3 s
+in the 2 s after its first frame: that line is not highlighted any more, so
+it is the layout or spell check (above).
+
 **Launch** (first frame, cold process, warm caches): 213 to 223 ms with an
 empty tab, 221 to 226 ms with a small file, 254 to 261 ms with 50 KB
 Markdown. About 20 ms of each is loading the libraries Qt Quick pulls in
