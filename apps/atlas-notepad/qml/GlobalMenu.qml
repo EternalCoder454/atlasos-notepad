@@ -15,6 +15,9 @@ Platform.MenuBar {
 
     required property var actions
     property bool withShortcuts: false
+    // Whether the editor has the keys: the editor-only actions' keys are held
+    // (and shown) only then, so the Find field keeps its own.
+    property bool editorKeys: false
 
     signal openRecent(string path)
 
@@ -24,7 +27,7 @@ Platform.MenuBar {
         enabled: action.enabled
         checkable: action.checkable
         checked: action.checked
-        shortcut: bar.withShortcuts && !action.editorOnly ? action.keys : undefined
+        shortcut: bar.withShortcuts && (!action.editorOnly || bar.editorKeys) ? action.keys : undefined
         onTriggered: action.trigger()
     }
     component Separator: Platform.MenuSeparator {}

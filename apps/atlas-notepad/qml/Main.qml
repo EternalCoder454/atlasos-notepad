@@ -134,10 +134,21 @@ AtlasWindow {
         property bool editorOnly: false
         shortcut: App.hasGlobalMenu || editorOnly ? undefined : keys
     }
+    // With a global menu its items hold the editor-only keys too (so it shows
+    // them), but only while the editor has focus. Opening that menu takes the
+    // focus from the window, so this keeps the last state while it was active.
+    property bool editorKeys: false
+    function updateEditorKeys() {
+        if (active) {
+            editorKeys = view !== null && view.edit.activeFocus;
+        }
+    }
+    onActiveChanged: updateEditorKeys()
+
     component EditorShortcut: Shortcut {
         required property QQC2.Action action
         sequence: action.keys
-        enabled: action.enabled && root.view !== null && root.view.edit.activeFocus
+        enabled: !App.hasGlobalMenu && action.enabled && root.view !== null && root.view.edit.activeFocus
         onActivated: action.trigger()
     }
 
@@ -766,6 +777,7 @@ AtlasWindow {
         window: root
         actions: root.actions
         withShortcuts: App.hasGlobalMenu
+        editorKeys: root.editorKeys
         onOpenRecent: path => root.documents.open([path])
     }
 
@@ -1495,6 +1507,7 @@ AtlasWindow {
     // dialog closed, a tab menu is gone): hand the keyboard to the editor
     // rather than leave it on nothing. Not while the window is inactive.
     onActiveFocusItemChanged: {
+        updateEditorKeys();
         if (activeFocusItem === null && active) {
             Qt.callLater(() => {
                 if (root.active && root.activeFocusItem === null && !root.settingsOpen && root.view && !unsavedDialog.visible) {
