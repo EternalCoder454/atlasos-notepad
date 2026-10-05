@@ -49,9 +49,9 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
     if [ "$build" != "$have" ]; then
         # From the clean base each time (the dnf cache makes it quick), so
         # refreshes don't stack layers on the old image.
-        # :z, as for /src below. The RPMs are copied in, not mounted: a :z
-        # mount would relabel all of $ATLAS_LOCAL_RPMS (say, ~/Downloads).
-        ctr=$(podman run -d -v "$repo/packaging":/packaging:ro,z \
+        # No relabelling, as for /src below. The RPMs are copied in, not
+        # mounted, so only the files named are read.
+        ctr=$(podman run -d --security-opt label=disable -v "$repo/packaging":/packaging:ro \
             -v atlas-dnf:/var/cache/libdnf5 \
             registry.fedoraproject.org/fedora:44 sleep infinity)
         trap 'podman rm -f -t 0 "$ctr" >/dev/null' EXIT
@@ -82,7 +82,7 @@ fi
 # A changed spec (new BuildRequires) installs its build dependencies into the
 # image, keeping its Atlas.Ui.
 if [ "$(podman image inspect --format '{{index .Labels "spec"}}' "$image")" != "$spec_sum" ]; then
-    ctr=$(podman run -d -v "$repo/packaging":/packaging:ro,z \
+    ctr=$(podman run -d --security-opt label=disable -v "$repo/packaging":/packaging:ro \
         -v atlas-dnf:/var/cache/libdnf5 "$image" sleep infinity)
     trap 'podman rm -f -t 0 "$ctr" >/dev/null' EXIT
     podman exec "$ctr" bash -c 'dnf -y install ccache && dnf -y builddep /packaging/atlas-notepad.spec' >&2
@@ -93,10 +93,11 @@ fi
 
 tty=()
 [ -t 0 ] && tty=(-it)
-# :z (shared), not :Z: :Z gives each container a private label, which locks
-# out any other dev container already running on the tree.
-exec podman run --rm "${tty[@]}" \
-    -v "$repo":/src:z -w /src \
+# SELinux labelling is off for the container (label=disable) rather than
+# relabelling the mounts with :z or :Z, which would change the labels of the
+# repo on the host.
+exec podman run --rm "${tty[@]}" --security-opt label=disable \
+    -v "$repo":/src -w /src \
     -v atlas-cargo:/root/.cargo/registry \
     -v atlas-cargo-git:/root/.cargo/git \
     -v atlas-notepad-ccache:/root/.cache/ccache \
