@@ -5,6 +5,10 @@
 #include <QElapsedTimer>
 #include <QTextDocument>
 
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+
 namespace
 {
 using KSyntaxHighlighting::State;
@@ -23,6 +27,10 @@ constexpr int bigInsert = 2048;
 // filled in pieces is read first (its slices between the pieces made the
 // filling slower), and the pass then goes over it once.
 constexpr int settleMs = 50;
+// From this many characters, a finished pass hands freed memory back to the
+// system: filling and laying out a large file leaves tens of MB free in the
+// heap (shaping buffers), which glibc keeps otherwise.
+constexpr int trimFrom = 512 * 1024;
 
 // Ours only: a block may still carry the Markdown highlighter's data.
 CodeBlockData *dataOf(const QTextBlock &block)
@@ -407,5 +415,10 @@ void CodeHighlighter::runPass()
     } else {
         m_pass = QTextCursor();
         m_all = false;
+#ifdef __GLIBC__
+        if (doc->characterCount() >= trimFrom) {
+            malloc_trim(0);
+        }
+#endif
     }
 }
