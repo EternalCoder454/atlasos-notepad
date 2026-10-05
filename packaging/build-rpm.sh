@@ -8,6 +8,9 @@
 # ATLAS_SKIP_DEPS=1 skips all dnf and rpm installs (rpm-build, ATLAS_LOCAL_RPMS,
 # the spec's build dependencies): the machine must already have them, as CI's
 # build image does, so the RPM is built against exactly that image.
+# ATLAS_RPM_TOPDIR=<dir> builds in <dir> instead of a random temporary one, so
+# the build paths, and with them ccache's hits, are the same on every run. The
+# directory must not exist yet; it is removed afterwards, as the temporary one is.
 set -euo pipefail
 
 main() {
@@ -42,7 +45,18 @@ main() {
         dnf -y builddep "$spec" >&2
     fi
 
-    top=$(mktemp -d)
+    if [ -n "${ATLAS_RPM_TOPDIR:-}" ]; then
+        top=$ATLAS_RPM_TOPDIR
+        # The spec's flags split on spaces (see %build).
+        if [[ $top != /* || $top =~ [[:space:]] ]]; then
+            echo "ATLAS_RPM_TOPDIR must be an absolute path without spaces: $top" >&2
+            exit 1
+        fi
+        # Never removes a directory it didn't make.
+        mkdir "$top"
+    else
+        top=$(mktemp -d)
+    fi
     trap 'rm -rf "$top"' EXIT
     mkdir -p "$top"/{SOURCES,BUILD,RPMS,SRPMS,SPECS}
     tar -C "$src" \
