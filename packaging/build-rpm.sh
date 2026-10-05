@@ -5,6 +5,9 @@
 # Cargo needs network access.
 # ATLAS_LOCAL_RPMS=<dir> installs the RPMs in <dir> first: atlas-framework's
 # (atlas-ui), which Notepad builds against and no repository has.
+# ATLAS_SKIP_DEPS=1 skips all dnf and rpm installs (rpm-build, ATLAS_LOCAL_RPMS,
+# the spec's build dependencies): the machine must already have them, as CI's
+# build image does, so the RPM is built against exactly that image.
 set -euo pipefail
 
 main() {
@@ -16,26 +19,28 @@ main() {
     spec=$here/atlas-notepad.spec
     version=$(awk '/^Version:/ {print $2; exit}' "$spec")
 
-    dnf -y install rpm-build dnf5-plugins tar gzip >&2
-    if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
-        # Atlas.Ui and its fonts. dnf brings their dependencies; rpm then puts
-        # these exact files in place even when that version is installed.
-        local_rpms=()
-        for name in atlas-ui atlas-symbols-fonts; do
-            found=()
-            for f in "$ATLAS_LOCAL_RPMS/$name"-[0-9]*.rpm; do
-                [ -e "$f" ] && [[ $f != *.src.rpm ]] && found+=("$f")
+    if [ "${ATLAS_SKIP_DEPS:-}" != 1 ]; then
+        dnf -y install rpm-build dnf5-plugins tar gzip >&2
+        if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
+            # Atlas.Ui and its fonts. dnf brings their dependencies; rpm then puts
+            # these exact files in place even when that version is installed.
+            local_rpms=()
+            for name in atlas-ui atlas-symbols-fonts; do
+                found=()
+                for f in "$ATLAS_LOCAL_RPMS/$name"-[0-9]*.rpm; do
+                    [ -e "$f" ] && [[ $f != *.src.rpm ]] && found+=("$f")
+                done
+                if [ "${#found[@]}" != 1 ]; then
+                    echo "$ATLAS_LOCAL_RPMS needs exactly one $name RPM, found ${#found[@]}: ${found[*]}" >&2
+                    exit 1
+                fi
+                local_rpms+=("${found[0]}")
             done
-            if [ "${#found[@]}" != 1 ]; then
-                echo "$ATLAS_LOCAL_RPMS needs exactly one $name RPM, found ${#found[@]}: ${found[*]}" >&2
-                exit 1
-            fi
-            local_rpms+=("${found[0]}")
-        done
-        dnf -y install "${local_rpms[@]}" >&2
-        rpm -U --replacepkgs --oldpackage "${local_rpms[@]}" >&2
+            dnf -y install "${local_rpms[@]}" >&2
+            rpm -U --replacepkgs --oldpackage "${local_rpms[@]}" >&2
+        fi
+        dnf -y builddep "$spec" >&2
     fi
-    dnf -y builddep "$spec" >&2
 
     top=$(mktemp -d)
     trap 'rm -rf "$top"' EXIT

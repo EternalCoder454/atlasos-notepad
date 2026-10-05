@@ -3,38 +3,85 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: &ignored
+      - '**.md'
+      - 'docs/**'
+      - 'out/**'
+      - 'LICENSE'
+      - 'NOTICE'
   pull_request:
+    paths-ignore: *ignored
   workflow_dispatch:
+  # Monday 00:05 UTC, just after the ISO week rolls over: runs only plan and
+  # publish, so the week's image exists before pull requests need it.
+  schedule:
+    - cron: '5 0 * * 1'
 
 permissions:
   contents: read
 
+# A new push cancels the older run of a branch or pull request, never a run on main.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # On main, every run has its own group: pushes in quick succession are never
+  # collapsed into one, so each commit gets its signal.
+  group: ci-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/eternalcoder454/atlas-notepad-dev
 
 # Everything runs in Fedora 44, the release AtlasOS is built on, as scripts/dev.sh
 # does locally. Actions are pinned by commit.
+#
+#   plan -> publish (main only, the one job with packages: write)
+#        -> rpms    (branches and PRs without an image: Atlas.Ui RPMs as artifact)
+#        -> lint, check, rpm   (after those, in parallel)
+#
+# The CI image on GHCR holds Fedora's packages, Atlas.Ui and the spec's build
+# dependencies. Tags are labels for humans only and are never trusted: any
+# workflow with packages: write can push any tag, so a branch that edits this
+# file could overwrite one. Jobs pull by DIGEST. Only `publish`, which runs on
+# main alone, records the digest it pushed in the Actions cache. A cache entry
+# saved from main can be read by branches; one saved by a branch is never read
+# by main. So everything uses a digest main built itself, or, if there is none
+# for the current inputs, plain fedora:44 plus ci/install-deps.sh (slower, same
+# result).
+#
+# An image pushed with GITHUB_TOKEN from this public repo is public the moment
+# it lands, so `publish` builds it locally, runs ci/check-image-secrets.sh on
+# it (history, environment, files) and only then logs in and pushes. Jobs pull
+# without credentials: after pushing, `publish` checks that the digest pulls
+# anonymously. If not (the registry did not answer, or the package was made
+# private), it warns, records no digest and uploads the Atlas.Ui RPMs as an
+# artifact, so this run and the later ones use the fallback.
+#
+# If `publish` fails on main, lint, check and rpm are skipped for that commit
+# and it gets no test signal; fix the failure and re-run.
 
 jobs:
-  # Atlas.Ui (atlas-ui, atlas-symbols-fonts) is not in any repository: build its
-  # RPMs from atlas-framework at the commit Cargo.toml pins, once per commit.
-  framework:
-    name: atlas-framework RPMs
+  plan:
+    name: plan
     runs-on: ubuntu-latest
-    container: registry.fedoraproject.org/fedora:44
-    timeout-minutes: 60
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.digest.outputs.image }}
+      sum: ${{ steps.tag.outputs.sum }}
+      rev: ${{ steps.tag.outputs.rev }}
+      week: ${{ steps.tag.outputs.week }}
+      main: ${{ steps.tag.outputs.main }}
     steps:
-      - name: Install the tools the actions need
-        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # The same rev as the crates, so Atlas.Ui and the crash code match.
-      - name: Read the atlas-framework rev
-        id: rev
+      - name: Read the atlas-framework rev and compute the hash
+        id: tag
+        env:
+          MAIN: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
         run: |
           url='https://github.com/EternalCoder454/atlas-framework'
           revs=$(sed -n "s|^atlas-framework-[a-z]* = { git = \"$url\", rev = \"\([0-9a-f]\{40\}\)\" }\$|\1|p" Cargo.toml | sort -u)
@@ -44,85 +91,277 @@ jobs:
             echo "Cargo.toml must pin every atlas-framework crate to $url at one 40-character rev" >&2
             exit 1
           fi
-          echo "rev=$revs" >>"$GITHUB_OUTPUT"
-          # Rebuilt weekly too, to follow Fedora's Qt updates.
-          echo "week=$(date -u +%G-W%V)" >>"$GITHUB_OUTPUT"
+          # Cargo.lock: every atlas-framework package from exactly that source; no
+          # [patch]/[replace], .cargo/config or symlink (parsed as TOML, see the script).
+          ci/check-cargo.py "$url" "$revs"
+          week=$(date -u +%G-W%V)
+          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/atlas-notepad.spec; find ci -type f ! -name check-cargo.py ! -name check-image-secrets.sh | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
+          {
+            echo "rev=$revs"
+            echo "week=$week"
+            echo "sum=$sum"
+            echo "main=$MAIN"
+          } >>"$GITHUB_OUTPUT"
 
+      # The digest line `publish` saved on main for these inputs, if any.
+      - name: Look up the image digest
+        id: lookup
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: image-digest.txt
+          key: atlas-notepad-dev-digest-${{ steps.tag.outputs.sum }}
+
+      - name: Read the digest
+        id: digest
+        env:
+          HIT: ${{ steps.lookup.outputs.cache-hit }}
+        run: |
+          image=
+          if [ "$HIT" = true ]; then
+            line=$(head -n1 image-digest.txt)
+            if printf '%s' "$line" | grep -qE "^$IMAGE@sha256:[0-9a-f]{64}\$"; then
+              image=$line
+            else
+              echo "::warning::Ignoring a malformed image digest line in the cache"
+            fi
+          fi
+          echo "image=$image" >>"$GITHUB_OUTPUT"
+          echo "image: ${image:-none (publish on main, otherwise the fallback)}"
+
+  # The only job that can write to GHCR, and only on main.
+  publish:
+    name: publish image
+    needs: plan
+    if: ${{ needs.plan.outputs.image == '' && needs.plan.outputs.main == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      # Empty unless the image pulls anonymously.
+      image: ${{ steps.record.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # atlas-framework's RPMs, once per rev and week.
       - name: Cache the RPMs
         id: cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: framework-rpms
-          key: atlas-framework-rpms-f44-${{ steps.rev.outputs.rev }}-${{ steps.rev.outputs.week }}
+          key: atlas-framework-rpms-f44-${{ needs.plan.outputs.rev }}-${{ needs.plan.outputs.week }}
 
       - name: Check out atlas-framework
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EternalCoder454/atlas-framework
-          ref: ${{ steps.rev.outputs.rev }}
+          ref: ${{ needs.plan.outputs.rev }}
+          path: atlas-framework
+          persist-credentials: false
+
+      # In a Fedora container, as its build-rpm.sh installs packages as root.
+      - name: Build the RPMs
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir framework-rpms
+          docker run --rm \
+            -v "$PWD/atlas-framework":/src:ro \
+            -v "$PWD/framework-rpms":/out \
+            registry.fedoraproject.org/fedora:44 \
+            /src/packaging/build-rpm.sh /out
+          ls -l framework-rpms
+
+      # Built into the runner's Docker only: nothing leaves the runner before
+      # the secret check, as a push from this public repo is public at once.
+      # The tag is a label for humans; jobs use the digest.
+      - name: Build the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ci/Containerfile
+          push: false
+          load: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE }}:f44-${{ needs.plan.outputs.sum }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/EternalCoder454/atlasos-notepad
+            org.opencontainers.image.description=CI build image for atlas-notepad. Pull by digest only; tags are informational and not trusted.
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Check the image for secrets
+        env:
+          SUM: ${{ needs.plan.outputs.sum }}
+        run: ci/check-image-secrets.sh "$IMAGE:f44-$SUM"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushes the image that was checked, not a rebuild of it.
+      - name: Push the image
+        id: push
+        env:
+          SUM: ${{ needs.plan.outputs.sum }}
+        run: |
+          set -o pipefail
+          docker push "$IMAGE:f44-$SUM" | tee "$RUNNER_TEMP/push.log"
+          # The digest the registry answered with; RepoDigests must agree.
+          digest=$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' "$RUNNER_TEMP/push.log" | sort -u)
+          if [ "$(printf '%s\n' "$digest" | grep -c .)" != 1 ]; then
+            echo "expected one digest from docker push, got: ${digest:-none}" >&2
+            exit 1
+          fi
+          repo=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:f44-$SUM")
+          grep -qxF "$IMAGE@$digest" <<<"$repo" || { echo "RepoDigests does not list $IMAGE@$digest" >&2; exit 1; }
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "pushed $IMAGE@$digest"
+
+      # The jobs pull without credentials: the digest is used only if an
+      # anonymous pull works.
+      - name: Record the digest
+        id: record
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          printf '%s' "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' || { echo "bad digest: $DIGEST" >&2; exit 1; }
+          cfg=$(mktemp -d)
+          public=false
+          for try in 1 2 3; do
+            if DOCKER_CONFIG="$cfg" docker manifest inspect "$IMAGE@$DIGEST" >/dev/null 2>&1; then
+              public=true
+              break
+            fi
+            [ "$try" = 3 ] || sleep 5
+          done
+          if [ "$public" = true ]; then
+            echo "$IMAGE@$DIGEST" >image-digest.txt
+            echo "image=$IMAGE@$DIGEST" >>"$GITHUB_OUTPUT"
+            echo "public=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "::warning::$IMAGE@$DIGEST does not pull anonymously (the registry did not answer, or the package is private). CI uses the fallback install until a run on main records a digest."
+            echo "image=" >>"$GITHUB_OUTPUT"
+            echo "public=false" >>"$GITHUB_OUTPUT"
+          fi
+          rm -rf "$cfg"
+
+      # Saved from main, so only main's runs and the branches see it.
+      - name: Save the digest
+        if: steps.record.outputs.public == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: image-digest.txt
+          key: atlas-notepad-dev-digest-${{ needs.plan.outputs.sum }}
+
+      # The fallback's input when the image is not usable.
+      - name: Upload the RPMs (image not public)
+        if: steps.record.outputs.public != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: framework-rpms
+          path: framework-rpms/*.rpm
+          # A re-run of a failed run uploads again.
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # Branches and pull requests (forks and Dependabot too) when main has no
+  # image for these inputs yet: Atlas.Ui's RPMs, for the jobs to install.
+  rpms:
+    name: atlas-framework RPMs
+    needs: plan
+    if: ${{ needs.plan.outputs.image == '' && needs.plan.outputs.main != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Cache the RPMs
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: framework-rpms
+          key: atlas-framework-rpms-f44-${{ needs.plan.outputs.rev }}-${{ needs.plan.outputs.week }}
+
+      - name: Check out atlas-framework
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: EternalCoder454/atlas-framework
+          ref: ${{ needs.plan.outputs.rev }}
           path: atlas-framework
           persist-credentials: false
 
       - name: Build the RPMs
         if: steps.cache.outputs.cache-hit != 'true'
-        run: atlas-framework/packaging/build-rpm.sh "$PWD/framework-rpms"
+        run: |
+          mkdir framework-rpms
+          docker run --rm \
+            -v "$PWD/atlas-framework":/src:ro \
+            -v "$PWD/framework-rpms":/out \
+            registry.fedoraproject.org/fedora:44 \
+            /src/packaging/build-rpm.sh /out
+          ls -l framework-rpms
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: framework-rpms
           path: framework-rpms/*.rpm
+          # A re-run of a failed run uploads again.
+          overwrite: true
           if-no-files-found: error
           retention-days: 1
 
-  check:
-    name: fmt · clippy · test · ctest
-    needs: framework
+  lint:
+    name: fmt · clippy · qmllint
+    needs: [plan, publish, rpms]
+    # Skipped, with no test signal for the commit, when publish fails on main.
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.plan.result == 'success' && needs.publish.result != 'failure' && needs.rpms.result != 'failure' }}
     runs-on: ubuntu-latest
-    container: registry.fedoraproject.org/fedora:44
-    timeout-minutes: 60
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    container:
+      image: ${{ needs.publish.outputs.image || needs.plan.outputs.image || 'registry.fedoraproject.org/fedora:44' }}
     env:
       CARGO_TARGET_DIR: target/ci
-      CARGO_TERM_COLOR: always
     steps:
-      - name: Install the tools the actions need
+      - name: Install the tools the actions need (no image)
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         run: dnf -y install --setopt=install_weak_deps=False git tar zstd
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # A path in the workspace: runner.temp is the host's path, not the
+      # container's. Removed after the install, so the RPM's source tarball
+      # doesn't take it in.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         with:
           name: framework-rpms
-          # Outside the checkout, so the RPM's source tarball doesn't take it in.
-          path: ${{ runner.temp }}/framework-rpms
+          path: .ci-rpms
 
-      # The package list of scripts/dev.sh, then Atlas.Ui, then the spec's
-      # build dependencies.
-      - name: Install the build dependencies
+      - name: Install the build dependencies (no image)
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         run: |
-          dnf -y install dnf5-plugins rpm-build clippy rustfmt dbus-daemon \
-              qt6-qtbase-gui kf6-qqc2-desktop-style breeze-icon-theme default-fonts-core-sans
-          rpms=$RUNNER_TEMP/framework-rpms
-          dnf -y install "$rpms"/atlas-ui-[0-9]*.rpm "$rpms"/atlas-symbols-fonts-[0-9]*.rpm
-          dnf -y builddep packaging/atlas-notepad.spec
+          ci/install-deps.sh .ci-rpms
+          rm -rf .ci-rpms
 
       # Restored on every run, saved only from main: a save per pull request
-      # would crowd the framework RPMs out of the repository's 10 GB.
-      - name: Restore the Cargo cache
-        id: cargo-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # would crowd the other caches out of the repository's 10 GB.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/ci
-          key: cargo-f44-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            cargo-f44-${{ hashFiles('Cargo.lock') }}-
-            cargo-f44-
+          workspaces: ". -> target/ci"
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: cargo fmt
         run: cargo fmt --all --check
@@ -130,55 +369,151 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: cargo test
-        run: cargo test --locked --workspace
-
-      - name: CMake build
+      # Not verified offline: whether qmllint resolves Atlas.Ui and Kirigami from
+      # the installed modules and passes on the current QML. Reported but not
+      # blocking until a run shows it is clean; then drop continue-on-error.
+      # No clang-format step: the repository has no .clang-format.
+      - name: qmllint
         run: |
-          cmake -S apps/atlas-notepad -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build/ci
+          qmllint=$(command -v qmllint-qt6 || command -v qmllint || echo /usr/lib64/qt6/bin/qmllint)
+          if ! out=$("$qmllint" -I /usr/lib64/qt6/qml apps/atlas-notepad/qml/*.qml 2>&1); then
+            printf '%s\n' "$out"
+            n=$(printf '%s\n' "$out" | grep -ci 'warning\|error' || true)
+            echo "::warning::qmllint reported $n warning/error lines (not blocking yet)"
+          fi
 
-      - name: ctest
-        run: ctest --test-dir build/ci -j4 --output-on-failure
-
-      - name: Save the Cargo cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/ci
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
-
-  rpm:
-    name: RPM
-    needs: framework
+  check:
+    name: test · build · ctest
+    needs: [plan, publish, rpms]
+    # Skipped, with no test signal for the commit, when publish fails on main.
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.plan.result == 'success' && needs.publish.result != 'failure' && needs.rpms.result != 'failure' }}
     runs-on: ubuntu-latest
-    container: registry.fedoraproject.org/fedora:44
-    timeout-minutes: 60
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    container:
+      image: ${{ needs.publish.outputs.image || needs.plan.outputs.image || 'registry.fedoraproject.org/fedora:44' }}
+    env:
+      CARGO_TARGET_DIR: target/ci
+      CCACHE_COMPRESS: '1'
+      CCACHE_MAXSIZE: 300M
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
-      - name: Install the tools the actions need
+      - name: Install the tools the actions need (no image)
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         run: dnf -y install --setopt=install_weak_deps=False git tar zstd
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # A path in the workspace: runner.temp is the host's path, not the
+      # container's. Removed after the install, so the RPM's source tarball
+      # doesn't take it in.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         with:
           name: framework-rpms
-          # Outside the checkout, so the RPM's source tarball doesn't take it in.
-          path: ${{ runner.temp }}/framework-rpms
+          path: .ci-rpms
 
+      - name: Install the build dependencies (no image)
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
+        run: |
+          ci/install-deps.sh .ci-rpms
+          rm -rf .ci-rpms
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> target/ci"
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      # $GITHUB_WORKSPACE, not the workflow context's path: in a container the
+      # two differ.
+      - name: Set up ccache
+        id: ccache-env
+        run: |
+          {
+            echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache"
+            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+          } >>"$GITHUB_ENV"
+          echo "week=$(date -u +%G-W%V)" >>"$GITHUB_OUTPUT"
+
+      # Restored on every run, saved only from main, as the Cargo cache: one
+      # entry per run, the newest of this week first, then any week.
+      - name: Restore the ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-f44-${{ steps.ccache-env.outputs.week }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-f44-${{ steps.ccache-env.outputs.week }}-
+            ccache-f44-
+
+      - name: cargo test
+        run: cargo test --locked --workspace
+
+      - name: CMake build
+        run: |
+          ccache -z
+          cmake -S apps/atlas-notepad -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/ci
+          ccache -s
+
+      - name: ctest
+        run: ctest --test-dir build/ci -j4 --output-on-failure
+
+      - name: Save the ccache
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('.ccache/**') != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-f44-${{ steps.ccache-env.outputs.week }}-${{ github.run_id }}
+
+  # No ccache here: %cmake runs in a fresh mktemp directory and the spec's
+  # -ffile-prefix-map=$PWD flags would make most hits miss anyway.
+  rpm:
+    name: RPM
+    needs: [plan, publish, rpms]
+    # Skipped, with no test signal for the commit, when publish fails on main.
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.plan.result == 'success' && needs.publish.result != 'failure' && needs.rpms.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    container:
+      image: ${{ needs.publish.outputs.image || needs.plan.outputs.image || 'registry.fedoraproject.org/fedora:44' }}
+    steps:
+      - name: Install the tools the actions need (no image)
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
+        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A path in the workspace: runner.temp is the host's path, not the
+      # container's. Removed after the install, so the RPM's source tarball
+      # doesn't take it in.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
+        with:
+          name: framework-rpms
+          path: .ci-rpms
+
+      - name: Install the build dependencies (no image)
+        if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
+        run: |
+          ci/install-deps.sh .ci-rpms
+          rm -rf .ci-rpms
+
+      # ATLAS_SKIP_DEPS: no installs, so the RPM is built against exactly the
+      # image.
       - name: Build the RPM
-        run: ATLAS_LOCAL_RPMS="$RUNNER_TEMP/framework-rpms" packaging/build-rpm.sh "$PWD/out/rpm"
+        run: ATLAS_SKIP_DEPS=1 packaging/build-rpm.sh "$PWD/out/rpm"
 
       - name: rpmlint
-        run: |
-          dnf -y install rpmlint
-          rpmlint out/rpm/*.rpm
+        run: rpmlint out/rpm/*.rpm
 
       # The package installs, and dnf then refuses to remove it (protected.d).
       - name: Install, then try to remove
@@ -203,3 +538,33 @@ jobs:
           path: out/rpm/*.rpm
           if-no-files-found: error
           retention-days: 14
+
+  # paths-ignore means a docs-only pull request runs no workflow, so a required
+  # CI result never reports for it: such a PR needs an admin bypass.
+  # Require THIS job, and no other, in branch protection: GitHub counts a
+  # skipped required check as passing, so requiring lint, check or rpm would let
+  # a skipped job (say after a failed publish) through. It fails when any job
+  # failed or was cancelled, and, except on schedule (which runs only plan and
+  # publish), when lint, check or rpm was skipped.
+  ci-ok:
+    name: CI result
+    needs: [plan, publish, rpms, lint, check, rpm]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          printf '%s\n' "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if printf '%s\n' "$RESULTS" | jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' >/dev/null; then
+            echo "A job failed or was cancelled" >&2
+            exit 1
+          fi
+          if [ "$EVENT" != schedule ] && printf '%s\n' "$RESULTS" | jq -e '[.lint, .check, .rpm] | any(.[]; .result != "success")' >/dev/null; then
+            echo "lint, check or rpm did not run to success" >&2
+            exit 1
+          fi
