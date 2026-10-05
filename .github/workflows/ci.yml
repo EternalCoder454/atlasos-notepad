@@ -54,6 +54,9 @@ env:
 # artifact, so this run and the later ones use the fallback. The owner then
 # makes ghcr.io/eternalcoder454/atlas-notepad-dev public (once) and re-runs.
 #
+# While the package is private, every main push rebuilds the image (publish)
+# before the fallback runs, as no digest is cached.
+#
 # If `publish` fails on main, lint, check and rpm are skipped for that commit
 # and it gets no test signal; fix the failure and re-run.
 
@@ -89,18 +92,9 @@ jobs:
             echo "Cargo.toml must pin every atlas-framework crate to $url at one 40-character rev" >&2
             exit 1
           fi
-          # Cargo.lock must resolve every atlas-framework crate from exactly
-          # that source and rev, and no other source may mention it.
-          want="source = \"git+$url?rev=$revs#$revs\""
-          if [ "$(grep -cxF "$want" Cargo.lock)" = 0 ] || grep -E '^source = .*atlas-framework' Cargo.lock | grep -vxF "$want"; then
-            echo "Cargo.lock must take atlas-framework only from $url at rev $revs (lines above differ)" >&2
-            exit 1
-          fi
-          # Nothing may redirect the pinned source either.
-          if grep -rnE --include=Cargo.toml --exclude-dir=target --exclude-dir=build '^[[:space:]]*(\[[[:space:]]*"?(patch|replace)|(patch|replace)\.)' .; then
-            echo "patch and replace are not allowed in any Cargo.toml" >&2
-            exit 1
-          fi
+          # Cargo.lock: every atlas-framework-* package from exactly that source;
+          # and no [patch]/[replace] in any Cargo.toml.
+          ci/check-cargo.sh "$url" "$revs"
           if [ -n "$(find . \( -path ./target -o -path ./build -o -path ./.git \) -prune -o \( -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \) -print)" ]; then
             echo "No .cargo/config or .cargo/config.toml is allowed" >&2
             exit 1
@@ -218,12 +212,20 @@ jobs:
         run: |
           printf '%s' "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' || { echo "bad digest: $DIGEST" >&2; exit 1; }
           cfg=$(mktemp -d)
-          if DOCKER_CONFIG="$cfg" docker manifest inspect "$IMAGE@$DIGEST" >/dev/null 2>&1; then
+          public=false
+          for try in 1 2 3; do
+            if DOCKER_CONFIG="$cfg" docker manifest inspect "$IMAGE@$DIGEST" >/dev/null 2>&1; then
+              public=true
+              break
+            fi
+            [ "$try" = 3 ] || sleep 5
+          done
+          if [ "$public" = true ]; then
             echo "$IMAGE@$DIGEST" >image-digest.txt
             echo "image=$IMAGE@$DIGEST" >>"$GITHUB_OUTPUT"
             echo "public=true" >>"$GITHUB_OUTPUT"
           else
-            echo "::warning::$IMAGE@$DIGEST cannot be pulled anonymously. Make the package public (GitHub profile, Packages, atlas-notepad-dev, Package settings) and re-run. Until then CI uses the fallback install."
+            echo "::warning::$IMAGE@$DIGEST is not public (or the registry did not answer). Make the package public (GitHub profile, Packages, atlas-notepad-dev, Package settings) and re-run. Until then CI uses the fallback install."
             echo "image=" >>"$GITHUB_OUTPUT"
             echo "public=false" >>"$GITHUB_OUTPUT"
           fi
@@ -244,6 +246,8 @@ jobs:
         with:
           name: framework-rpms
           path: framework-rpms/*.rpm
+          # A re-run of a failed run uploads again.
+          overwrite: true
           if-no-files-found: error
           retention-days: 1
 
@@ -289,6 +293,8 @@ jobs:
         with:
           name: framework-rpms
           path: framework-rpms/*.rpm
+          # A re-run of a failed run uploads again.
+          overwrite: true
           if-no-files-found: error
           retention-days: 1
 
@@ -511,3 +517,31 @@ jobs:
           path: out/rpm/*.rpm
           if-no-files-found: error
           retention-days: 14
+
+  # Require THIS job, and no other, in branch protection: GitHub counts a
+  # skipped required check as passing, so requiring lint, check or rpm would let
+  # a skipped job (say after a failed publish) through. It fails when any job
+  # failed or was cancelled, and, except on schedule (which runs only plan and
+  # publish), when lint, check or rpm was skipped.
+  ci-ok:
+    name: CI result
+    needs: [plan, publish, rpms, lint, check, rpm]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check the results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          printf '%s\n' "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if printf '%s\n' "$RESULTS" | jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' >/dev/null; then
+            echo "A job failed or was cancelled" >&2
+            exit 1
+          fi
+          if [ "$EVENT" != schedule ] && printf '%s\n' "$RESULTS" | jq -e '[.lint, .check, .rpm] | any(.[]; .result != "success")' >/dev/null; then
+            echo "lint, check or rpm did not run to success" >&2
+            exit 1
+          fi
