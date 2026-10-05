@@ -92,15 +92,11 @@ jobs:
             echo "Cargo.toml must pin every atlas-framework crate to $url at one 40-character rev" >&2
             exit 1
           fi
-          # Cargo.lock: every atlas-framework-* package from exactly that source;
-          # and no [patch]/[replace] in any Cargo.toml.
-          ci/check-cargo.sh "$url" "$revs"
-          if [ -n "$(find . \( -path ./target -o -path ./build -o -path ./.git \) -prune -o \( -path '*/.cargo/config' -o -path '*/.cargo/config.toml' \) -print)" ]; then
-            echo "No .cargo/config or .cargo/config.toml is allowed" >&2
-            exit 1
-          fi
+          # Cargo.lock: every atlas-framework package from exactly that source; no
+          # [patch]/[replace], .cargo/config or symlink (parsed as TOML, see the script).
+          ci/check-cargo.py "$url" "$revs"
           week=$(date -u +%G-W%V)
-          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/atlas-notepad.spec; find ci -type f | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
+          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/atlas-notepad.spec; find ci -type f ! -name check-cargo.py | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
           {
             echo "rev=$revs"
             echo "week=$week"
@@ -518,6 +514,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # paths-ignore means a docs-only pull request runs no workflow, so a required
+  # CI result never reports for it: such a PR needs an admin bypass.
   # Require THIS job, and no other, in branch protection: GitHub counts a
   # skipped required check as passing, so requiring lint, check or rpm would let
   # a skipped job (say after a failed publish) through. It fails when any job
