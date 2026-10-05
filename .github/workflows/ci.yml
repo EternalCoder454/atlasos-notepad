@@ -1,0 +1,205 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Everything runs in Fedora 44, the release AtlasOS is built on, as scripts/dev.sh
+# does locally. Actions are pinned by commit.
+
+jobs:
+  # Atlas.Ui (atlas-ui, atlas-symbols-fonts) is not in any repository: build its
+  # RPMs from atlas-framework at the commit Cargo.toml pins, once per commit.
+  framework:
+    name: atlas-framework RPMs
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 60
+    steps:
+      - name: Install the tools the actions need
+        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same rev as the crates, so Atlas.Ui and the crash code match.
+      - name: Read the atlas-framework rev
+        id: rev
+        run: |
+          url='https://github.com/EternalCoder454/atlas-framework'
+          revs=$(sed -n "s|^atlas-framework-[a-z]* = { git = \"$url\", rev = \"\([0-9a-f]\{40\}\)\" }\$|\1|p" Cargo.toml | sort -u)
+          crates=$(grep -c '^atlas-framework-' Cargo.toml || true)
+          pinned=$(grep -c "^atlas-framework-[a-z]* = { git = \"$url\", rev = \"[0-9a-f]\{40\}\" }\$" Cargo.toml || true)
+          if [ "$crates" = 0 ] || [ "$pinned" != "$crates" ] || [ "$(printf '%s\n' "$revs" | wc -l)" != 1 ]; then
+            echo "Cargo.toml must pin every atlas-framework crate to $url at one 40-character rev" >&2
+            exit 1
+          fi
+          echo "rev=$revs" >>"$GITHUB_OUTPUT"
+          # Rebuilt weekly too, to follow Fedora's Qt updates.
+          echo "week=$(date -u +%G-W%V)" >>"$GITHUB_OUTPUT"
+
+      - name: Cache the RPMs
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: framework-rpms
+          key: atlas-framework-rpms-f44-${{ steps.rev.outputs.rev }}-${{ steps.rev.outputs.week }}
+
+      - name: Check out atlas-framework
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: EternalCoder454/atlas-framework
+          ref: ${{ steps.rev.outputs.rev }}
+          path: atlas-framework
+          persist-credentials: false
+
+      - name: Build the RPMs
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: atlas-framework/packaging/build-rpm.sh "$PWD/framework-rpms"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: framework-rpms
+          path: framework-rpms/*.rpm
+          if-no-files-found: error
+          retention-days: 1
+
+  check:
+    name: fmt · clippy · test · ctest
+    needs: framework
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 60
+    env:
+      CARGO_TARGET_DIR: target/ci
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Install the tools the actions need
+        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: framework-rpms
+          # Outside the checkout, so the RPM's source tarball doesn't take it in.
+          path: ${{ runner.temp }}/framework-rpms
+
+      # The package list of scripts/dev.sh, then Atlas.Ui, then the spec's
+      # build dependencies.
+      - name: Install the build dependencies
+        run: |
+          dnf -y install dnf5-plugins rpm-build clippy rustfmt dbus-daemon \
+              qt6-qtbase-gui kf6-qqc2-desktop-style breeze-icon-theme default-fonts-core-sans
+          rpms=$RUNNER_TEMP/framework-rpms
+          dnf -y install "$rpms"/atlas-ui-[0-9]*.rpm "$rpms"/atlas-symbols-fonts-[0-9]*.rpm
+          dnf -y builddep packaging/atlas-notepad.spec
+
+      # Restored on every run, saved only from main: a save per pull request
+      # would crowd the framework RPMs out of the repository's 10 GB.
+      - name: Restore the Cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/ci
+          key: cargo-f44-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-f44-${{ hashFiles('Cargo.lock') }}-
+            cargo-f44-
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked --workspace
+
+      - name: CMake build
+        run: |
+          cmake -S apps/atlas-notepad -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/ci
+
+      - name: ctest
+        run: ctest --test-dir build/ci --output-on-failure
+
+      - name: Save the Cargo cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/ci
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  rpm:
+    name: RPM
+    needs: framework
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 60
+    steps:
+      - name: Install the tools the actions need
+        run: dnf -y install --setopt=install_weak_deps=False git tar zstd
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: framework-rpms
+          # Outside the checkout, so the RPM's source tarball doesn't take it in.
+          path: ${{ runner.temp }}/framework-rpms
+
+      - name: Build the RPM
+        run: ATLAS_LOCAL_RPMS="$RUNNER_TEMP/framework-rpms" packaging/build-rpm.sh "$PWD/out/rpm"
+
+      - name: rpmlint
+        run: |
+          dnf -y install rpmlint
+          rpmlint out/rpm/*.rpm
+
+      # The package installs, and dnf then refuses to remove it (protected.d).
+      - name: Install, then try to remove
+        run: |
+          dnf -y install out/rpm/atlas-notepad-*.rpm
+          rpm -q atlas-notepad
+          test -f /etc/dnf/protected.d/atlas-notepad.conf
+          if out=$(dnf -y remove atlas-notepad 2>&1); then
+            printf '%s\n' "$out"
+            echo "dnf removed atlas-notepad: protected.d is not working" >&2
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep -q 'protected packages:.*atlas-notepad'
+          rpm -q atlas-notepad
+
+      - name: Upload the RPM (not from pull requests)
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-notepad-rpm
+          path: out/rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 14
