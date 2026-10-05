@@ -19,6 +19,10 @@ constexpr qint64 editNs = 2'000'000;
 // A bigger insert is left to a pass that is already due before it (a file
 // being filled in pieces).
 constexpr int bigInsert = 2048;
+// After such an insert, the pass waits this long for the next one: a file
+// filled in pieces is read first (its slices between the pieces made the
+// filling slower), and the pass then goes over it once.
+constexpr int settleMs = 50;
 
 // Ours only: a block may still carry the Markdown highlighter's data.
 CodeBlockData *dataOf(const QTextBlock &block)
@@ -276,9 +280,7 @@ void CodeHighlighter::documentChanged(int from, int removed, int added)
         const QTextBlock before = first.previous();
         if (added > bigInsert || (before.isValid() && !dataOf(before))) {
             m_all = true;
-            if (!m_passTimer.isActive()) {
-                m_passTimer.start();
-            }
+            m_passTimer.start(settleMs);
             return;
         }
     }
@@ -339,7 +341,7 @@ void CodeHighlighter::schedule(const QTextBlock &block, bool all)
         }
     }
     if (!m_passTimer.isActive()) {
-        m_passTimer.start();
+        m_passTimer.start(0);
     }
 }
 
@@ -392,7 +394,7 @@ void CodeHighlighter::runPass()
     m_readBudgetNs = qBound<qint64>(qMax<qint64>(500'000, m_readBudgetNs / 2), qint64(double(sliceNs) * share), 2 * m_readBudgetNs);
     if (next.isValid()) {
         m_pass.setPosition(next.position());
-        m_passTimer.start();
+        m_passTimer.start(0);
     } else {
         m_pass = QTextCursor();
         m_all = false;
