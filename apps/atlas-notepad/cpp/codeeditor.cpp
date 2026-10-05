@@ -1,6 +1,7 @@
 // Light coding: highlighting from KSyntaxHighlighting and the editing keys a
 // code file expects. See codeeditor.h.
 #include "codeeditor.h"
+#include "codehighlighter.h"
 
 #include <algorithm>
 
@@ -11,7 +12,6 @@
 #include <QTextCursor>
 
 #include <KSyntaxHighlighting/Repository>
-#include <KSyntaxHighlighting/SyntaxHighlighter>
 #include <KSyntaxHighlighting/Theme>
 
 namespace
@@ -119,8 +119,7 @@ void CodeEditor::setDark(bool dark)
     m_dark = dark;
     if (m_highlighter) {
         m_highlighter->setTheme(codeRepository().defaultTheme(dark ? KSyntaxHighlighting::Repository::DarkTheme
-                                                                    : KSyntaxHighlighting::Repository::LightTheme));
-        m_highlighter->rehighlight();
+                                                                    : KSyntaxHighlighting::Repository::LightTheme)); // highlights again
     }
     Q_EMIT darkChanged();
 }
@@ -145,7 +144,7 @@ void CodeEditor::setIndentWidth(int width)
 void CodeEditor::rehighlightNow()
 {
     if (m_highlighter) {
-        m_highlighter->rehighlight();
+        m_highlighter->rehighlightAll(true);
     }
 }
 
@@ -161,7 +160,7 @@ void CodeEditor::applyHighlighting()
         return;
     }
     if (!m_highlighter) {
-        m_highlighter = new KSyntaxHighlighting::SyntaxHighlighter(m_doc);
+        m_highlighter = new CodeHighlighter(m_doc);
         m_highlighter->setTheme(codeRepository().defaultTheme(m_dark ? KSyntaxHighlighting::Repository::DarkTheme
                                                                       : KSyntaxHighlighting::Repository::LightTheme));
     }

@@ -1,9 +1,11 @@
 // MarkdownEditor's edits on a real TextEdit: keys go through its event filter
 // and toolbar calls through its invokables, and the test reads back the text.
 #include "codeeditor.h"
+#include "codehighlighter.h"
 #include "markdown.h"
 
 #include <QClipboard>
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
@@ -17,7 +19,115 @@
 #include <QTextDocument>
 #include <QTest>
 
+#include <KSyntaxHighlighting/Repository>
+#include <KSyntaxHighlighting/SyntaxHighlighter>
+#include <KSyntaxHighlighting/Theme>
+
 #include <memory>
+
+namespace
+{
+// A document's formats, block by block (start, length, look of each range).
+bool sameFormats(QTextDocument &a, QTextDocument &b, QString *why = nullptr)
+{
+    if (a.blockCount() != b.blockCount()) {
+        return false;
+    }
+    QTextBlock x = a.begin(), y = b.begin();
+    for (int n = 0; x.isValid() && y.isValid(); x = x.next(), y = y.next(), ++n) {
+        const auto fa = x.layout()->formats();
+        const auto fb = y.layout()->formats();
+        bool same = fa.size() == fb.size();
+        for (qsizetype i = 0; same && i < fa.size(); ++i) {
+            same = fa[i].start == fb[i].start && fa[i].length == fb[i].length && fa[i].format == fb[i].format;
+        }
+        if (!same) {
+            if (why) {
+                auto dump = [](const QList<QTextLayout::FormatRange> &f) {
+                    QString d;
+                    for (const auto &r : f) {
+                        d += QStringLiteral(" [%1+%2").arg(r.start).arg(r.length);
+                        const auto props = r.format.properties();
+                        for (auto it = props.cbegin(); it != props.cend(); ++it) {
+                            d += QStringLiteral(" %1=%2").arg(it.key()).arg(it.value().toString());
+                        }
+                        d += u']';
+                    }
+                    return d;
+                };
+                *why = QStringLiteral("line %1 (%2 and %3 ranges): %4 | mine%5 | stock%6").arg(n).arg(fa.size()).arg(fb.size()).arg(x.text(), dump(fa), dump(fb));
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+KSyntaxHighlighting::Theme themeFor(bool dark)
+{
+    return codeRepository().defaultTheme(dark ? KSyntaxHighlighting::Repository::DarkTheme : KSyntaxHighlighting::Repository::LightTheme);
+}
+
+// What KSyntaxHighlighting's own highlighter makes of `text`.
+struct Stock {
+    QTextDocument doc;
+    std::unique_ptr<KSyntaxHighlighting::SyntaxHighlighter> highlighter;
+    Stock(const QString &text, const QString &language, bool dark)
+    {
+        (void)doc.documentLayout();
+        doc.setPlainText(text);
+        highlighter = std::make_unique<KSyntaxHighlighting::SyntaxHighlighter>(&doc);
+        highlighter->setTheme(themeFor(dark));
+        highlighter->setDefinition(codeRepository().definitionForName(language));
+        highlighter->rehighlight();
+    }
+};
+
+QString cppSample()
+{
+    return QStringLiteral(
+        "#include <vector>\n#define MAX(a, b) ((a) > (b) ? (a) : (b))\n\n"
+        "/* a block\n   comment */\nnamespace n {\n"
+        "template <class T> struct Box { T v = T(); };\n"
+        "int main(int argc, char **argv) // entry\n{\n"
+        "    const char *s = \"text \\\" more\"; char c = 'x';\n"
+        "    for (int i = 0; i < 10; ++i) { if (i % 2) continue; }\n"
+        "    auto r = R\"(raw\nstring)\"; return 0x1F + 3.5e2;\n}\n}\n");
+}
+
+QString pythonSample()
+{
+    return QStringLiteral(
+        "import os\n\n@decorator\ndef f(a, b=2, *args):\n"
+        "    \"\"\"doc\n    string\"\"\"\n    x = [i for i in range(10) if i % 2]  # c\n"
+        "    return f'{a} {b}' + \"s\"\n\nclass A(B):\n    pass\n");
+}
+
+QString jsonSample()
+{
+    return QStringLiteral("{\n  \"name\": \"atlas\",\n  \"n\": [1, 2.5, -3e4, true, null],\n  \"o\": {\"k\": \"v\\n\"}\n}\n");
+}
+
+QString shellSample()
+{
+    return QStringLiteral(
+        "#!/bin/bash\nset -euo pipefail\nfor f in *.txt; do\n  echo \"$f: ${#f}\" | grep -v '^#' > out.$$\ndone\n"
+        "cat <<EOF\nhere $HOME\nEOF\nif [ -f x ]; then echo $(date); fi\n");
+}
+
+// Many lines of C++ with comments, up to about `chars` characters.
+QString generatedCpp(int chars, bool blockComments = true)
+{
+    QString out;
+    for (int i = 0; out.size() < chars; ++i) {
+        out += QStringLiteral("int f%1(int a) { return a * %1; } // line %1 \"s\"\n").arg(i);
+        if (blockComments && i % 50 == 7) {
+            out += QStringLiteral("/* a comment\n   over two lines */ static const char *k%1 = \"x\";\n").arg(i);
+        }
+    }
+    return out;
+}
+} // namespace
 
 class EditorTest : public QObject
 {
@@ -927,6 +1037,153 @@ private Q_SLOTS:
         m_code->setTextEdit(nullptr);
         QVERIFY(blockAt(0).layout()->formats().isEmpty());
     }
+    // ---- CodeHighlighter: the same look as KSyntaxHighlighting's, in linear time
+
+    void codeHighlighterMatchesStock_data()
+    {
+        QTest::addColumn<QString>("language");
+        QTest::addColumn<QString>("text");
+        QTest::newRow("C++") << QStringLiteral("C++") << cppSample();
+        QTest::newRow("Python") << QStringLiteral("Python") << pythonSample();
+        QTest::newRow("JSON") << QStringLiteral("JSON") << jsonSample();
+        QTest::newRow("Bash") << QStringLiteral("Bash") << shellSample();
+    }
+    void codeHighlighterMatchesStock()
+    {
+        QFETCH(QString, language);
+        QFETCH(QString, text);
+        for (const bool dark : {false, true}) {
+            Stock stock(text, language, dark);
+            QTextDocument doc;
+            (void)doc.documentLayout();
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+            doc.setPlainText(text);
+            CodeHighlighter highlighter(&doc);
+            highlighter.setTheme(themeFor(dark));
+            highlighter.setDefinition(codeRepository().definitionForName(language));
+            QVERIFY(!doc.begin().layout()->formats().isEmpty());
+            QString why;
+            QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
+            // Again, now.
+            highlighter.rehighlightAll(true);
+            QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
+        }
+    }
+
+    // Typing `/*` at the top: the lines after it become comment (the lines
+    // by the edit at once, the rest from the event loop), and deleting it
+    // gives them back. Past 64K characters the first pass is in slices too.
+    void codeHighlighterCarriesStateChanges()
+    {
+        // No `*/` in it: the comment runs to the end.
+        const QString text = generatedCpp(100 * 1024, false);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        {
+            Stock stock(text, QStringLiteral("C++"), false);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        QTextCursor cursor(&doc);
+        cursor.insertText(QStringLiteral("/*"));
+        {
+            Stock stock(doc.toPlainText(), QStringLiteral("C++"), false);
+            // A screenful after the edit is done before the event loop runs.
+            QTextBlock a = doc.findBlockByNumber(3), b = stock.doc.findBlockByNumber(3);
+            QCOMPARE(a.layout()->formats().size(), b.layout()->formats().size());
+            QVERIFY(!sameFormats(doc, stock.doc)); // the end isn't there yet
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        cursor.setPosition(0);
+        cursor.setPosition(2, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();
+        QCOMPARE(doc.toPlainText(), text);
+        Stock stock(text, QStringLiteral("C++"), false);
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // Text set on a big document (what a file filled in pieces does) is
+    // highlighted as the stock one would, without a pass over it per piece.
+    void codeHighlighterFollowsAppends()
+    {
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        const QString text = generatedCpp(150 * 1024);
+        QTextCursor cursor(&doc);
+        for (qsizetype pos = 0; pos < text.size();) {
+            const qsizetype end = text.indexOf(u'\n', qMin<qsizetype>(pos + 20000, text.size() - 1)) + 1;
+            cursor.movePosition(QTextCursor::End);
+            cursor.insertText(text.mid(pos, end - pos));
+            pos = end;
+        }
+        QCOMPARE(doc.toPlainText(), text);
+        Stock stock(text, QStringLiteral("C++"), false);
+        QString why;
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // A theme or language switch restyles every line, a big document too.
+    void codeHighlighterSwitchesThemeAndLanguage()
+    {
+        const QString text = generatedCpp(100 * 1024);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        highlighter.setTheme(themeFor(true));
+        {
+            Stock stock(text, QStringLiteral("C++"), true);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("Python")));
+        Stock stock(text, QStringLiteral("Python"), true);
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // The all-at-once pass is linear: 1 MB took 90 s through the stock one.
+    void codeHighlighterIsLinear()
+    {
+        const QString text = generatedCpp(1'000'000);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QElapsedTimer clock;
+        clock.start();
+        highlighter.rehighlightAll(true);
+        const qint64 ms = clock.elapsed();
+        qInfo() << "1 MB rehighlightAll:" << ms << "ms";
+        QVERIFY2(ms < 5000, qPrintable(QStringLiteral("took %1 ms").arg(ms)));
+        QVERIFY(!doc.lastBlock().previous().layout()->formats().isEmpty());
+    }
+
+    // A line over Limits::lineLength is left plain (and the lines after it
+    // still highlighted).
+    void codeHighlighterSkipsHugeLines()
+    {
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(QStringLiteral("int a; // x\n") + QString(150'000, u'a') + QStringLiteral("\nint b; // y\n"));
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QVERIFY(!doc.findBlockByNumber(0).layout()->formats().isEmpty());
+        QVERIFY(doc.findBlockByNumber(1).layout()->formats().isEmpty());
+        QVERIFY(!doc.findBlockByNumber(2).layout()->formats().isEmpty());
+    }
+
     void codeToggleComment()
     {
         openCode(QStringLiteral("  a\n    b\n\n  c"));

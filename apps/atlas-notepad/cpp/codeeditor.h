@@ -17,8 +17,8 @@
 namespace KSyntaxHighlighting
 {
 class Repository;
-class SyntaxHighlighter;
 }
+class CodeHighlighter;
 
 // The one shared definition repository, built on first use (main thread).
 KSyntaxHighlighting::Repository &codeRepository();
@@ -86,7 +86,7 @@ private:
 
     QPointer<QQuickItem> m_edit;
     QPointer<QTextDocument> m_doc;
-    QPointer<KSyntaxHighlighting::SyntaxHighlighter> m_highlighter;
+    QPointer<CodeHighlighter> m_highlighter;
     QString m_language;
     KSyntaxHighlighting::Definition m_def;
     bool m_dark = false;
