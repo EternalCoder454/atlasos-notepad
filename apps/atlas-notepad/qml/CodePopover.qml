@@ -4,13 +4,12 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import Atlas.Ui
 import net.eterneon.atlas.notepad
 
-QQC2.Popup {
+AtlasPopover {
     id: popover
 
     // The tab's document and its CodeEditor (for the language list).
@@ -18,48 +17,41 @@ QQC2.Popup {
     property CodeEditor editor: null
     readonly property var languages: editor ? editor.languages() : []
 
+    // "left": beside the target, centred on it, instead of AtlasPopover's own
+    // below-or-above placement (the capsule is a strip at the window's edge).
+    property bool _left: false
+
     // Opens above (a status cell) or to the left of `item`.
     function openAt(item, side) {
-        parent = item;
-        const gap = Kirigami.Units.smallSpacing;
-        if (side === "left") {
-            x = Qt.binding(() => -popover.width - gap);
-            y = Qt.binding(() => ((popover.parent ? popover.parent.height : 0) - popover.height) / 2);
-        } else {
-            // From the cell's left edge, pulled back to stay in the window.
-            x = Qt.binding(() => {
-                const overlay = QQC2.Overlay.overlay;
-                const left = overlay && popover.parent ? popover.parent.mapToItem(overlay, 0, 0).x : 0;
-                return overlay ? Math.min(0, overlay.width - popover.margins - left - popover.width) : 0;
-            });
-            y = Qt.binding(() => -popover.height - gap);
-        }
+        target = item;
+        _left = side === "left";
+        showArrow = !_left;
         open();
     }
-
-    modal: false
-    // Kept inside the window, wherever it opens.
-    margins: Kirigami.Units.smallSpacing
-    focus: true
-    closePolicy: QQC2.Popup.CloseOnEscape | QQC2.Popup.CloseOnPressOutside
-    padding: Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
-    width: Kirigami.Units.gridUnit * 19
-
-    background: Rectangle {
-        radius: 12
-        color: Kirigami.Theme.backgroundColor
-        border.width: 1
-        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.16)
+    function _placeLeft(): void {
+        const t = popover.target;
+        const p = popover.parent;
+        if (!popover._left || !t || !p) {
+            return;
+        }
+        const origin = t.mapToItem(p, 0, 0);
+        const gap = Kirigami.Units.smallSpacing;
+        popover.x = Math.max(0, Math.min(origin.x - popover.width - gap, p.width - popover.width));
+        popover.y = Math.max(0, Math.min(origin.y + (t.height - popover.height) / 2, p.height - popover.height));
     }
+    onAboutToShow: _placeLeft()
+    onImplicitWidthChanged: if (visible) _placeLeft()
+    onImplicitHeightChanged: if (visible) _placeLeft()
 
-    contentItem: ColumnLayout {
+    ColumnLayout {
+        Layout.preferredWidth: Kirigami.Units.gridUnit * 19
         Accessible.role: Accessible.Pane
         Accessible.name: qsTr("Language and indentation")
         spacing: Kirigami.Units.largeSpacing
 
-        QQC2.Label {
+        AtlasLabel {
             text: qsTr("Language")
-            font.bold: true
+            textStyle: AtlasLabel.Heading
         }
         AtlasComboBox {
             id: language
@@ -76,15 +68,17 @@ QQC2.Popup {
             }
         }
 
-        QQC2.Label {
+        AtlasLabel {
             text: qsTr("Indentation")
-            font.bold: true
+            textStyle: AtlasLabel.Heading
         }
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.largeSpacing
-            SegmentedPill {
-                items: [
+            AtlasSegmentedControl {
+                id: indentSwitch
+                Accessible.name: qsTr("Indent with")
+                model: [
                     {
                         text: qsTr("Spaces"),
                         toolTip: qsTr("Indent with spaces")
@@ -95,16 +89,18 @@ QQC2.Popup {
                     }
                 ]
                 currentIndex: popover.document && !popover.document.insertSpaces ? 1 : 0
-                onChosen: index => {
+                onActivated: index => {
                     if (popover.document) {
                         popover.document.insertSpaces = index === 0;
                     }
+                    // The control assigned currentIndex itself; follow the document again.
+                    indentSwitch.currentIndex = Qt.binding(() => popover.document && !popover.document.insertSpaces ? 1 : 0);
                 }
             }
             Item {
                 Layout.fillWidth: true
             }
-            QQC2.Label {
+            AtlasLabel {
                 text: qsTr("Width")
             }
             AtlasSpinBox {

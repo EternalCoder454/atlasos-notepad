@@ -134,7 +134,7 @@ Item {
         Layout.bottomMargin: Kirigami.Units.smallSpacing
         implicitWidth: Math.round(capsule.buttonSize * 0.55)
         implicitHeight: 1
-        color: Qt.alpha(Kirigami.Theme.textColor, 0.15)
+        color: AtlasStyle.separator
     }
     // A menu item that runs a window action. Not `action:`, so `checked` is
     // ours (the action's own is bound to the setting it toggles). With
@@ -191,9 +191,9 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: width / 2
-        color: Kirigami.Theme.backgroundColor
+        color: AtlasStyle.chromeBackground
         border.width: 1
-        border.color: Qt.alpha(Kirigami.Theme.textColor, 0.18)
+        border.color: AtlasStyle.controlBorder
     }
 
     // Past the window's height the strip scrolls with the wheel.

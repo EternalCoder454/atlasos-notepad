@@ -36,11 +36,11 @@ corrosion_import_crate(MANIFEST_PATH ${WORKSPACE_DIR}/Cargo.toml
 # its Atlas.Ui version check.)
 set(_atlas_ui_qmldir "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_QML}/Atlas/Ui/qmldir")
 if(NOT EXISTS "${_atlas_ui_qmldir}")
-    message(FATAL_ERROR "Atlas.Ui is not installed: install atlas-ui >= 1.3.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
+    message(FATAL_ERROR "Atlas.Ui is not installed: install atlas-ui >= 1.4.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
 endif()
-file(STRINGS "${_atlas_ui_qmldir}" _atlas_ui_forms REGEX "^AtlasTextField ")
+file(STRINGS "${_atlas_ui_qmldir}" _atlas_ui_forms REGEX "^AtlasHeaderBar ")
 if(NOT _atlas_ui_forms)
-    message(FATAL_ERROR "The installed Atlas.Ui is older than 1.3.0: install atlas-ui >= 1.3.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
+    message(FATAL_ERROR "The installed Atlas.Ui is older than 1.4.0: install atlas-ui >= 1.4.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
 endif()
 
 # The app's QObjects (cpp/app.h), shared with app_test.
@@ -70,8 +70,8 @@ qt_add_qml_module(atlas-notepad-app
     NO_IMPORT_SCAN
     QML_FILES
         qml/Main.qml qml/EditorView.qml qml/ToolCapsule.qml qml/GlobalMenu.qml
-        qml/FallbackMenu.qml qml/SettingsPage.qml qml/UnsavedDialog.qml qml/SlimScrollBar.qml
-        qml/SegmentedPill.qml qml/StatusCell.qml qml/SymbolButton.qml qml/CodePopover.qml
+        qml/FallbackMenu.qml qml/SettingsPage.qml
+        qml/SymbolButton.qml qml/CodePopover.qml
     SOURCES
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
         cpp/spellcheck.h cpp/spellcheck.cpp cpp/codeeditor.h cpp/codeeditor.cpp

@@ -6,7 +6,7 @@
 
 Name:           atlas-notepad
 Version:        0.1.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Notepad, the text editor of AtlasOS
 License:        MIT AND Apache-2.0
 URL:            https://github.com/EternalCoder454/atlasos-notepad
@@ -48,12 +48,12 @@ BuildRequires:  hunspell-en-US
 # from atlas-framework, which is in no repository: install its RPMs first
 # (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
 BuildRequires:  kf6-kirigami-devel
-BuildRequires:  atlas-ui >= 1.3.0
+BuildRequires:  atlas-ui >= 1.4.0
 
 Requires:       kf6-kirigami
 Recommends:     kio-extras
-# Atlas.Ui (its 1.3.0 has the editor components and the Atlas form controls)
-Requires:       atlas-ui >= 1.3.0
+# Atlas.Ui (1.4.0: the merged header, floating toolbar, popover, segmented control)
+Requires:       atlas-ui >= 1.4.0
 Requires:       kf6-qqc2-desktop-style
 # spell check (dictionaries come from the system's langpacks)
 Requires:       kf6-sonnet
@@ -118,6 +118,11 @@ appstream-util validate-relax --nonet \
 %config(noreplace) %{_sysconfdir}/dnf/protected.d/atlas-notepad.conf
 
 %changelog
+* Sun Oct 04 2026 Atlas <atlas@eterneon.net> - 0.1.0-3
+- Atlas.Ui 1.4.0: the merged window header, its status bar, segmented
+  control, popover, scroll bars, font picker and confirm dialog replace
+  Notepad's own
+
 * Sun Oct 04 2026 Atlas <atlas@eterneon.net> - 0.1.0-2
 - Built on atlas-framework (atlas-ui >= 1.3.0)
 - dnf protected.d entry: not removable on AtlasOS

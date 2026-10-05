@@ -5,7 +5,6 @@
 // the text plus the optional `shortcutText`.
 import QtQuick
 import QtQuick.Templates as T
-import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
 import Atlas.Ui
 
@@ -48,16 +47,32 @@ T.AbstractButton {
     }
 
     background: Rectangle {
-        radius: control.round ? Math.min(width, height) / 2 : 6
-        color: control.checked ? Qt.alpha(Kirigami.Theme.highlightColor, control.down ? 0.28 : 0.18) : Qt.alpha(Kirigami.Theme.textColor, control.down ? 0.12 : control.hovered ? 0.07 : 0)
-        // A click never focuses it, so any focus here came from the keyboard
-        // (or a menu handing it back, which Qt gives a popup reason).
-        border.width: control.keyboardFocus && control.activeFocus ? 2 : 0
-        border.color: Kirigami.Theme.highlightColor
+        radius: control.round ? Math.min(width, height) / 2 : AtlasStyle.radiusSmall
+        // As Atlas.Ui's ToolbarButton: on is the selection fill with an
+        // accent border; hover and press are the grey overlay.
+        color: control.checked ? AtlasStyle.selection : "transparent"
+        border.width: control.checked ? 1 : 0
+        border.color: control.enabled ? AtlasStyle.accent : AtlasStyle.controlBorder
         Behavior on color {
             ColorAnimation {
-                duration: Kirigami.Units.shortDuration
+                duration: AtlasStyle.durationShort
             }
+        }
+        Rectangle {
+            anchors.fill: parent
+            radius: parent.radius
+            color: !control.enabled ? "transparent" : control.down ? AtlasStyle.pressed : control.hovered ? AtlasStyle.hover : "transparent"
+            Behavior on color {
+                ColorAnimation {
+                    duration: AtlasStyle.durationShort
+                }
+            }
+        }
+        // A click never focuses it, so any focus here came from the keyboard
+        // (or a menu handing it back, which Qt gives a popup reason).
+        AtlasFocusRing {
+            radius: parent.radius + gap
+            shown: control.keyboardFocus && control.activeFocus
         }
     }
 
@@ -66,7 +81,7 @@ T.AbstractButton {
             anchors.centerIn: parent
             name: control.symbol
             size: Kirigami.Units.iconSizes.smallMedium
-            opacity: control.enabled ? 1 : 0.4
+            color: !control.enabled ? AtlasStyle.textDisabled : control.checked ? AtlasStyle.accent : Kirigami.Theme.textColor
         }
     }
 }

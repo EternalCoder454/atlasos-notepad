@@ -15,55 +15,28 @@ AtlasPage {
 
     title: qsTr("Settings")
 
-    // A SectionRow a little shorter than the default, for the compact look.
-    // Never shorter than its text needs (a long, wrapped or translated
-    // subtitle): the row's own layout is the one child with `uniformCellSizes`.
-    component CompactRow: SectionRow {
-        id: row
-        readonly property real textHeight: {
-            for (const child of row.children) {
-                if (child.uniformCellSizes !== undefined) {
-                    return child.implicitHeight + Kirigami.Units.largeSpacing;
-                }
-            }
-            return 0;
-        }
-        implicitHeight: Math.max(Math.round(Kirigami.Units.gridUnit * 2.2), textHeight)
-    }
-
     Section {
         title: qsTr("Font")
         footer: qsTr("Used for plain text and the Markdown syntax view. The formatted view uses your system font at this size.")
 
-        CompactRow {
-            title: qsTr("Family")
-            AtlasComboBox {
-                id: family
-                Accessible.name: qsTr("Font family")
-                Layout.preferredWidth: Kirigami.Units.gridUnit * 14
-                model: Qt.fontFamilies()
-                currentIndex: model.indexOf(page.settings.font.family)
-                // A family that isn't installed still shows its name.
-                displayText: currentIndex < 0 ? page.settings.font.family : currentText
-                onActivated: index => page.settings.font = Qt.font({
-                    family: family.textAt(index),
-                    pointSize: page.settings.font.pointSize
-                })
-            }
-        }
-        CompactRow {
-            title: qsTr("Size")
-            AtlasSpinBox {
-                Accessible.name: qsTr("Font size")
-                from: 6
-                to: 72
-                value: Math.round(page.settings.font.pointSize)
-                editable: true
-                onValueModified: page.settings.font = Qt.font({
-                    family: page.settings.font.family,
-                    styleName: page.settings.font.styleName,
-                    pointSize: value
-                })
+        SectionRow {
+            density: AtlasStyle.Compact
+            title: qsTr("Font")
+            AtlasFontPicker {
+                id: picker
+                Accessible.name: qsTr("Font")
+                font.family: page.settings.font.family
+                font.pointSize: Math.round(page.settings.font.pointSize)
+                onEdited: {
+                    page.settings.font = Qt.font({
+                        family: picker.font.family,
+                        styleName: page.settings.font.styleName,
+                        pointSize: picker.font.pointSize
+                    });
+                    // The picker assigned font.family itself, which ended its binding.
+                    picker.font.family = Qt.binding(() => page.settings.font.family);
+                    picker.font.pointSize = Qt.binding(() => Math.round(page.settings.font.pointSize));
+                }
             }
         }
         QQC2.Label {
@@ -80,33 +53,38 @@ AtlasPage {
     Section {
         title: qsTr("Text")
 
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Word wrap")
             subtitle: qsTr("Long lines continue on the next line instead of scrolling sideways")
             showSwitch: true
             switchChecked: page.settings.wordWrap
             onSwitchToggled: checked => page.settings.wordWrap = checked
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Line numbers")
             showSwitch: true
             switchChecked: page.settings.lineNumbers
             onSwitchToggled: checked => page.settings.lineNumbers = checked
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Line numbers in code files")
             subtitle: qsTr("Shown for code even when line numbers are off above")
             showSwitch: true
             switchChecked: page.settings.codeLineNumbers
             onSwitchToggled: checked => page.settings.codeLineNumbers = checked
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Status bar")
             showSwitch: true
             switchChecked: page.settings.statusBar
             onSwitchToggled: checked => page.settings.statusBar = checked
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Check spelling")
             subtitle: qsTr("Underlines misspelled words in Markdown and text files, not in code")
             showSwitch: true
@@ -119,14 +97,16 @@ AtlasPage {
         title: qsTr("Markdown")
         footer: qsTr("Markdown files (.md) can show their formatting, such as headings, bold text and lists, instead of the symbols that make it. The file itself stays plain text.")
 
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Formatting")
             subtitle: qsTr("Show Markdown files and new tabs with formatting")
             showSwitch: true
             switchChecked: page.settings.formatting
             onSwitchToggled: checked => page.settings.formatting = checked
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Open files formatted")
             subtitle: qsTr("Off: files open showing the Markdown syntax")
             enabled: page.settings.formatting
@@ -134,7 +114,8 @@ AtlasPage {
             switchChecked: page.settings.openMarkdownFormatted
             onSwitchToggled: checked => page.settings.openMarkdownFormatted = checked
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Tools")
             subtitle: qsTr("The formatting capsule at the right edge")
             enabled: page.settings.formatting
@@ -147,7 +128,8 @@ AtlasPage {
     Section {
         title: qsTr("When Notepad Starts")
 
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Continue previous session")
             subtitle: qsTr("Tabs come back as you left them, unsaved changes too")
             clickable: true
@@ -157,7 +139,8 @@ AtlasPage {
             Accessible.checked: checkmark
             onClicked: page.settings.continueSession = true
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Start a new session")
             subtitle: qsTr("Closing a window asks about unsaved changes")
             clickable: true
@@ -172,7 +155,8 @@ AtlasPage {
     Section {
         title: qsTr("Opening Files")
 
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Open in a new tab")
             clickable: true
             radio: true
@@ -181,7 +165,8 @@ AtlasPage {
             Accessible.checked: checkmark
             onClicked: page.settings.openInNewWindow = false
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Open in a new window")
             clickable: true
             radio: true
@@ -196,7 +181,8 @@ AtlasPage {
         title: qsTr("Drawing")
         footer: qsTr("Notepad draws its window with the processor, which starts faster and uses less memory. Takes effect the next time Notepad opens.")
 
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Use the graphics card to draw the window")
             showSwitch: true
             switchChecked: page.settings.gpuRendering
@@ -208,18 +194,20 @@ AtlasPage {
         title: qsTr("Crash Reports")
         footer: qsTr("Crash reports for every Atlas app are turned on or off in Atlas Updater. They're off unless you turn them on, and each one is shown to you before it's sent. A report you send is posted as a public issue on the AtlasOS GitHub project, with no name or account attached. Anyone can read it, including the error and stack trace and your AtlasOS version, kernel, CPU, GPU and memory.")
 
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Open Atlas Updater")
             chevron: true
-            onClicked: updaterMissing.visible = !App.openUpdater()
+            onClicked: updaterMissing.shown = !App.openUpdater()
         }
     }
 
-    Kirigami.InlineMessage {
+    InfoBanner {
         id: updaterMissing
         Layout.fillWidth: true
-        type: Kirigami.MessageType.Warning
-        showCloseButton: true
+        type: "warning"
+        closable: true
+        shown: false
         text: qsTr("Atlas Updater isn't installed.")
     }
 
@@ -227,20 +215,24 @@ AtlasPage {
         title: qsTr("About")
         footer: qsTr("Notepad collects nothing and needs no account. Crash reports are off unless you turn them on in Atlas Updater, and are sent, as public GitHub issues, only when you choose to.")
 
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Notepad")
             value: qsTr("Version %1").arg(App.version)
             iconName: "accessories-text-editor"
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("License")
             value: qsTr("MIT")
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Made by")
             value: qsTr("Eterneon")
         }
-        CompactRow {
+        SectionRow {
+            density: AtlasStyle.Compact
             title: qsTr("Project Page")
             chevron: true
             onClicked: Qt.openUrlExternally("https://github.com/EternalCoder454/atlasos-notepad")

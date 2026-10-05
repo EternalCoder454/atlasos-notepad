@@ -21,8 +21,9 @@ document, file watching, the session bus), and the Rust work behind them is a
 handful of pure functions, so CXX-Qt would add a build step for little.
 
 The shared Atlas parts come from atlas-framework: the `Atlas.Ui` QML module
-(tabs, banners, sections, menus, the status bar) is the installed `atlas-ui`
-package, loaded like Kirigami, and the opt-in crash reports are the
+(the window and its merged header, tabs, banners, sections, menus, the status
+bar, the scroll bars, popovers and dialogs) is the installed `atlas-ui`
+package (1.4.0 or later), loaded like Kirigami, and the opt-in crash reports are the
 `atlas-framework-system` crate, pinned in the workspace `Cargo.toml`.
 
 Find and replace search the document's text (`QString`/`QRegularExpression`

@@ -11,7 +11,7 @@ import org.kde.kirigami as Kirigami
 import Atlas.Ui
 import net.eterneon.atlas.notepad
 
-QQC2.ApplicationWindow {
+AtlasWindow {
     id: root
 
     required property DocumentList documents
@@ -101,7 +101,6 @@ QQC2.ApplicationWindow {
     minimumWidth: Kirigami.Units.gridUnit * 20
     minimumHeight: Kirigami.Units.gridUnit * 12
     title: document ? (document.isRemote && document.host.length > 0 ? qsTr("%1 — %2 — Notepad").arg(document.title).arg(document.host) : qsTr("%1 — Notepad").arg(document.title)) : qsTr("Notepad")
-    color: Kirigami.Theme.backgroundColor
 
     // --- Actions. The menus, the toolbar and the shortcuts all use these.
 
@@ -610,118 +609,137 @@ QQC2.ApplicationWindow {
 
     // --- Layout.
 
-    header: ColumnLayout {
-        spacing: 0
+    header: AtlasHeaderBar {
+        id: headerBar
+        // The installed app icon (the default, the application name, has none).
+        iconName: "net.eterneon.atlas.notepad"
+        leading: ToolbarButton {
+            id: menuButton
+            visible: !App.hasGlobalMenu
+            symbol: Symbols.Menu
+            text: qsTr("Menu")
+            shortcutText: "F10"
+            onClicked: fallbackMenu.popup(menuButton, 0, menuButton.height)
 
-        // One compact bar: tabs and "+", then the view switch for Markdown
-        // and the menu button on the right.
-        Item {
-            Layout.fillWidth: true
-            implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.8)
-
-            TabBar {
-                id: tabBar
-                anchors.fill: parent
-                anchors.topMargin: 1
-                anchors.bottomMargin: 1
-                model: root.documents
-                currentIndex: root.documents.currentIndex
-                onActivated: index => {
-                    root.documents.currentIndex = index;
-                    root.settingsOpen = false;
-                }
-                onCloseRequested: index => root.closeTab(index)
-                onNewRequested: root.documents.newTab()
-                onMoved: (from, to) => root.documents.move(from, to)
-                // Escape on a tab hands the keyboard back to the editor (the
-                // tab ignores it, so it reaches the bar).
-                Keys.onEscapePressed: if (root.view) root.view.focusEditor()
-                // Right-click, or the Menu key / Shift+F10 on a focused tab.
-                onContextMenuRequested: (index, position) => {
-                    // The tab's document, not its place: another tab may
-                    // close while the menu is open.
-                    tabMenu.target = root.documents.documents()[index] ?? null;
-                    tabMenu.popup(tabBar, position.x, position.y);
-                }
-
-                SegmentedPill {
-                    visible: root.markdown && !root.settingsOpen
-                    items: [
-                        {
-                            text: qsTr("Formatted"),
-                            toolTip: qsTr("Formatted view")
-                        },
-                        {
-                            text: qsTr("Syntax"),
-                            toolTip: qsTr("Markdown syntax view")
-                        }
-                    ]
-                    currentIndex: root.document !== null && !root.document.formatted ? 1 : 0
-                    shortcutText: App.shortcutText(toggleFormattedAction.keys)
-                    enabled: toggleFormattedAction.enabled
-                    onChosen: index => root.document.formatted = index === 0
-                }
-                SymbolButton {
-                    id: menuButton
-                    visible: !App.hasGlobalMenu
-                    symbol: "more_horiz"
-                    text: qsTr("Menu")
-                    shortcutText: "F10"
-                    onClicked: fallbackMenu.popup(menuButton, 0, menuButton.height)
-
-                    // The keyboard way in, as F10 opens a menu bar elsewhere.
-                    Shortcut {
-                        sequence: "F10"
-                        enabled: menuButton.visible
-                        onActivated: menuButton.clicked()
-                    }
-
-                    FallbackMenu {
-                        id: fallbackMenu
-                        actions: root.actions
-                        onOpenRecent: path => root.documents.open([path])
-                    }
-                }
+            // The keyboard way in, as F10 opens a menu bar elsewhere.
+            Shortcut {
+                sequence: "F10"
+                enabled: menuButton.visible
+                onActivated: menuButton.clicked()
             }
-            ContextMenu {
-                id: tabMenu
-                property var target: null
-                // Focus that fell to nothing when the menu closed goes back to
-                // the editor through the window's fallback; a click elsewhere
-                // keeps the focus where it landed.
-                onClosed: target = null
-                ContextMenuItem {
-                    text: qsTr("New Tab")
-                    shortcutText: App.shortcutText(newTabAction.keys)
-                    onTriggered: root.documents.newTab()
+
+            FallbackMenu {
+                id: fallbackMenu
+                actions: root.actions
+                onOpenRecent: path => root.documents.open([path])
+            }
+        }
+        trailing: AtlasSegmentedControl {
+            id: viewSwitch
+            // A narrow header has no room for it beside the window buttons
+            // (each side gets at most half); the View menu and the shortcut stay.
+            visible: root.markdown && !root.settingsOpen && headerBar.width >= Kirigami.Units.gridUnit * 36
+            enabled: toggleFormattedAction.enabled
+            model: [
+                {
+                    text: qsTr("Formatted"),
+                    toolTip: qsTr("%1 (%2)").arg(qsTr("Formatted view")).arg(App.shortcutText(toggleFormattedAction.keys))
+                },
+                {
+                    text: qsTr("Syntax"),
+                    toolTip: qsTr("%1 (%2)").arg(qsTr("Markdown syntax view")).arg(App.shortcutText(toggleFormattedAction.keys))
                 }
-                ContextMenuItem {
-                    text: qsTr("Reopen Closed Tab")
-                    shortcutText: App.shortcutText(reopenTabAction.keys)
-                    enabled: root.documents.canReopenClosed
-                    onTriggered: root.documents.reopenClosed()
-                }
-                ContextMenuSeparator {}
-                ContextMenuItem {
-                    text: qsTr("Close Tab")
-                    onTriggered: {
-                        const index = tabMenu.target ? root.documents.indexOf(tabMenu.target) : -1;
-                        if (index >= 0) {
-                            root.closeTab(index);
-                        }
+            ]
+            currentIndex: root.document !== null && !root.document.formatted ? 1 : 0
+            focusPolicy: Qt.TabFocus
+            Accessible.name: qsTr("Markdown view")
+            onActivated: index => {
+                root.document.formatted = index === 0;
+                // The control assigned currentIndex itself; follow the document again.
+                viewSwitch.currentIndex = Qt.binding(() => root.document !== null && !root.document.formatted ? 1 : 0);
+            }
+        }
+    }
+
+    // Tabs and "+", above the editors; Settings opens below them.
+    Item {
+        id: tabRow
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.8) + 1
+        height: implicitHeight
+
+        TabBar {
+            id: tabBar
+            anchors.fill: parent
+            anchors.topMargin: 1
+            anchors.bottomMargin: 2
+            model: root.documents
+            currentIndex: root.documents.currentIndex
+            onActivated: index => {
+                root.documents.currentIndex = index;
+                root.settingsOpen = false;
+            }
+            onCloseRequested: index => root.closeTab(index)
+            onNewRequested: root.documents.newTab()
+            onMoved: (from, to) => root.documents.move(from, to)
+            // Escape on a tab hands the keyboard back to the editor (the
+            // tab ignores it, so it reaches the bar).
+            Keys.onEscapePressed: if (root.view) root.view.focusEditor()
+            // Right-click, or the Menu key / Shift+F10 on a focused tab.
+            onContextMenuRequested: (index, position) => {
+                // The tab's document, not its place: another tab may
+                // close while the menu is open.
+                tabMenu.target = root.documents.documents()[index] ?? null;
+                tabMenu.popup(tabBar, position.x, position.y);
+            }
+        }
+        ContextMenu {
+            id: tabMenu
+            property var target: null
+            // Focus that fell to nothing when the menu closed goes back to
+            // the editor through the window's fallback; a click elsewhere
+            // keeps the focus where it landed.
+            onClosed: target = null
+            ContextMenuItem {
+                text: qsTr("New Tab")
+                shortcutText: App.shortcutText(newTabAction.keys)
+                onTriggered: root.documents.newTab()
+            }
+            ContextMenuItem {
+                text: qsTr("Reopen Closed Tab")
+                shortcutText: App.shortcutText(reopenTabAction.keys)
+                enabled: root.documents.canReopenClosed
+                onTriggered: root.documents.reopenClosed()
+            }
+            ContextMenuSeparator {}
+            ContextMenuItem {
+                text: qsTr("Close Tab")
+                onTriggered: {
+                    const index = tabMenu.target ? root.documents.indexOf(tabMenu.target) : -1;
+                    if (index >= 0) {
+                        root.closeTab(index);
                     }
                 }
             }
         }
         Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: 1
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 1
             color: Qt.alpha(Kirigami.Theme.textColor, 0.12)
         }
     }
 
     ColumnLayout {
-        anchors.fill: parent
+        anchors {
+            top: tabRow.bottom
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
         spacing: 0
         visible: !root.settingsOpen
 
@@ -879,7 +897,12 @@ QQC2.ApplicationWindow {
 
     // Settings, over the editors.
     Loader {
-        anchors.fill: parent
+        anchors {
+            top: tabRow.bottom
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
         active: root.settingsOpen
         sourceComponent: Item {
             Kirigami.Theme.colorSet: Kirigami.Theme.View
@@ -897,14 +920,19 @@ QQC2.ApplicationWindow {
                 anchors.margins: Kirigami.Units.largeSpacing
                 text: qsTr("Back")
                 shortcutText: "Esc"
-                icon.name: "go-previous"
+                symbol: Symbols.ArrowBack
                 onClicked: root.settingsOpen = false
             }
         }
     }
 
     DropArea {
-        anchors.fill: parent
+        anchors {
+            top: tabRow.bottom
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
         onEntered: drag => drag.accepted = drag.hasUrls
         onDropped: drop => {
             if (drop.hasUrls) {
@@ -922,22 +950,23 @@ QQC2.ApplicationWindow {
     // scale showed stale pixels over a see-through footer.
     footer: Rectangle {
         visible: root.settings.statusBar && !root.settingsOpen && root.document !== null
-        implicitHeight: Math.round(Kirigami.Units.gridUnit * 1.2) + 1
+        implicitHeight: statusBar.implicitHeight
         color: Kirigami.Theme.backgroundColor
 
         StatusBar {
+            id: statusBar
             anchors.fill: parent
 
             // Left: save state, position, size of the text.
-            StatusCell {
+            StatusBarItem {
                 readonly property bool saving: root.document !== null && root.document.saving
                 readonly property bool modified: root.document !== null && root.document.modified
                 readonly property bool saved: root.document !== null && root.document.path.length > 0 && !modified && !saving
                 visible: text.length > 0
                 text: saving ? qsTr("Saving…") : modified ? qsTr("Edited") : saved ? qsTr("Saved") : ""
-                symbol: saved ? "check" : ""
+                symbol: saved ? Symbols.Check : 0
             }
-            StatusCell {
+            StatusBarItem {
                 readonly property point lineColumn: {
                     const edit = root.view && root.document ? root.view.edit : null;
                     return edit ? root.document.lineColumn(edit.cursorPosition) : Qt.point(1, 1);
@@ -947,7 +976,7 @@ QQC2.ApplicationWindow {
                 toolTip: goToAction.text
                 onClicked: goToAction.trigger()
             }
-            StatusCell {
+            StatusBarItem {
                 // Words for Markdown, characters for plain text; a selection
                 // shows its own count. A very large selection is counted in
                 // characters, to keep the cursor moving.
@@ -971,7 +1000,7 @@ QQC2.ApplicationWindow {
             // endings, encoding.
             // Code files: the language and the indentation, which open the
             // same popover as the capsule's button.
-            StatusCell {
+            StatusBarItem {
                 id: languageCell
                 visible: root.code
                 text: root.code ? root.document.language : ""
@@ -979,7 +1008,7 @@ QQC2.ApplicationWindow {
                 toolTip: qsTr("Language")
                 onClicked: codePopover.openAt(languageCell, "above")
             }
-            StatusCell {
+            StatusBarItem {
                 id: indentCell
                 visible: root.code
                 text: !root.code ? "" : root.document.insertSpaces ? qsTr("Spaces: %1").arg(root.document.indentWidth) : qsTr("Tabs")
@@ -987,13 +1016,13 @@ QQC2.ApplicationWindow {
                 toolTip: qsTr("Indentation")
                 onClicked: codePopover.openAt(indentCell, "above")
             }
-            StatusCell {
+            StatusBarItem {
                 visible: root.document !== null && root.document.isRemote
-                symbol: "cloud"
+                symbol: Symbols.Cloud
                 text: root.document ? root.document.host : ""
                 toolTip: root.document ? root.document.toolTip : ""
             }
-            StatusCell {
+            StatusBarItem {
                 visible: root.settings.zoom !== 100
                 text: qsTr("%1%").arg(root.settings.zoom)
                 clickable: true
@@ -1013,7 +1042,7 @@ QQC2.ApplicationWindow {
                     }
                 }
             }
-            StatusCell {
+            StatusBarItem {
                 text: !root.document ? "" : root.document.lineEnding === Document.CrLf ? qsTr("CRLF") : root.document.lineEnding === Document.Cr ? qsTr("CR") : qsTr("LF")
                 clickable: root.editable
                 toolTip: qsTr("Line endings")
@@ -1034,7 +1063,7 @@ QQC2.ApplicationWindow {
                     }
                 }
             }
-            StatusCell {
+            StatusBarItem {
                 text: root.document ? root.document.encodingName : ""
                 clickable: true
                 toolTip: qsTr("Encoding")
@@ -1083,16 +1112,70 @@ QQC2.ApplicationWindow {
 
     // --- Dialogs.
 
-    UnsavedDialog {
+    ConfirmDialog {
         id: unsavedDialog
 
         property Document target: null
         property var then: null
+        // This showing has its answer: Save, Don't Save, or a close (Cancel,
+        // Escape, the window). Later clicks during the fade-out are ignored.
+        property bool answered: false
+        property bool cancelled: false
+        // When the last answer came: the next prompt of a chain opens under
+        // the pointer at once, and a double-click must not answer it too.
+        property double answeredAt: 0
 
-        note: App.sessionProblem.length > 0 ? qsTr("Notepad can't keep your unsaved changes for next time: %1").arg(App.sessionProblem) : ""
-        onSave: root.saveThen(target, then)
-        onDiscard: then()
-        onCancel: root.resetSave()
+        function answer(): bool {
+            if (answered || Date.now() - answeredAt < Qt.styleHints.mouseDoubleClickInterval) {
+                return false;
+            }
+            answered = true;
+            answeredAt = Date.now();
+            return true;
+        }
+
+        title: qsTr("Do you want to save changes to %1?").arg(fileName)
+        text: App.sessionProblem.length > 0 ? qsTr("Notepad can't keep your unsaved changes for next time: %1").arg(App.sessionProblem) : ""
+        acceptText: qsTr("Save")
+        alternativeText: qsTr("Don't Save")
+        rejectText: qsTr("Cancel")
+        // Closed here, before the action: the action may ask again (close all).
+        closeOnAccept: false
+        closePolicy: QQC2.Popup.CloseOnEscape
+        property string fileName
+
+        onAboutToShow: {
+            answered = false;
+            cancelled = false;
+        }
+        onAccepted: {
+            if (answer()) {
+                close();
+                root.saveThen(target, then);
+            }
+        }
+        onAlternative: {
+            if (answer()) {
+                close();
+                then();
+            }
+        }
+        // When the closing starts, not after the fade: the dialog may be
+        // asked to open again before it ends.
+        onAboutToHide: {
+            if (!answered) {
+                answered = true;
+                cancelled = true;
+                root.resetSave();
+            }
+        }
+        // After a cancel the editor takes the keyboard back; the window's
+        // focus fallback skipped it while the dialog was fading out.
+        onClosed: {
+            if (cancelled && !visible && root.view && !root.settingsOpen) {
+                root.view.focusEditor();
+            }
+        }
     }
 
     ConfirmDialog {
@@ -1106,7 +1189,7 @@ QQC2.ApplicationWindow {
             Layout.preferredWidth: Kirigami.Units.gridUnit * 22
             Layout.preferredHeight: Math.min(implicitHeight, root.height * 0.6)
             contentWidth: availableWidth
-            QQC2.ScrollBar.vertical: SlimScrollBar {}
+            QQC2.ScrollBar.vertical: AtlasScrollBar {}
 
             GridLayout {
                 width: parent.width - Kirigami.Units.gridUnit // clear of the scrollbar

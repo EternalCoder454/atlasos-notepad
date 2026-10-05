@@ -236,14 +236,14 @@ FocusScope {
         }
 
         // Overlaid on the text, as in Atlas.Ui pages.
-        QQC2.ScrollBar.vertical: SlimScrollBar {
+        QQC2.ScrollBar.vertical: AtlasScrollBar {
             id: verticalBar
             parent: flick.parent
             x: flick.x + flick.width - width
             y: flick.y
             height: flick.height
         }
-        QQC2.ScrollBar.horizontal: SlimScrollBar {
+        QQC2.ScrollBar.horizontal: AtlasScrollBar {
             parent: flick.parent
             policy: view.settings.wordWrap ? QQC2.ScrollBar.AlwaysOff : QQC2.ScrollBar.AsNeeded
             x: flick.x
