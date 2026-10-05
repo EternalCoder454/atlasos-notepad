@@ -48,14 +48,13 @@ env:
 # for the current inputs, plain fedora:44 plus ci/install-deps.sh (slower, same
 # result).
 #
-# Jobs pull without credentials, so the package must be public. GHCR creates it
-# private: after pushing, `publish` checks that the digest pulls anonymously.
-# If not, it warns, records no digest and uploads the Atlas.Ui RPMs as an
-# artifact, so this run and the later ones use the fallback. The owner then
-# makes ghcr.io/eternalcoder454/atlas-notepad-dev public (once) and re-runs.
-#
-# While the package is private, every main push rebuilds the image (publish)
-# before the fallback runs, as no digest is cached.
+# An image pushed with GITHUB_TOKEN from this public repo is public the moment
+# it lands, so `publish` builds it locally, runs ci/check-image-secrets.sh on
+# it (history, environment, files) and only then logs in and pushes. Jobs pull
+# without credentials: after pushing, `publish` checks that the digest pulls
+# anonymously. If not (the registry did not answer, or the package was made
+# private), it warns, records no digest and uploads the Atlas.Ui RPMs as an
+# artifact, so this run and the later ones use the fallback.
 #
 # If `publish` fails on main, lint, check and rpm are skipped for that commit
 # and it gets no test signal; fix the failure and re-run.
@@ -96,7 +95,7 @@ jobs:
           # [patch]/[replace], .cargo/config or symlink (parsed as TOML, see the script).
           ci/check-cargo.py "$url" "$revs"
           week=$(date -u +%G-W%V)
-          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/atlas-notepad.spec; find ci -type f ! -name check-cargo.py | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
+          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/atlas-notepad.spec; find ci -type f ! -name check-cargo.py ! -name check-image-secrets.sh | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
           {
             echo "rev=$revs"
             echo "week=$week"
@@ -176,21 +175,16 @@ jobs:
             /src/packaging/build-rpm.sh /out
           ls -l framework-rpms
 
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
+      # Built into the runner's Docker only: nothing leaves the runner before
+      # the secret check, as a push from this public repo is public at once.
       # The tag is a label for humans; jobs use the digest.
-      - name: Build and push the image
-        id: build
+      - name: Build the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ci/Containerfile
-          push: true
+          push: false
+          load: true
           provenance: false
           sbom: false
           tags: ${{ env.IMAGE }}:f44-${{ needs.plan.outputs.sum }}
@@ -199,12 +193,36 @@ jobs:
             org.opencontainers.image.description=CI build image for atlas-notepad. Pull by digest only; tags are informational and not trusted.
             org.opencontainers.image.revision=${{ github.sha }}
 
+      - name: Check the image for secrets
+        env:
+          SUM: ${{ needs.plan.outputs.sum }}
+        run: ci/check-image-secrets.sh "$IMAGE:f44-$SUM"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushes the image that was checked, not a rebuild of it.
+      - name: Push the image
+        id: push
+        env:
+          SUM: ${{ needs.plan.outputs.sum }}
+        run: |
+          docker push "$IMAGE:f44-$SUM"
+          digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:f44-$SUM" |
+            sed -n "s|^$IMAGE@||p" | head -n1)
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "pushed $IMAGE@$digest"
+
       # The jobs pull without credentials: the digest is used only if an
-      # anonymous pull works (a new GHCR package is private).
+      # anonymous pull works.
       - name: Record the digest
         id: record
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           printf '%s' "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' || { echo "bad digest: $DIGEST" >&2; exit 1; }
           cfg=$(mktemp -d)
@@ -221,7 +239,7 @@ jobs:
             echo "image=$IMAGE@$DIGEST" >>"$GITHUB_OUTPUT"
             echo "public=true" >>"$GITHUB_OUTPUT"
           else
-            echo "::warning::$IMAGE@$DIGEST is not public (or the registry did not answer). Make the package public (GitHub profile, Packages, atlas-notepad-dev, Package settings) and re-run. Until then CI uses the fallback install."
+            echo "::warning::$IMAGE@$DIGEST does not pull anonymously (the registry did not answer, or the package is private). CI uses the fallback install until a run on main records a digest."
             echo "image=" >>"$GITHUB_OUTPUT"
             echo "public=false" >>"$GITHUB_OUTPUT"
           fi
