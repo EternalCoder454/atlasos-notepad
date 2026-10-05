@@ -20,6 +20,9 @@ class QQuickItem;
 class QQuickWindow;
 class KJob;
 
+// True for an empty name or one KSyntaxHighlighting knows.
+bool validLanguage(const QString &name);
+
 struct LoadResult {
     int error = 0; // errno
     QString errorText; // KIO's words, when it has some
@@ -155,7 +158,7 @@ struct Document::Private {
     void applyMarkdown(qint64 bytes);
     // The language from the path (unless the user set one) and so whether
     // this is code; the indent from the start of the text (unless set).
-    void applyLanguage();
+    void applyLanguage(qint64 bytes);
     void detectIndent(const QString &text);
     void checkWritable();
     bool isRemote() const { return !url.isEmpty(); }

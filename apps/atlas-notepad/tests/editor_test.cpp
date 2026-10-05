@@ -1017,7 +1017,7 @@ private Q_SLOTS:
         openCode(QStringLiteral("a ) b"));
         QCOMPARE(m_code->bracketPair(3), QPoint(-1, -1));
         openCode(QStringLiteral("(()"));
-        QCOMPARE(m_code->bracketPair(1), QPoint(-1, -1));
+        QCOMPARE(m_code->bracketPair(1), QPoint(1, 2)); // "(" at 0 has no match, the next does
         QCOMPARE(m_code->bracketPair(2), QPoint(1, 2));
         openCode(QString());
         QCOMPARE(m_code->bracketPair(0), QPoint(-1, -1));
@@ -1027,6 +1027,55 @@ private Q_SLOTS:
         QCOMPARE(m_code->bracketPair(1), QPoint(-1, -1));
         openCode(u'(' + QString(1000, u'x') + u')');
         QCOMPARE(m_code->bracketPair(1), QPoint(0, 1001));
+    }
+    void codeEditorSurvivesTextEditDying()
+    {
+        openCode(QStringLiteral("int x;\n"));
+        QVERIFY(m_code->textEdit());
+        m_edit.reset(); // the TextEdit and its document go first
+        m_code.reset(); // must not double-free the highlighter
+        openCode(QStringLiteral("int x;\n"));
+        m_edit.reset();
+        m_code->setTextEdit(nullptr);
+        m_code->setLanguage(QStringLiteral("Python"));
+        m_code.reset();
+    }
+    void codeReadOnlyIsNotEdited()
+    {
+        openCode(QStringLiteral("b\na  \n"));
+        m_edit->setProperty("readOnly", true);
+        m_code->indentLines(0, 5);
+        m_code->outdentLines(0, 5);
+        m_code->toggleComment(0, 5);
+        m_code->sortLines(0, 0);
+        m_code->changeCase(0, 3, 0);
+        m_code->trimTrailingSpaces();
+        QCOMPARE(text(), QStringLiteral("b\na  \n"));
+    }
+    void codeSortKeepsSelection()
+    {
+        openCode(QStringLiteral("z\nc\nb\na"));
+        m_code->sortLines(2, 7);
+        QCOMPARE(text(), QStringLiteral("z\na\nb\nc"));
+        QCOMPARE(m_edit->property("selectionStart").toInt(), 2);
+        QCOMPARE(m_edit->property("selectionEnd").toInt(), 7);
+    }
+    void codeAutoIndentColonAndComments()
+    {
+        // A colon opens a block only where it means one.
+        openCode(QStringLiteral("case x:"), QStringLiteral("C++"));
+        place(7);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("case x:\n"));
+        // A bracket after the comment marker doesn't.
+        openCode(QStringLiteral("a(); // see {"), QStringLiteral("C++"));
+        place(13);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("a(); // see {\n"));
+        openCode(QStringLiteral("x = 1  # why:"), QStringLiteral("Python"));
+        place(13);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("x = 1  # why:\n"));
     }
     void codeEnterAutoIndent()
     {

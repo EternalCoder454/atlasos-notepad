@@ -1447,6 +1447,19 @@ private Q_SLOTS:
         QVERIFY(doc->insertSpaces());
     }
 
+    void codeBigBinaryAndBogusStayPlain()
+    {
+        DocumentList *list = newList();
+        Document *big = openFile(list, write(QStringLiteral("big.py"), QByteArray("x = 1\n").repeated(200'000)));
+        QVERIFY(big);
+        QTRY_VERIFY(!big->property("code").toBool());
+        QCOMPARE(big->banner(), Document::FormattingOff);
+        Document *small = openFile(list, write(QStringLiteral("s.py"), "x\n"));
+        QVERIFY(small->property("code").toBool());
+        small->setLanguage(QStringLiteral("No Such Language"));
+        QCOMPARE(small->language(), QStringLiteral("Python")); // falls back to detection
+        QVERIFY(small->property("code").toBool());
+    }
     void codeUserSettingsPersist()
     {
         const QString path = write(QStringLiteral("p.txt"), "\tx\n");

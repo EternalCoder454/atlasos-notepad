@@ -526,6 +526,11 @@ qint64 Document::Private::currentBytes() const
     return filling ? fillText.size() : qdoc ? qdoc->characterCount() : pending.size();
 }
 
+bool validLanguage(const QString &name)
+{
+    return name.isEmpty() || codeRepository().definitionForName(name).isValid();
+}
+
 void Document::Private::applyMarkdown(qint64 bytes)
 {
     const bool nameOk = !safeMode && (path.isEmpty() || isMarkdownName(path));
@@ -550,10 +555,10 @@ void Document::Private::applyMarkdown(qint64 bytes)
         formatted = false;
         Q_EMIT q->formattedChanged();
     }
-    applyLanguage();
+    applyLanguage(bytes);
 }
 
-void Document::Private::applyLanguage()
+void Document::Private::applyLanguage(qint64 bytes)
 {
     QString now = language;
     if (!userLanguage) {
@@ -574,7 +579,13 @@ void Document::Private::applyLanguage()
         }
     }
     const bool wasCode = code;
-    code = !safeMode && !markdown && !now.isEmpty();
+    // Highlighting runs synchronously, so a huge, binary or very long-lined
+    // file is left as plain text.
+    const bool tooBig = bytes > Limits::formattedBytes;
+    code = !safeMode && !markdown && !now.isEmpty() && !tooBig && !readOnly;
+    if (!safeMode && !markdown && !now.isEmpty() && tooBig && !path.isEmpty() && settings().formatting()) {
+        setBanner(FormattingOff);
+    }
     if (now != language) {
         language = now;
         Q_EMIT q->languageChanged();
@@ -1558,7 +1569,7 @@ void Document::Private::restore(const TabState &t, const std::optional<QString> 
     cursor = t.cursor;
     anchor = t.anchor;
     scrollY = t.scrollY;
-    if (t.language) {
+    if (t.language && validLanguage(*t.language)) {
         language = *t.language;
         userLanguage = true;
     }
@@ -2166,12 +2177,13 @@ QString Document::language() const
 
 void Document::setLanguage(const QString &name)
 {
-    d->userLanguage = true;
-    if (name != d->language) {
+    const bool valid = validLanguage(name);
+    d->userLanguage = valid;
+    if (valid && name != d->language) {
         d->language = name;
         Q_EMIT languageChanged();
     }
-    d->applyLanguage();
+    d->applyLanguage(d->currentBytes());
     Q_EMIT viewStateChanged();
 }
 

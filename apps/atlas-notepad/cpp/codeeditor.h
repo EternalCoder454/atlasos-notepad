@@ -86,7 +86,7 @@ private:
 
     QPointer<QQuickItem> m_edit;
     QPointer<QTextDocument> m_doc;
-    KSyntaxHighlighting::SyntaxHighlighter *m_highlighter = nullptr;
+    QPointer<KSyntaxHighlighting::SyntaxHighlighter> m_highlighter;
     QString m_language;
     KSyntaxHighlighting::Definition m_def;
     bool m_dark = false;

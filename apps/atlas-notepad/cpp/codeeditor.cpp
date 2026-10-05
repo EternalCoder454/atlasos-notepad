@@ -73,7 +73,9 @@ CodeEditor::CodeEditor(QObject *parent)
 
 CodeEditor::~CodeEditor()
 {
-    delete m_highlighter;
+    if (m_highlighter) {
+        delete m_highlighter.data();
+    }
 }
 
 void CodeEditor::setTextEdit(QQuickItem *edit)
@@ -84,8 +86,9 @@ void CodeEditor::setTextEdit(QQuickItem *edit)
     if (m_edit) {
         m_edit->removeEventFilter(this);
     }
-    delete m_highlighter;
-    m_highlighter = nullptr;
+    if (m_highlighter) {
+        delete m_highlighter.data();
+    }
     m_edit = edit;
     m_doc = nullptr;
     if (edit) {
@@ -152,8 +155,9 @@ void CodeEditor::applyHighlighting()
         return;
     }
     if (!m_def.isValid()) {
-        delete m_highlighter; // clears its formats
-        m_highlighter = nullptr;
+        if (m_highlighter) {
+            delete m_highlighter.data(); // clears its formats
+        }
         return;
     }
     if (!m_highlighter) {
@@ -220,7 +224,7 @@ void CodeEditor::firstLast(int from, int to, QTextBlock *first, QTextBlock *last
 
 void CodeEditor::indentLines(int from, int to)
 {
-    if (!m_doc) {
+    if (!editable()) {
         return;
     }
     QTextBlock first, last;
@@ -239,7 +243,7 @@ void CodeEditor::indentLines(int from, int to)
 
 void CodeEditor::outdentLines(int from, int to)
 {
-    if (!m_doc) {
+    if (!editable()) {
         return;
     }
     QTextBlock first, last;
@@ -267,7 +271,7 @@ void CodeEditor::outdentLines(int from, int to)
 
 void CodeEditor::toggleComment(int from, int to)
 {
-    if (!m_doc || !m_def.isValid()) {
+    if (!editable() || !m_def.isValid()) {
         return;
     }
     QString open = m_def.singleLineCommentMarker();
@@ -355,7 +359,7 @@ void CodeEditor::toggleComment(int from, int to)
 
 void CodeEditor::sortLines(int from, int to)
 {
-    if (!m_doc) {
+    if (!editable()) {
         return;
     }
     QTextBlock first, last;
@@ -379,15 +383,19 @@ void CodeEditor::sortLines(int from, int to)
     if (sorted == lines) {
         return;
     }
+    const QString joined = sorted.join(u'\n');
+    const int start = first.position(); // read before the edit invalidates the block
     QTextCursor c(m_doc);
-    c.setPosition(first.position());
+    c.setPosition(start);
     c.setPosition(last.position() + last.length() - 1, QTextCursor::KeepAnchor);
-    c.insertText(sorted.join(u'\n'));
+    c.insertText(joined);
+    // Keep the selection over the sorted lines.
+    QMetaObject::invokeMethod(m_edit, "select", Q_ARG(int, start), Q_ARG(int, start + int(joined.size())));
 }
 
 void CodeEditor::changeCase(int from, int to, int mode)
 {
-    if (!m_doc || mode < 0 || mode > 2) {
+    if (!editable() || mode < 0 || mode > 2) {
         return;
     }
     const int end = qMax(0, m_doc->characterCount() - 1);
@@ -413,7 +421,7 @@ void CodeEditor::changeCase(int from, int to, int mode)
 
 void CodeEditor::trimTrailingSpaces()
 {
-    if (!m_doc) {
+    if (!editable()) {
         return;
     }
     QTextCursor c(m_doc);
@@ -467,7 +475,6 @@ QPoint CodeEditor::bracketPair(int cursor)
                 --depth;
             }
         }
-        return {-1, -1};
     }
     return {-1, -1};
 }
@@ -525,8 +532,21 @@ bool CodeEditor::newline()
     while (!trimmed.isEmpty() && (trimmed.back() == u' ' || trimmed.back() == u'\t')) {
         trimmed.chop(1);
     }
+    // Text after a line-comment marker doesn't open a block.
+    const QString marker = m_def.isValid() ? m_def.singleLineCommentMarker() : QString();
+    if (!marker.isEmpty()) {
+        const qsizetype at = trimmed.indexOf(marker);
+        if (at >= 0) {
+            trimmed.truncate(at);
+            while (!trimmed.isEmpty() && (trimmed.back() == u' ' || trimmed.back() == u'\t')) {
+                trimmed.chop(1);
+            }
+        }
+    }
     const QChar lastCh = trimmed.isEmpty() ? QChar() : trimmed.back();
-    const bool deeper = lastCh == u'{' || lastCh == u'(' || lastCh == u'[' || lastCh == u':';
+    static const QStringList colonBlocks = {QStringLiteral("Python"), QStringLiteral("YAML"), QStringLiteral("Nim"),
+                                            QStringLiteral("CoffeeScript"), QStringLiteral("Makefile")};
+    const bool deeper = lastCh == u'{' || lastCh == u'(' || lastCh == u'[' || (lastCh == u':' && m_def.isValid() && colonBlocks.contains(m_def.name()));
     const QString unit = m_spaces ? QString(m_width, u' ') : QStringLiteral("\t");
     const QString afterTrim = after.trimmed();
     const qsizetype openAt = QStringLiteral("{([").indexOf(lastCh);

@@ -281,7 +281,10 @@ QList<WindowState> Session::read()
             tab.anchor = t.value(QStringLiteral("anchor")).toInt();
             tab.scrollY = t.value(QStringLiteral("scrollY")).toDouble();
             if (t.value(QStringLiteral("language")).isString()) {
-                tab.language = t.value(QStringLiteral("language")).toString().left(100);
+                const QString lang = t.value(QStringLiteral("language")).toString().left(100);
+                if (validLanguage(lang)) {
+                    tab.language = lang;
+                }
             }
             if (t.value(QStringLiteral("insertSpaces")).isBool()) {
                 tab.insertSpaces = t.value(QStringLiteral("insertSpaces")).toBool();
