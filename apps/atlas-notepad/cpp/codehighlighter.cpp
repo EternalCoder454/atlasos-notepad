@@ -273,14 +273,23 @@ void CodeHighlighter::documentChanged(int from, int removed, int added)
         return;
     }
     if (!m_pass.isNull() && m_pass.document() == doc && first.position() >= m_pass.block().position()) {
-        // A big insert after a pass that is due is left to it; so is an edit
-        // after lines that pass hasn't done yet (one left to it before: the
-        // state before the edit isn't known). The pass then goes to the end,
-        // or it could stop before getting there.
+        // A big insert after a pass that is due is left to it, which waits
+        // for the pieces of a file to stop coming. So is an edit after lines
+        // that pass hasn't done yet (one left to it before: the state before
+        // the edit isn't known), without putting the pass off: typing there
+        // would hold it back for as long as it went on. The pass then goes
+        // to the end, or it could stop before getting there.
         const QTextBlock before = first.previous();
-        if (added > bigInsert || (before.isValid() && !dataOf(before))) {
+        if (added > bigInsert) {
             m_all = true;
             m_passTimer.start(settleMs);
+            return;
+        }
+        if (before.isValid() && !dataOf(before)) {
+            m_all = true;
+            if (!m_passTimer.isActive()) {
+                m_passTimer.start(0);
+            }
             return;
         }
     }

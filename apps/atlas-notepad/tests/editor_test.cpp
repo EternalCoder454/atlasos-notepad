@@ -1245,6 +1245,28 @@ private Q_SLOTS:
         QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
     }
 
+    // Typing in a big paste the pass hasn't done yet doesn't put the pass off:
+    // it highlights while the typing goes on, not only once it stops.
+    void codeHighlighterTypingDoesNotHoldBackPass()
+    {
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(QStringLiteral("int a;\n"));
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QTextCursor cursor(&doc);
+        cursor.movePosition(QTextCursor::End);
+        cursor.insertText(generatedCpp(8000, false));
+        // A key every 10 ms in the paste's first lines, for 300 ms.
+        QTextCursor typing(doc.findBlockByNumber(3));
+        for (int i = 0; i < 30; ++i) {
+            typing.insertText(QStringLiteral("x"));
+            QTest::qWait(10);
+        }
+        QVERIFY(!doc.lastBlock().previous().layout()->formats().isEmpty());
+    }
+
     // The input method's text being composed keeps its underline through a
     // highlight, and the line's colours move past it, as the stock one has it.
     void codeHighlighterKeepsPreedit()

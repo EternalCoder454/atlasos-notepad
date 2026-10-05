@@ -138,12 +138,13 @@ AtlasWindow {
     // them), but only while the editor has focus. Opening that menu takes the
     // focus from the window, so this keeps the last state while it was active.
     property bool editorKeys: false
-    function updateEditorKeys() {
-        if (active) {
-            editorKeys = view !== null && view.edit.activeFocus;
-        }
+    Binding {
+        target: root
+        property: "editorKeys"
+        value: root.view !== null && root.view.edit.activeFocus
+        when: root.active
+        restoreMode: Binding.RestoreNone
     }
-    onActiveChanged: updateEditorKeys()
 
     component EditorShortcut: Shortcut {
         required property QQC2.Action action
@@ -1507,7 +1508,6 @@ AtlasWindow {
     // dialog closed, a tab menu is gone): hand the keyboard to the editor
     // rather than leave it on nothing. Not while the window is inactive.
     onActiveFocusItemChanged: {
-        updateEditorKeys();
         if (activeFocusItem === null && active) {
             Qt.callLater(() => {
                 if (root.active && root.activeFocusItem === null && !root.settingsOpen && root.view && !unsavedDialog.visible) {
