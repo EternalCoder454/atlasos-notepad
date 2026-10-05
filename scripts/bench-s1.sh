@@ -38,6 +38,9 @@ if [ -n "$cpus" ] && [ "$cpus" != all ] && command -v taskset >/dev/null; then
         echo "not pinned: can't run on CPUs $cpus here (BENCH_CPUS sets them)"
     fi
 fi
+# Each run is capped, so a hung app can't hold the machine's job queue
+# (BENCH_TIMEOUT seconds; large BENCH_FILES may need more).
+limit=${BENCH_TIMEOUT:-600}
 # BENCH_FILES picks the samples: the Markdown one, the C++ one (light coding).
 for sample in ${BENCH_FILES:-bench/sample-50k.md bench/sample-50k.cpp}; do
   for plain in 0 1; do
@@ -45,7 +48,12 @@ for sample in ${BENCH_FILES:-bench/sample-50k.md bench/sample-50k.cpp}; do
         echo "== $sample, scale $scale$([ $plain = 1 ] && echo ', plain TextEdit (baseline)')"
         dbus-run-session -- xvfb-run -a -s "-screen 0 1920x1080x24" \
             env QT_QPA_PLATFORM=xcb QT_QPA_UPDATE_IDLE_TIME=0 QT_SCALE_FACTOR=$scale NP_BENCH_PLAIN=$plain \
-            "${pin[@]}" "$bin" --bench "$sample" 2>"$run/stderr" || { grep -v -e portal -e fuse -e dbus-daemon "$run/stderr" | tail -20; exit 1; }
+            "${pin[@]}" timeout -k 10 "$limit" "$bin" --bench "$sample" 2>"$run/stderr" || {
+            rc=$?
+            [ "$rc" = 124 ] && echo "bench run timed out after ${limit}s (BENCH_TIMEOUT)"
+            grep -v -e portal -e fuse -e dbus-daemon "$run/stderr" | tail -20
+            exit 1
+        }
         grep -E 'warning|error|qrc:' "$run/stderr" | grep -v -e portal -e fuse | sort | uniq -c | head -5 || true
     done
   done
