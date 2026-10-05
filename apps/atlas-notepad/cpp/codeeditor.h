@@ -53,11 +53,6 @@ public:
     Q_INVOKABLE void toggleComment(int from, int to);
     Q_INVOKABLE void indentLines(int from, int to);
     Q_INVOKABLE void outdentLines(int from, int to);
-    // The whole document when from == to.
-    Q_INVOKABLE void sortLines(int from, int to);
-    // 0 upper, 1 lower, 2 title; the word at the caret when from == to.
-    Q_INVOKABLE void changeCase(int from, int to, int mode);
-    Q_INVOKABLE void trimTrailingSpaces();
     // The bracket just before or at cursor and its match: (-1, -1) if none.
     Q_INVOKABLE QPoint bracketPair(int cursor);
     Q_INVOKABLE QString commentMarker() const;
@@ -83,6 +78,7 @@ private:
     bool closingBracket(const QString &text);
     void applyHighlighting();
     void firstLast(int from, int to, QTextBlock *first, QTextBlock *last) const;
+    void replaceLines(const QTextBlock &first, const QStringList &old, const QStringList &lines);
 
     QPointer<QQuickItem> m_edit;
     QPointer<QTextDocument> m_doc;
