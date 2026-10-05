@@ -423,9 +423,13 @@ jobs:
           ci/install-deps.sh .ci-rpms
           rm -rf .ci-rpms
 
+      # Two target dirs: cargo test's, and the one Corrosion builds into for
+      # the CMake step.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ". -> target/ci"
+          workspaces: |
+            . -> target/ci
+            . -> build/ci/cargo/build
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # $GITHUB_WORKSPACE, not the workflow context's path: in a container the
@@ -470,8 +474,13 @@ jobs:
           path: .ccache
           key: ccache-f44-${{ steps.ccache-env.outputs.week }}-${{ github.run_id }}
 
-  # No ccache here: %cmake runs in a fresh mktemp directory and the spec's
-  # -ffile-prefix-map=$PWD flags would make most hits miss anyway.
+  # ccache, with its own entries: the spec's flags differ from the check job's.
+  # build-rpm.sh builds in a fixed directory (ATLAS_RPM_TOPDIR), so the build
+  # paths in those flags are the same on every run. Under out/, which the
+  # source tarball leaves out, as is the ccache.
+  # Only pull requests read the cache. A run that uploads its RPM (it goes into
+  # the AtlasOS image) compiles everything and only writes the cache
+  # (CCACHE_RECACHE), so a bad object in it can never reach a shipped RPM.
   rpm:
     name: RPM
     needs: [plan, publish, rpms]
@@ -483,6 +492,13 @@ jobs:
       contents: read
     container:
       image: ${{ needs.publish.outputs.image || needs.plan.outputs.image || 'registry.fedoraproject.org/fedora:44' }}
+    env:
+      CCACHE_COMPRESS: '1'
+      CCACHE_MAXSIZE: 300M
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      # ccache reads 1 as true and an empty value as unset.
+      CCACHE_RECACHE: ${{ github.event_name != 'pull_request' && '1' || '' }}
     steps:
       - name: Install the tools the actions need (no image)
         if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
@@ -507,10 +523,37 @@ jobs:
           ci/install-deps.sh .ci-rpms
           rm -rf .ci-rpms
 
+      - name: Set up ccache
+        id: ccache-env
+        run: |
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/out/ccache" >>"$GITHUB_ENV"
+          echo "week=$(date -u +%G-W%V)" >>"$GITHUB_OUTPUT"
+
+      # Saved only from main, as the check job's.
+      - name: Restore the ccache
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out/ccache
+          key: ccache-rpm-f44-${{ steps.ccache-env.outputs.week }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-rpm-f44-${{ steps.ccache-env.outputs.week }}-
+            ccache-rpm-f44-
+
       # ATLAS_SKIP_DEPS: no installs, so the RPM is built against exactly the
       # image.
       - name: Build the RPM
-        run: ATLAS_SKIP_DEPS=1 packaging/build-rpm.sh "$PWD/out/rpm"
+        run: |
+          ccache -z
+          ATLAS_SKIP_DEPS=1 ATLAS_RPM_TOPDIR="$PWD/out/rpmbuild" packaging/build-rpm.sh "$PWD/out/rpm"
+          ccache -s
+
+      - name: Save the ccache
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('out/ccache/**') != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out/ccache
+          key: ccache-rpm-f44-${{ steps.ccache-env.outputs.week }}-${{ github.run_id }}
 
       - name: rpmlint
         run: rpmlint out/rpm/*.rpm

@@ -86,7 +86,9 @@ export CFLAGS="%{build_cflags} -ffile-prefix-map=$PWD=."
 export CXXFLAGS="%{build_cxxflags} -ffile-prefix-map=$PWD=."
 export CARGO_PROFILE_RELEASE_STRIP=none
 %global _vpath_srcdir apps/atlas-notepad
-%cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
+# No test binaries: %%check doesn't run them (they need a display), and they
+# were half the compiles. CI's check job builds and runs them.
+%cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 %cmake_build
 
 %install
