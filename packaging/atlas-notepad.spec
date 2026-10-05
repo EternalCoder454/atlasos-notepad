@@ -6,7 +6,7 @@
 
 Name:           atlas-notepad
 Version:        0.1.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Notepad, the text editor of AtlasOS
 License:        MIT AND Apache-2.0
 URL:            https://github.com/EternalCoder454/atlasos-notepad
@@ -118,6 +118,11 @@ appstream-util validate-relax --nonet \
 %config(noreplace) %{_sysconfdir}/dnf/protected.d/atlas-notepad.conf
 
 %changelog
+* Mon Oct 05 2026 Atlas <atlas@eterneon.net> - 0.1.0-4
+- Large files: linear code highlighting, Notepad++-style line operations
+- Freed heap returned after highlighting a large file
+- The global menu shows the line operations' keys
+
 * Sun Oct 04 2026 Atlas <atlas@eterneon.net> - 0.1.0-3
 - Atlas.Ui 1.4.0: the merged window header, its status bar, segmented
   control, popover, scroll bars, font picker and confirm dialog replace
