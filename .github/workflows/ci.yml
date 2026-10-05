@@ -478,6 +478,9 @@ jobs:
   # build-rpm.sh builds in a fixed directory (ATLAS_RPM_TOPDIR), so the build
   # paths in those flags are the same on every run. Under out/, which the
   # source tarball leaves out, as is the ccache.
+  # Only pull requests read the cache. A run that uploads its RPM (it goes into
+  # the AtlasOS image) compiles everything and only writes the cache
+  # (CCACHE_RECACHE), so a bad object in it can never reach a shipped RPM.
   rpm:
     name: RPM
     needs: [plan, publish, rpms]
@@ -494,6 +497,8 @@ jobs:
       CCACHE_MAXSIZE: 300M
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      # ccache reads 1 as true and an empty value as unset.
+      CCACHE_RECACHE: ${{ github.event_name != 'pull_request' && '1' || '' }}
     steps:
       - name: Install the tools the actions need (no image)
         if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
@@ -524,8 +529,9 @@ jobs:
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/out/ccache" >>"$GITHUB_ENV"
           echo "week=$(date -u +%G-W%V)" >>"$GITHUB_OUTPUT"
 
-      # As the check job's: restored on every run, saved only from main.
+      # Saved only from main, as the check job's.
       - name: Restore the ccache
+        if: github.event_name == 'pull_request'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: out/ccache

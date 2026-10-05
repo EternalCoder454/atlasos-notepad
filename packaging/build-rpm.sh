@@ -47,11 +47,13 @@ main() {
 
     if [ -n "${ATLAS_RPM_TOPDIR:-}" ]; then
         top=$ATLAS_RPM_TOPDIR
-        # The spec's flags split on spaces (see %build).
-        if [[ $top != /* || $top =~ [[:space:]] ]]; then
-            echo "ATLAS_RPM_TOPDIR must be an absolute path without spaces: $top" >&2
+        # The spec's flags split on spaces (see %build), and rpm expands % in
+        # --define: plain characters only.
+        if [[ ! $top =~ ^/[A-Za-z0-9._/-]+$ || /$top/ == */../* ]]; then
+            echo "ATLAS_RPM_TOPDIR must be an absolute path of letters, digits and ._-/ without ..: $top" >&2
             exit 1
         fi
+        mkdir -p "$(dirname "$top")"
         # Never removes a directory it didn't make.
         mkdir "$top"
     else
