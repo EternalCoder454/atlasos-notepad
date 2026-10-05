@@ -1246,25 +1246,43 @@ private Q_SLOTS:
     }
 
     // Typing in a big paste the pass hasn't done yet doesn't put the pass off:
-    // it highlights while the typing goes on, not only once it stops.
+    // it goes on while the typing does, not only once it stops.
     void codeHighlighterTypingDoesNotHoldBackPass()
     {
+        const QString text = generatedCpp(100 * 1024, false);
         QTextDocument doc;
         (void)doc.documentLayout(); // contentsChange is only sent with a layout
-        doc.setPlainText(QStringLiteral("int a;\n"));
+        doc.setPlainText(text);
         CodeHighlighter highlighter(&doc);
         highlighter.setTheme(themeFor(false));
         highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        {
+            Stock stock(text, QStringLiteral("C++"), false);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        // A comment opened at the top leaves a pass due for the rest (the
+        // edit's own 2 ms reach a few dozen lines), then a big paste at the
+        // end is left to that pass, its lines not done.
         QTextCursor cursor(&doc);
+        cursor.insertText(QStringLiteral("/*"));
+        const int paste = doc.blockCount() - 1;
         cursor.movePosition(QTextCursor::End);
         cursor.insertText(generatedCpp(8000, false));
-        // A key every 10 ms in the paste's first lines, for 300 ms.
-        QTextCursor typing(doc.findBlockByNumber(3));
+        // A key every 10 ms in the paste, for 300 ms.
+        QTextCursor typing(doc.findBlockByNumber(paste + 3));
         for (int i = 0; i < 30; ++i) {
             typing.insertText(QStringLiteral("x"));
             QTest::qWait(10);
         }
-        QVERIFY(!doc.lastBlock().previous().layout()->formats().isEmpty());
+        // Halfway down, a line is a comment by now: the pass ran meanwhile.
+        const QList<QTextLayout::FormatRange> comment = doc.findBlockByNumber(1).layout()->formats();
+        QCOMPARE(comment.size(), 1);
+        const QTextBlock middle = doc.findBlockByNumber(paste / 2);
+        const QList<QTextLayout::FormatRange> got = middle.layout()->formats();
+        QVERIFY2(got.size() == 1 && got.first().start == 0 && got.first().length == middle.length() - 1
+                     && got.first().format == comment.first().format,
+                 "the pass made no progress while typing went on");
     }
 
     // The input method's text being composed keeps its underline through a
