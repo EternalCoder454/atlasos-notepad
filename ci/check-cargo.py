@@ -5,18 +5,19 @@
 
 Fails unless every atlas-framework package in Cargo.lock comes from that URL
 at that rev (one with no source, i.e. a path or patched one, fails too), there
-is at least one, and no other package's source mentions atlas-framework. Also
-fails on [patch] or [replace] in any Cargo.toml, on a .cargo/config, on any
-symlink in the tree (cargo follows them, this walk does not), and on any file
-that doesn't parse. The files are parsed as TOML, never matched line by line,
-so no spelling of a key gets past it.
+is at least one, and no other git source appears (a renamed dependency could
+otherwise bring in other code under the crate's name). Among the files git
+tracks, which is all a CI checkout holds, it also fails on [patch] or [replace]
+in any Cargo.toml, on any .cargo/config (cargo reads one from every parent of
+its working directory, build/ included), on any symlink, and on any file that
+doesn't parse. The files are parsed as TOML, never matched line by line, so no
+spelling of a key gets past it.
 """
 
 import os
+import subprocess
 import sys
 import tomllib
-
-SKIP_TOP = {".git", "target", "build", "out"}
 
 
 def norm(name):
@@ -57,26 +58,35 @@ def check_lock(path, want, errors):
             pinned += 1
             if src != want:
                 errors.append(f"{path}: package {name}: source {src!r}, want {want!r}")
-        elif isinstance(src, str) and "atlas-framework" in norm(src):
+        elif isinstance(src, str) and src != want and (
+            src.startswith("git+") or "atlas-framework" in norm(src)
+        ):
             errors.append(f"{path}: package {name} comes from {src!r}")
     if pinned == 0:
         errors.append(f"{path}: no atlas-framework package")
 
 
 def check_tree(errors):
-    for root, dirs, files in os.walk("."):
-        if root == ".":
-            dirs[:] = [d for d in dirs if d not in SKIP_TOP]
-        else:
-            dirs[:] = [d for d in dirs if d != ".git"]
-        for entry in dirs + files:
-            path = os.path.join(root, entry)
-            if os.path.islink(path):
-                errors.append(f"{path}: symlinks are not allowed")
-        if os.path.basename(root) == ".cargo" and {"config", "config.toml"} & set(files):
-            errors.append(f"{root}: a .cargo/config is not allowed")
-        if "Cargo.toml" in files:
-            path = os.path.join(root, "Cargo.toml")
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--stage"],
+            check=True, capture_output=True, timeout=60,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        errors.append(f"git ls-files failed: {e}")
+        return
+    for entry in out.split(b"\0"):
+        if not entry:
+            continue
+        meta, _, raw = entry.partition(b"\t")
+        path = os.fsdecode(raw)
+        parts = path.split("/")
+        if meta.split(b" ")[0] == b"120000":
+            errors.append(f"{path}: symlinks are not allowed")
+            continue
+        if len(parts) > 1 and parts[-2] == ".cargo" and parts[-1] in ("config", "config.toml"):
+            errors.append(f"{path}: a .cargo/config is not allowed")
+        if parts[-1] == "Cargo.toml":
             doc = load(path, errors)
             if doc is None:
                 continue
