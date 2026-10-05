@@ -211,9 +211,15 @@ jobs:
         env:
           SUM: ${{ needs.plan.outputs.sum }}
         run: |
-          docker push "$IMAGE:f44-$SUM"
-          digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:f44-$SUM" |
-            sed -n "s|^$IMAGE@||p" | head -n1)
+          docker push "$IMAGE:f44-$SUM" | tee "$RUNNER_TEMP/push.log"
+          # The digest the registry answered with; RepoDigests must agree.
+          digest=$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' "$RUNNER_TEMP/push.log")
+          if [ "$(printf '%s\n' "$digest" | grep -c .)" != 1 ]; then
+            echo "expected one digest from docker push, got: ${digest:-none}" >&2
+            exit 1
+          fi
+          repo=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:f44-$SUM")
+          grep -qxF "$IMAGE@$digest" <<<"$repo" || { echo "RepoDigests does not list $IMAGE@$digest" >&2; exit 1; }
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
           echo "pushed $IMAGE@$digest"
 
