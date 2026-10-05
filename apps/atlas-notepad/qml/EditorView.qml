@@ -82,16 +82,46 @@ FocusScope {
     function outdentLines() {
         code.outdentLines(edit.selectionStart, edit.selectionEnd);
     }
-    // The whole text without a selection.
-    function sortLines() {
-        code.sortLines(edit.selectionStart, edit.selectionEnd);
+    // Line tools (LineTools), on the selection: the caret's line without one,
+    // or the whole text for the ones that sort, filter, trim and convert.
+    function duplicateLines() {
+        lines.duplicateLines(edit.selectionStart, edit.selectionEnd);
     }
-    // mode: 0 upper, 1 lower, 2 title.
+    function moveLines(down) {
+        lines.moveLines(edit.selectionStart, edit.selectionEnd, down);
+    }
+    function deleteLines() {
+        lines.deleteLines(edit.selectionStart, edit.selectionEnd);
+    }
+    function joinLines() {
+        lines.joinLines(edit.selectionStart, edit.selectionEnd);
+    }
+    // flags: 1 descending, 2 ignoring case, 4 numeric.
+    function sortLines(flags) {
+        lines.sortLines(edit.selectionStart, edit.selectionEnd, flags);
+    }
+    function reverseLines() {
+        lines.reverseLines(edit.selectionStart, edit.selectionEnd);
+    }
+    function removeDuplicateLines() {
+        lines.removeDuplicateLines(edit.selectionStart, edit.selectionEnd);
+    }
+    function removeEmptyLines() {
+        lines.removeEmptyLines(edit.selectionStart, edit.selectionEnd);
+    }
+    // mode: 0 trailing, 1 leading, 2 both.
+    function trimSpaces(mode) {
+        lines.trimSpaces(edit.selectionStart, edit.selectionEnd, mode);
+    }
+    function tabsToSpaces() {
+        lines.tabsToSpaces(edit.selectionStart, edit.selectionEnd);
+    }
+    function spacesToLeadingTabs() {
+        lines.spacesToLeadingTabs(edit.selectionStart, edit.selectionEnd);
+    }
+    // mode: 0 upper, 1 lower, 2 title, 3 sentence, 4 invert.
     function changeCase(mode) {
-        code.changeCase(edit.selectionStart, edit.selectionEnd, mode);
-    }
-    function trimTrailingSpaces() {
-        code.trimTrailingSpaces();
+        lines.changeCase(edit.selectionStart, edit.selectionEnd, mode);
     }
 
     // What the session keeps: the caret, the selection and the scroll.
@@ -507,6 +537,12 @@ FocusScope {
         language: view.document.language
         dark: view.dark
         insertSpaces: view.document.insertSpaces
+        indentWidth: view.document.indentWidth
+    }
+
+    LineTools {
+        id: lines
+        textEdit: edit
         indentWidth: view.document.indentWidth
     }
 

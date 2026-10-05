@@ -22,6 +22,8 @@ AtlasWindow {
     readonly property bool markdown: document !== null && document.markdown
     readonly property bool code: document !== null && document.code
     readonly property bool codeEnabled: code && editable && !settingsOpen
+    // Line tools: plain, code and Markdown source, not the Formatted view.
+    readonly property bool linesEnabled: editable && !settingsOpen && !(markdown && document.formatted)
     readonly property bool editable: view !== null && !view.edit.readOnly
     readonly property bool formatEnabled: markdown && editable && !settingsOpen
     property bool settingsOpen: false
@@ -88,11 +90,30 @@ AtlasWindow {
             toggleComment: toggleCommentAction,
             indent: indentAction,
             outdent: outdentAction,
+            duplicateLines: duplicateLinesAction,
+            moveLineUp: moveLineUpAction,
+            moveLineDown: moveLineDownAction,
+            deleteLines: deleteLinesAction,
+            joinLines: joinLinesAction,
+            reverseLines: reverseLinesAction,
+            removeDuplicateLines: removeDuplicateLinesAction,
+            removeEmptyLines: removeEmptyLinesAction,
             sortLines: sortLinesAction,
+            sortLinesDescending: sortLinesDescendingAction,
+            sortLinesNoCase: sortLinesNoCaseAction,
+            sortLinesNoCaseDescending: sortLinesNoCaseDescendingAction,
+            sortLinesNumeric: sortLinesNumericAction,
+            sortLinesNumericDescending: sortLinesNumericDescendingAction,
+            trimSpaces: trimSpacesAction,
+            trimLeadingSpaces: trimLeadingSpacesAction,
+            trimBothSpaces: trimBothSpacesAction,
+            tabsToSpaces: tabsToSpacesAction,
+            spacesToTabs: spacesToTabsAction,
             upperCase: upperCaseAction,
             lowerCase: lowerCaseAction,
             titleCase: titleCaseAction,
-            trimSpaces: trimSpacesAction,
+            sentenceCase: sentenceCaseAction,
+            invertCase: invertCaseAction,
             codeLineNumbers: codeLineNumbersAction
         })
 
@@ -366,34 +387,153 @@ AtlasWindow {
         onTriggered: root.view.outdentLines()
     }
     KeyedAction {
+        id: duplicateLinesAction
+        text: qsTr("Duplicate Line")
+        keys: "Ctrl+D"
+        enabled: root.linesEnabled
+        onTriggered: root.view.duplicateLines()
+    }
+    KeyedAction {
+        id: moveLineUpAction
+        text: qsTr("Move Line Up")
+        keys: "Alt+Up"
+        enabled: root.linesEnabled
+        onTriggered: root.view.moveLines(false)
+    }
+    KeyedAction {
+        id: moveLineDownAction
+        text: qsTr("Move Line Down")
+        keys: "Alt+Down"
+        enabled: root.linesEnabled
+        onTriggered: root.view.moveLines(true)
+    }
+    KeyedAction {
+        id: deleteLinesAction
+        text: qsTr("Delete Line")
+        keys: "Ctrl+Shift+K"
+        enabled: root.linesEnabled
+        onTriggered: root.view.deleteLines()
+    }
+    KeyedAction {
+        id: joinLinesAction
+        text: qsTr("Join Lines")
+        keys: "Ctrl+J"
+        enabled: root.linesEnabled
+        onTriggered: root.view.joinLines()
+    }
+    KeyedAction {
+        id: reverseLinesAction
+        text: qsTr("Reverse Lines")
+        enabled: root.linesEnabled
+        onTriggered: root.view.reverseLines()
+    }
+    KeyedAction {
+        id: removeDuplicateLinesAction
+        text: qsTr("Remove Duplicate Lines")
+        enabled: root.linesEnabled
+        onTriggered: root.view.removeDuplicateLines()
+    }
+    KeyedAction {
+        id: removeEmptyLinesAction
+        text: qsTr("Remove Empty Lines")
+        enabled: root.linesEnabled
+        onTriggered: root.view.removeEmptyLines()
+    }
+    KeyedAction {
         id: sortLinesAction
-        text: qsTr("Sort Lines")
-        enabled: root.codeEnabled
-        onTriggered: root.view.sortLines()
+        text: qsTr("Sort Lines Ascending")
+        enabled: root.linesEnabled
+        onTriggered: root.view.sortLines(0)
+    }
+    KeyedAction {
+        id: sortLinesDescendingAction
+        text: qsTr("Sort Lines Descending")
+        enabled: root.linesEnabled
+        onTriggered: root.view.sortLines(1)
+    }
+    KeyedAction {
+        id: sortLinesNoCaseAction
+        text: qsTr("Sort Lines Ignoring Case")
+        enabled: root.linesEnabled
+        onTriggered: root.view.sortLines(2)
+    }
+    KeyedAction {
+        id: sortLinesNoCaseDescendingAction
+        text: qsTr("Sort Lines Ignoring Case, Descending")
+        enabled: root.linesEnabled
+        onTriggered: root.view.sortLines(3)
+    }
+    KeyedAction {
+        id: sortLinesNumericAction
+        text: qsTr("Sort Lines Numerically")
+        enabled: root.linesEnabled
+        onTriggered: root.view.sortLines(4)
+    }
+    KeyedAction {
+        id: sortLinesNumericDescendingAction
+        text: qsTr("Sort Lines Numerically, Descending")
+        enabled: root.linesEnabled
+        onTriggered: root.view.sortLines(5)
+    }
+    KeyedAction {
+        id: trimSpacesAction
+        text: qsTr("Trim Trailing Spaces")
+        enabled: root.linesEnabled
+        onTriggered: root.view.trimSpaces(0)
+    }
+    KeyedAction {
+        id: trimLeadingSpacesAction
+        text: qsTr("Trim Leading Spaces")
+        enabled: root.linesEnabled
+        onTriggered: root.view.trimSpaces(1)
+    }
+    KeyedAction {
+        id: trimBothSpacesAction
+        text: qsTr("Trim Leading and Trailing Spaces")
+        enabled: root.linesEnabled
+        onTriggered: root.view.trimSpaces(2)
+    }
+    KeyedAction {
+        id: tabsToSpacesAction
+        text: qsTr("Tabs to Spaces")
+        enabled: root.linesEnabled
+        onTriggered: root.view.tabsToSpaces()
+    }
+    KeyedAction {
+        id: spacesToTabsAction
+        text: qsTr("Spaces to Leading Tabs")
+        enabled: root.linesEnabled
+        onTriggered: root.view.spacesToLeadingTabs()
     }
     KeyedAction {
         id: upperCaseAction
         text: qsTr("Upper Case")
-        enabled: root.codeEnabled
+        enabled: root.linesEnabled
         onTriggered: root.view.changeCase(0)
     }
     KeyedAction {
         id: lowerCaseAction
         text: qsTr("Lower Case")
-        enabled: root.codeEnabled
+        enabled: root.linesEnabled
         onTriggered: root.view.changeCase(1)
     }
     KeyedAction {
         id: titleCaseAction
         text: qsTr("Title Case")
-        enabled: root.codeEnabled
+        enabled: root.linesEnabled
         onTriggered: root.view.changeCase(2)
     }
     KeyedAction {
-        id: trimSpacesAction
-        text: qsTr("Trim Trailing Spaces")
-        enabled: root.codeEnabled
-        onTriggered: root.view.trimTrailingSpaces()
+        id: sentenceCaseAction
+        text: qsTr("Sentence Case")
+        enabled: root.linesEnabled
+        onTriggered: root.view.changeCase(3)
+    }
+    KeyedAction {
+        id: invertCaseAction
+        text: qsTr("Invert Case")
+        enabled: root.linesEnabled
+        onTriggered: root.view.changeCase(4)
     }
     KeyedAction {
         id: codeLineNumbersAction

@@ -74,7 +74,7 @@ qt_add_qml_module(atlas-notepad-app
         qml/SymbolButton.qml qml/CodePopover.qml
     SOURCES
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
-        cpp/spellcheck.h cpp/spellcheck.cpp cpp/codeeditor.h cpp/codeeditor.cpp
+        cpp/spellcheck.h cpp/spellcheck.cpp cpp/codeeditor.h cpp/codeeditor.cpp cpp/linetools.h cpp/linetools.cpp
         ${APP_SOURCES}
     RESOURCES
         icons/bold.svg icons/bullet-list.svg icons/checklist.svg icons/chevron-down.svg
@@ -99,7 +99,7 @@ if(BUILD_TESTING)
     # Plain add_executable: Qt's finalizer would scan for QML imports it doesn't need.
     add_executable(editor_test tests/editor_test.cpp
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
-        cpp/spellcheck.h cpp/spellcheck.cpp cpp/codeeditor.h cpp/codeeditor.cpp)
+        cpp/spellcheck.h cpp/spellcheck.cpp cpp/codeeditor.h cpp/codeeditor.cpp cpp/linetools.h cpp/linetools.cpp)
     target_include_directories(editor_test PRIVATE cpp)
     target_link_libraries(editor_test PRIVATE atlas_notepad Qt6::Gui Qt6::Qml Qt6::Quick Qt6::Test KF6::SonnetCore KF6::SyntaxHighlighting)
     add_test(NAME editor_test COMMAND editor_test)
@@ -108,7 +108,7 @@ if(BUILD_TESTING)
     # Documents, tabs, the session and settings, with XDG dirs in a temp dir.
     add_executable(app_test tests/app_test.cpp
         cpp/markdown.h cpp/highlighter.cpp cpp/markdowneditor.cpp cpp/decorations.cpp
-        cpp/spellcheck.h cpp/spellcheck.cpp cpp/codeeditor.h cpp/codeeditor.cpp
+        cpp/spellcheck.h cpp/spellcheck.cpp cpp/codeeditor.h cpp/codeeditor.cpp cpp/linetools.h cpp/linetools.cpp
         ${APP_SOURCES})
     target_include_directories(app_test PRIVATE cpp)
     target_link_libraries(app_test PRIVATE ${APP_LIBS} Qt6::Test)

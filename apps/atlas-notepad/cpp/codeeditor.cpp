@@ -41,23 +41,6 @@ int columnOf(const QString &text, int pos, int width)
     }
     return col;
 }
-
-QString titleCase(const QString &s)
-{
-    QString out = s.toLower();
-    bool start = true;
-    for (QChar &c : out) {
-        if (c.isLetterOrNumber()) {
-            if (start) {
-                c = c.toUpper();
-            }
-            start = false;
-        } else if (c != u'\'') {
-            start = true;
-        }
-    }
-    return out;
-}
 } // namespace
 
 KSyntaxHighlighting::Repository &codeRepository()
@@ -353,90 +336,6 @@ void CodeEditor::toggleComment(int from, int to)
         c.setPosition(b.position() + start);
         c.setPosition(b.position() + start + len, QTextCursor::KeepAnchor);
         c.removeSelectedText();
-    }
-    c.endEditBlock();
-}
-
-void CodeEditor::sortLines(int from, int to)
-{
-    if (!editable()) {
-        return;
-    }
-    QTextBlock first, last;
-    if (from == to) {
-        first = m_doc->firstBlock();
-        last = m_doc->lastBlock();
-    } else {
-        firstLast(from, to, &first, &last);
-    }
-    if (first.blockNumber() >= last.blockNumber()) {
-        return;
-    }
-    QStringList lines;
-    for (QTextBlock b = first; b.isValid() && b.blockNumber() <= last.blockNumber(); b = b.next()) {
-        lines << b.text();
-    }
-    QStringList sorted = lines;
-    QCollator collator;
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
-    std::stable_sort(sorted.begin(), sorted.end(), [&](const QString &a, const QString &b) { return collator.compare(a, b) < 0; });
-    if (sorted == lines) {
-        return;
-    }
-    const QString joined = sorted.join(u'\n');
-    const int start = first.position(); // read before the edit invalidates the block
-    QTextCursor c(m_doc);
-    c.setPosition(start);
-    c.setPosition(last.position() + last.length() - 1, QTextCursor::KeepAnchor);
-    c.insertText(joined);
-    // Keep the selection over the sorted lines.
-    QMetaObject::invokeMethod(m_edit, "select", Q_ARG(int, start), Q_ARG(int, start + int(joined.size())));
-}
-
-void CodeEditor::changeCase(int from, int to, int mode)
-{
-    if (!editable() || mode < 0 || mode > 2) {
-        return;
-    }
-    const int end = qMax(0, m_doc->characterCount() - 1);
-    from = qBound(0, from, end);
-    to = qBound(0, to, end);
-    QTextCursor c(m_doc);
-    c.setPosition(from);
-    if (from == to) {
-        c.select(QTextCursor::WordUnderCursor);
-    } else {
-        c.setPosition(qMin(from, to));
-        c.setPosition(qMax(from, to), QTextCursor::KeepAnchor);
-    }
-    const QString text = c.selectedText(); // paragraph breaks come back as U+2029
-    if (text.isEmpty()) {
-        return;
-    }
-    const QString out = mode == 0 ? text.toUpper() : mode == 1 ? text.toLower() : titleCase(text);
-    if (out != text) {
-        c.insertText(out);
-    }
-}
-
-void CodeEditor::trimTrailingSpaces()
-{
-    if (!editable()) {
-        return;
-    }
-    QTextCursor c(m_doc);
-    c.beginEditBlock();
-    for (QTextBlock b = m_doc->firstBlock(); b.isValid(); b = b.next()) {
-        const QString text = b.text();
-        int end = int(text.size());
-        while (end > 0 && (text[end - 1] == u' ' || text[end - 1] == u'\t')) {
-            --end;
-        }
-        if (end < text.size()) {
-            c.setPosition(b.position() + end);
-            c.setPosition(b.position() + int(text.size()), QTextCursor::KeepAnchor);
-            c.removeSelectedText();
-        }
     }
     c.endEditBlock();
 }
