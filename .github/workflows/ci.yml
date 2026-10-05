@@ -211,9 +211,10 @@ jobs:
         env:
           SUM: ${{ needs.plan.outputs.sum }}
         run: |
+          set -o pipefail
           docker push "$IMAGE:f44-$SUM" | tee "$RUNNER_TEMP/push.log"
           # The digest the registry answered with; RepoDigests must agree.
-          digest=$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' "$RUNNER_TEMP/push.log")
+          digest=$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' "$RUNNER_TEMP/push.log" | sort -u)
           if [ "$(printf '%s\n' "$digest" | grep -c .)" != 1 ]; then
             echo "expected one digest from docker push, got: ${digest:-none}" >&2
             exit 1
