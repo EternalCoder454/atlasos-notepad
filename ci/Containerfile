@@ -1,32 +1,17 @@
 # The CI build image (ghcr.io/eternalcoder454/atlas-notepad-dev), built by the
-# `image` job of .github/workflows/ci.yml from the repo root:
-#   framework-rpms/  atlas-ui and atlas-symbols-fonts, built from atlas-framework
-#                    at the rev Cargo.toml pins
-# It mirrors scripts/dev.sh (same packages, Atlas.Ui installed from those RPMs,
-# the spec's build dependencies), minus the GUI test tools CI doesn't use
-# (Xvfb, ImageMagick, xdotool), plus what the workflow runs: ccache, qmllint,
-# rpmlint, and git/tar/zstd for the actions.
-# The RPMs are installed with dnf (for their dependencies), then rpm -U puts the
-# exact files in place, also when this version or a newer one is installed.
+# `publish` job of .github/workflows/ci.yml from the repo root, on main only.
+# Context: framework-rpms/ holds atlas-ui and atlas-symbols-fonts, built from
+# atlas-framework at the rev Cargo.toml pins. ci/install-deps.sh does the work
+# (packages, Atlas.Ui, the spec's build dependencies) and leaves the RPMs in
+# /opt/atlas-rpms for packaging/build-rpm.sh. Nothing secret goes in: the
+# inputs are bind-mounted for the one RUN, so they add no layer.
 FROM registry.fedoraproject.org/fedora:44
 
 LABEL org.opencontainers.image.source="https://github.com/EternalCoder454/atlasos-notepad" \
       org.opencontainers.image.description="Build image for CI of Atlas Notepad: Fedora 44, Qt 6, Kirigami, Atlas.Ui" \
       org.opencontainers.image.licenses="MIT AND Apache-2.0"
 
-# The RPMs stay in the image: the rpm job hands them to packaging/build-rpm.sh
-# as ATLAS_LOCAL_RPMS.
-COPY framework-rpms/ /opt/atlas-rpms/
-COPY packaging/atlas-notepad.spec /tmp/atlas-notepad.spec
-
-RUN set -eu; \
-    dnf -y install --setopt=install_weak_deps=False \
-        dnf5-plugins rpm-build clippy rustfmt dbus-daemon \
-        qt6-qtbase-gui kf6-qqc2-desktop-style breeze-icon-theme default-fonts-core-sans \
-        ccache qt6-qtdeclarative-devel rpmlint git tar zstd; \
-    cd /opt/atlas-rpms; \
-    dnf -y install atlas-ui-[0-9]*.rpm atlas-symbols-fonts-[0-9]*.rpm; \
-    rpm -U --replacepkgs --oldpackage atlas-ui-[0-9]*.rpm atlas-symbols-fonts-[0-9]*.rpm; \
-    dnf -y builddep /tmp/atlas-notepad.spec; \
-    rm /tmp/atlas-notepad.spec; \
-    dnf clean all
+RUN --mount=type=bind,source=ci,target=/src/ci \
+    --mount=type=bind,source=packaging,target=/src/packaging \
+    --mount=type=bind,source=framework-rpms,target=/src/framework-rpms \
+    bash /src/ci/install-deps.sh /src/framework-rpms && dnf clean all
