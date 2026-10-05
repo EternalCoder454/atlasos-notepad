@@ -20,9 +20,24 @@ constexpr qint64 editNs = 2'000'000;
 // being filled in pieces).
 constexpr int bigInsert = 2048;
 
+// Ours only: a block may still carry the Markdown highlighter's data.
 CodeBlockData *dataOf(const QTextBlock &block)
 {
-    return static_cast<CodeBlockData *>(block.userData());
+    return dynamic_cast<CodeBlockData *>(block.userData());
+}
+
+// Where position `p` is after `removed` characters at `from` became `added`:
+// a position inside the removed text goes to the end of the added text when
+// `toEnd`, else to its start.
+int shifted(int p, int from, int removed, int added, bool toEnd)
+{
+    if (p <= from) {
+        return p;
+    }
+    if (p >= from + removed) {
+        return p + added - removed;
+    }
+    return toEnd ? from + added : from;
 }
 } // namespace
 
@@ -55,9 +70,9 @@ CodeHighlighter::~CodeHighlighter()
         // document once our half is gone: don't be told.
         disconnect(doc, &QTextDocument::contentsChange, this, &CodeHighlighter::documentChanged);
         // Our user data must not outlive us in a document another highlighter
-        // (or the Markdown one) will read.
+        // (or the Markdown one) will read; theirs is left alone.
         for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
-            if (b.userData()) {
+            if (dataOf(b)) {
                 b.setUserData(nullptr);
             }
         }
@@ -155,11 +170,23 @@ State CodeHighlighter::highlightOne(QTextBlock block, const State &in, bool *cha
     }
     data->in = in;
     data->end = end;
+    QTextLayout *layout = block.layout();
+    const QList<QTextLayout::FormatRange> old = layout->formats();
+    // The input method's text being composed keeps its formats (its
+    // underline), as QSyntaxHighlighter keeps them.
+    if (const int preeditLength = layout->preeditAreaText().size(); preeditLength > 0 && !old.isEmpty()) {
+        const int preedit = layout->preeditAreaPosition();
+        for (const QTextLayout::FormatRange &r : old) {
+            if (r.start >= preedit && r.start + r.length <= preedit + preeditLength) {
+                m_ranges.append(r);
+            }
+        }
+    }
     // Plain before and after: the layout has nothing to learn (a 5 MB line
     // would be laid out again for it).
-    *changed = !m_ranges.isEmpty() || !block.layout()->formats().isEmpty();
+    *changed = !m_ranges.isEmpty() || !old.isEmpty();
     if (*changed) {
-        block.layout()->setFormats(m_ranges);
+        layout->setFormats(m_ranges);
     }
     return end;
 }
@@ -173,7 +200,13 @@ QTextBlock CodeHighlighter::run(QTextBlock block, bool all, int through, qint64 
 {
     QElapsedTimer clock;
     clock.start();
-    const QTextBlock before = block.previous();
+    // From the last line with a known state: one without our data (another
+    // highlighter's, or never done) would be a guess.
+    QTextBlock before = block.previous();
+    while (before.isValid() && !dataOf(before)) {
+        block = before;
+        before = block.previous();
+    }
     State state;
     if (before.isValid()) {
         if (const auto *data = dataOf(before)) {
@@ -208,19 +241,35 @@ QTextBlock CodeHighlighter::run(QTextBlock block, bool all, int through, qint64 
 // An edit: its lines are highlighted at once; if the state after them is not
 // what the next line was highlighted in, that is passed on for a moment, then
 // by the slices. Also what reads a file filled in pieces, and a text set.
-void CodeHighlighter::documentChanged(int from, int, int added)
+void CodeHighlighter::documentChanged(int from, int removed, int added)
 {
     QTextDocument *doc = document();
     if (!doc || !definition().isValid()) {
         return;
+    }
+    // Formats set by slices but not yet told of were at the old positions.
+    if (m_dirtyFrom >= 0) {
+        m_dirtyFrom = shifted(m_dirtyFrom, from, removed, added, false);
+        m_dirtyEnd = shifted(m_dirtyEnd, from, removed, added, true);
     }
     const int last = qBound(0, from + added, qMax(0, doc->characterCount() - 1));
     const QTextBlock first = doc->findBlock(qBound(0, from, last));
     if (!first.isValid()) {
         return;
     }
-    if (added > bigInsert && !m_pass.isNull() && m_pass.document() == doc && first.position() >= m_pass.block().position()) {
-        return; // the pass will get there
+    if (!m_pass.isNull() && m_pass.document() == doc && first.position() >= m_pass.block().position()) {
+        // A big insert after a pass that is due is left to it; so is an edit
+        // after lines that pass hasn't done yet (one left to it before: the
+        // state before the edit isn't known). The pass then goes to the end,
+        // or it could stop before getting there.
+        const QTextBlock before = first.previous();
+        if (added > bigInsert || (before.isValid() && !dataOf(before))) {
+            m_all = true;
+            if (!m_passTimer.isActive()) {
+                m_passTimer.start();
+            }
+            return;
+        }
     }
     const int through = doc->findBlock(last).position();
     flushDirty(true);

@@ -25,6 +25,7 @@
 #include <KSyntaxHighlighting/SyntaxHighlighter>
 #include <KSyntaxHighlighting/Theme>
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 
@@ -1090,8 +1091,7 @@ private Q_SLOTS:
         for (const bool dark : {false, true}) {
             Stock stock(text, language, dark);
             QTextDocument doc;
-            (void)doc.documentLayout();
-        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+            (void)doc.documentLayout(); // contentsChange is only sent with a layout
             doc.setPlainText(text);
             CodeHighlighter highlighter(&doc);
             highlighter.setTheme(themeFor(dark));
@@ -1217,6 +1217,94 @@ private Q_SLOTS:
         QVERIFY(!doc.findBlockByNumber(0).layout()->formats().isEmpty());
         QVERIFY(doc.findBlockByNumber(1).layout()->formats().isEmpty());
         QVERIFY(!doc.findBlockByNumber(2).layout()->formats().isEmpty());
+    }
+
+    // A big paste after a pass that stops where the state matches again (the
+    // `*/`) is still highlighted: the pass goes to the end for it.
+    void codeHighlighterBigInsertDuringPass()
+    {
+        const QString head = generatedCpp(200 * 1024, false) + QStringLiteral("*/\n");
+        const QString text = head + generatedCpp(100 * 1024, false);
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QString why;
+        {
+            Stock stock(text, QStringLiteral("C++"), false);
+            QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+        }
+        QTextCursor cursor(&doc);
+        cursor.insertText(QStringLiteral("/*"));
+        // Before the pass gets to the `*/`: a paste well after it.
+        cursor.setPosition(doc.findBlockByNumber(doc.blockCount() - 100).position());
+        cursor.insertText(generatedCpp(8000, false));
+        Stock stock(doc.toPlainText(), QStringLiteral("C++"), false);
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 20000);
+    }
+
+    // The input method's text being composed keeps its underline through a
+    // highlight.
+    void codeHighlighterKeepsPreedit()
+    {
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(QStringLiteral("int a; // x\n"));
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        QTextLayout *layout = doc.begin().layout();
+        layout->setPreeditArea(3, QStringLiteral("xy"));
+        QTextLayout::FormatRange preedit;
+        preedit.start = 3;
+        preedit.length = 2;
+        preedit.format.setFontUnderline(true);
+        preedit.format.setUnderlineStyle(QTextCharFormat::DashUnderline);
+        layout->setFormats(layout->formats() << preedit);
+        highlighter.rehighlightAll(true);
+        const auto formats = layout->formats();
+        const bool kept = std::any_of(formats.cbegin(), formats.cend(), [&](const QTextLayout::FormatRange &r) {
+            return r.start == 3 && r.length == 2 && r.format.underlineStyle() == QTextCharFormat::DashUnderline;
+        });
+        QVERIFY(kept);
+        QVERIFY(formats.size() > 1); // and highlighted
+    }
+
+    // Blocks may carry another highlighter's data (the Markdown one, before a
+    // language switch): it is replaced, not read as ours, and what isn't ours
+    // is left when we go.
+    void codeHighlighterForeignUserData()
+    {
+        struct Foreign : QTextBlockUserData {
+            int marker = 7;
+        };
+        const QString text = cppSample();
+        QTextDocument doc;
+        (void)doc.documentLayout(); // contentsChange is only sent with a layout
+        doc.setPlainText(text);
+        for (QTextBlock b = doc.begin(); b.isValid(); b = b.next()) {
+            b.setUserData(new Foreign);
+        }
+        auto highlighter = std::make_unique<CodeHighlighter>(&doc);
+        highlighter->setTheme(themeFor(false));
+        highlighter->setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        Stock stock(text, QStringLiteral("C++"), false);
+        QString why;
+        QVERIFY2(sameFormats(doc, stock.doc, &why), qPrintable(why));
+        // An edit in a comment, after its first line became someone else's
+        // again: its state isn't known from there.
+        QCOMPARE(doc.findBlockByNumber(3).text(), QStringLiteral("/* a block"));
+        doc.findBlockByNumber(3).setUserData(new Foreign);
+        QTextCursor cursor(doc.findBlockByNumber(4));
+        cursor.insertText(QStringLiteral(" "));
+        cursor.deletePreviousChar();
+        QTRY_VERIFY2_WITH_TIMEOUT(sameFormats(doc, stock.doc, &why), qPrintable(why), 5000);
+        doc.findBlockByNumber(0).setUserData(new Foreign);
+        highlighter.reset();
+        QVERIFY(dynamic_cast<Foreign *>(doc.findBlockByNumber(0).userData()));
+        QVERIFY(!doc.findBlockByNumber(2).userData());
     }
 
     void codeToggleComment()
