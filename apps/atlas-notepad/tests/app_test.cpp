@@ -2966,6 +2966,10 @@ private Q_SLOTS:
             QWheelEvent wheel(QPointF(50, 50), QPointF(50, 50), pixels, angle, Qt::NoButton, mods, Qt::NoScrollPhase, false);
             QCoreApplication::sendEvent(&window, &wheel);
         };
+        // Shown: an unexposed window hands no wheel events to its handlers.
+        window.resize(400, 300);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
         QTRY_VERIFY(flick->property("contentHeight").toReal() > 1000);
         QCOMPARE(contentY(), 0.0);
         turn(QPoint(), QPoint(0, -120)); // a notch down
