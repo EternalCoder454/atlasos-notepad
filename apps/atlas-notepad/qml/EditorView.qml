@@ -213,9 +213,8 @@ FocusScope {
         width: view.rightInset
         WheelHandler {
             acceptedModifiers: Qt.NoModifier
-            onWheel: event => {
-                flick.contentY = Math.max(0, Math.min(flick.contentHeight - flick.height, flick.contentY - event.angleDelta.y / 2));
-            }
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: event => flick.scrollByWheel(event)
         }
     }
 
@@ -244,13 +243,36 @@ FocusScope {
         }
         onHeightChanged: clampScroll()
         onWidthChanged: clampScroll()
-        onContentHeightChanged: clampScroll()
+        onContentHeightChanged: {
+            clampScroll();
+            if (revealPending) {
+                ensureVisible(edit.cursorRectangle);
+            }
+        }
         onContentWidthChanged: clampScroll()
+
+        // A wheel turn or touchpad swipe over the text. Not interactive, so
+        // the Flickable ignores the wheel itself. A touchpad's pixel deltas
+        // go as they are, a mouse notch (120 units) moves 60 px.
+        function scrollByWheel(event) {
+            const pixels = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0;
+            const dx = pixels ? event.pixelDelta.x : event.angleDelta.x / 2;
+            const dy = pixels ? event.pixelDelta.y : event.angleDelta.y / 2;
+            revealPending = false; // the user is looking elsewhere now
+            contentY = Math.max(0, Math.min(contentHeight - height, contentY - dy));
+            contentX = Math.max(0, Math.min(contentWidth - width, contentX - dx));
+        }
+
+        // The caret is below what contentHeight covers so far: the TextEdit's
+        // height follows its text late (the delayed Binding below), so the
+        // view reveals the caret again once the height has landed.
+        property bool revealPending: false
 
         function ensureVisible(r) {
             if (height <= 0 || width <= 0) {
                 return; // not laid out yet (a hidden tab)
             }
+            revealPending = r.y + r.height > contentHeight;
             if (contentY >= r.y) {
                 contentY = r.y;
             } else if (contentY + height <= r.y + r.height) {
@@ -281,14 +303,19 @@ FocusScope {
             width: flick.width
         }
 
-        // Ctrl+wheel zooms (every window: the zoom is a setting); the rest
-        // scrolls.
+        // Ctrl+wheel zooms (every window: the zoom is a setting); the plain
+        // wheel scrolls.
         WheelHandler {
             acceptedModifiers: Qt.ControlModifier
             onWheel: event => {
                 const steps = event.angleDelta.y / 120;
                 view.settings.zoom = view.settings.zoom + Math.round(steps) * 10;
             }
+        }
+        WheelHandler {
+            acceptedModifiers: Qt.NoModifier
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            onWheel: event => flick.scrollByWheel(event)
         }
 
         TextEdit {
