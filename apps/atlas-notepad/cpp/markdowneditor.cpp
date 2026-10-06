@@ -1,7 +1,8 @@
 // Editing in the Formatted view: the caret steps over hidden syntax as if it
 // weren't there, Backspace and Delete take the character you see, Enter
-// carries a list on, and the toolbar's edits go through QTextCursor, so each
-// is one step on the document's own undo stack.
+// carries a list on (and takes a code block in and out), and the toolbar's
+// edits go through QTextCursor, so each is one step on the document's own
+// undo stack.
 #include "markdown.h"
 
 #include <algorithm>
@@ -472,6 +473,119 @@ static bool renumber(QTextCursor &c, QTextBlock block, int listStart, qlonglong 
     return true;
 }
 
+// A fence line as an opening one wrote it: its indent and its run of ` or ~,
+// without the language after it. The closing line repeats both.
+static QString fenceLine(const QString &opening)
+{
+    int i = 0;
+    while (i < opening.size() && (opening.at(i) == u' ' || opening.at(i) == u'\t')) {
+        ++i;
+    }
+    if (i == opening.size()) {
+        return {};
+    }
+    int n = 1;
+    while (i + n < opening.size() && opening.at(i + n) == opening.at(i)) {
+        ++n;
+    }
+    return opening.left(i) + QString(n, opening.at(i));
+}
+
+// The closing fence for the open code block `block` is in: the lines above it
+// lead to the opening fence, which says what it looks like. Empty when they
+// aren't read yet.
+static QString closingFenceFor(QTextBlock block)
+{
+    for (; block.isValid(); block = block.previous()) {
+        const BlockInfo *info = BlockInfo::of(block);
+        if (!info) {
+            return {};
+        }
+        if (info->line.kind == Md::FenceLine) {
+            return info->line.state > 0 ? fenceLine(block.text()) : QString();
+        }
+    }
+    return {};
+}
+
+// Code blocks are typed by hand and the closing fence is hidden in the
+// Formatted view, so Enter does two more things. At the end of an opening
+// fence with no closing one below it, it adds a line to type on and the
+// closing fence. On an empty last line of a block it leaves the block: the
+// empty line goes and the caret lands on a new line after the closing fence
+// (written first when the block was never closed), as Enter on an empty list
+// item ends the list. Each is one undo step.
+bool MarkdownEditor::enterInCodeBlock(const QTextBlock &block, const BlockInfo *info)
+{
+    const NpLine &l = info->line;
+    const QString text = block.text();
+    const int pos = cursor();
+    QTextCursor c(m_doc);
+
+    if (l.kind == Md::FenceLine && l.state > 0) {
+        if (pos != block.position() + text.size()) {
+            return false;
+        }
+        // Inside an open block the only fence below is the one that closes it.
+        for (QTextBlock b = block.next(); b.isValid(); b = b.next()) {
+            const BlockInfo *below = BlockInfo::of(b);
+            if (!below || below->line.kind == Md::FenceLine) {
+                return false;
+            }
+        }
+        c.setPosition(pos);
+        c.beginEditBlock();
+        c.insertBlock();
+        c.insertBlock();
+        c.insertText(fenceLine(text));
+        c.endEditBlock();
+        select(pos + 1, pos + 1);
+        return true;
+    }
+
+    if (l.kind != Md::CodeLine || !text.isEmpty()) {
+        return false;
+    }
+    const QTextBlock next = block.next();
+    int caret;
+    if (!next.isValid()) {
+        // The block never closes: this empty last line becomes the closing
+        // fence, and a new line follows it.
+        const QString fence = closingFenceFor(block);
+        if (fence.isEmpty()) {
+            return false;
+        }
+        c.setPosition(pos);
+        c.beginEditBlock();
+        c.insertText(fence);
+        c.insertBlock();
+        c.endEditBlock();
+        caret = pos + int(fence.size()) + 1;
+    } else {
+        const BlockInfo *below = BlockInfo::of(next);
+        if (!below || below->line.kind != Md::FenceLine) {
+            return false; // more code below: this is a line in it
+        }
+        c.beginEditBlock();
+        c.setPosition(block.position());
+        c.setPosition(next.position(), QTextCursor::KeepAnchor);
+        c.removeSelectedText(); // the empty line, with its break
+        const QTextBlock fence = m_doc->findBlock(pos);
+        const QTextBlock after = fence.next();
+        if (after.isValid() && after.text().trimmed().isEmpty()) {
+            caret = after.position() + int(after.text().size());
+        } else {
+            // Before any text that followed: a blank line to leave it on.
+            c.setPosition(fence.position() + int(fence.text().size()));
+            c.insertBlock();
+            caret = c.position();
+        }
+        c.endEditBlock();
+    }
+    select(caret, caret);
+    return true;
+}
+
 bool MarkdownEditor::newline()
 {
     if (hasSelection()) {
@@ -482,6 +596,9 @@ bool MarkdownEditor::newline()
     const BlockInfo *info = BlockInfo::of(block);
     if (!info) {
         return false;
+    }
+    if (enterInCodeBlock(block, info)) {
+        return true;
     }
     const NpLine &l = info->line;
     const bool list = l.kind == Md::Bullet || l.kind == Md::Numbered || l.kind == Md::Task;
@@ -622,6 +739,48 @@ void MarkdownEditor::toggleTask(const QTextBlock &block)
     c.insertText(info->line.checked ? QStringLiteral(" ") : QStringLiteral("x"));
 }
 
+// A click below the last line of a document that ends in a code block would
+// put the caret at the end, inside the block, with no way to click out of it.
+// This adds a line after the closing fence (writing the fence first when the
+// block was never closed) and puts the caret on it, in one undo step.
+bool MarkdownEditor::pressBelowCode(const QPointF &point)
+{
+    const QTextBlock last = m_doc->lastBlock();
+    const BlockInfo *info = BlockInfo::of(last);
+    if (!info) {
+        return false;
+    }
+    const bool closed = info->line.kind == Md::FenceLine && info->line.state == 0;
+    if (!closed && info->line.kind != Md::CodeLine) {
+        return false;
+    }
+    if (point.y() <= textOrigin().y() + m_doc->documentLayout()->blockBoundingRect(last).bottom()) {
+        return false;
+    }
+    QString fence;
+    if (!closed) {
+        fence = closingFenceFor(last);
+        if (fence.isEmpty()) {
+            return false;
+        }
+    }
+    QTextCursor c(m_doc);
+    c.setPosition(last.position() + int(last.text().size()));
+    c.beginEditBlock();
+    if (!fence.isEmpty()) {
+        if (!last.text().isEmpty()) {
+            c.insertBlock();
+        }
+        c.insertText(fence);
+    }
+    c.insertBlock();
+    c.endEditBlock();
+    const int end = c.position();
+    m_edit->forceActiveFocus(); // the press that would have focused it is ours
+    select(end, end);
+    return true;
+}
+
 bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched != m_edit || !m_doc) {
@@ -661,8 +820,8 @@ bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
         }
     } else if (event->type() == QEvent::MouseButtonPress) {
         auto *mouse = static_cast<QMouseEvent *>(event);
-        handled = editable() && m_style.formatted && mouse->button() == Qt::LeftButton && mouse->modifiers() == Qt::NoModifier
-            && pressTaskBox(mouse->position());
+        handled = editable() && mouse->button() == Qt::LeftButton && mouse->modifiers() == Qt::NoModifier
+            && ((m_style.formatted && pressTaskBox(mouse->position())) || pressBelowCode(mouse->position()));
     }
     if (handled) {
         event->accept();

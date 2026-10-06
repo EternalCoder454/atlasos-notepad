@@ -58,8 +58,14 @@ search all work on the file as it is on disk.
      markers along with its last character;
    - Backspace at the start of a heading, list item or quote removes the prefix;
    - Enter continues a list or quote, and ends it on an empty item;
+   - Enter at the end of an opening fence with no closer below adds a blank
+     line and the closing fence; Enter on the empty last line of a code block
+     leaves it, to a new line after the closing fence (written first if the
+     block was never closed);
    - Tab and Shift+Tab nest list items;
-   - a click on a checkbox toggles it.
+   - a click on a checkbox toggles it;
+   - a click below a document that ends in a code block adds a line after
+     the fence and puts the caret there.
 
    Toolbar edits (`toggleInline`, `setHeading`, `toggleBlock`) go through one
    `QTextCursor` edit block each, so a single undo reverts them.

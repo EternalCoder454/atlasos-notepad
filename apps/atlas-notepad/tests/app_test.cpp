@@ -2883,6 +2883,136 @@ private Q_SLOTS:
         QTRY_VERIFY_WITH_TIMEOUT(!doc->d->heldWatch, 7000); // done once the layout settled
     }
 
+    // The Flickable EditorView builds around its TextEdit: not interactive (so
+    // the Flickable ignores the wheel), a WheelHandler for the plain wheel,
+    // ensureVisible following the caret, and the TextEdit's height following
+    // its text late. QML can't load EditorView itself here (it needs Atlas.Ui),
+    // so this is a copy: keep it in step with qml/EditorView.qml.
+    QQuickItem *attachInEditorView(QQuickWindow &window, const QString &text)
+    {
+        QQmlComponent component(&m_engine);
+        component.setData("import QtQuick\nFlickable {\n"
+                          "    id: flick\n"
+                          "    property alias edit: e\n"
+                          "    property bool revealPending: false\n"
+                          "    width: 300; height: 100\n"
+                          "    contentWidth: e.width\n"
+                          "    contentHeight: e.height\n"
+                          "    clip: true\n"
+                          "    boundsBehavior: Flickable.StopAtBounds\n"
+                          "    interactive: false\n"
+                          "    function clampScroll() {\n"
+                          "        contentY = Math.max(0, Math.min(contentY, contentHeight - height));\n"
+                          "        contentX = Math.max(0, Math.min(contentX, contentWidth - width));\n"
+                          "    }\n"
+                          "    onHeightChanged: clampScroll()\n"
+                          "    onWidthChanged: clampScroll()\n"
+                          "    onContentHeightChanged: {\n"
+                          "        clampScroll();\n"
+                          "        if (revealPending) ensureVisible(e.cursorRectangle);\n"
+                          "    }\n"
+                          "    onContentWidthChanged: clampScroll()\n"
+                          "    function scrollByWheel(event) {\n"
+                          "        const pixels = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0;\n"
+                          "        const dx = pixels ? event.pixelDelta.x : event.angleDelta.x / 2;\n"
+                          "        const dy = pixels ? event.pixelDelta.y : event.angleDelta.y / 2;\n"
+                          "        revealPending = false;\n"
+                          "        contentY = Math.max(0, Math.min(contentHeight - height, contentY - dy));\n"
+                          "        contentX = Math.max(0, Math.min(contentWidth - width, contentX - dx));\n"
+                          "    }\n"
+                          "    function ensureVisible(r) {\n"
+                          "        if (height <= 0 || width <= 0) return;\n"
+                          "        revealPending = r.y + r.height > contentHeight;\n"
+                          "        if (contentY >= r.y) contentY = r.y;\n"
+                          "        else if (contentY + height <= r.y + r.height) contentY = r.y + r.height - height;\n"
+                          "    }\n"
+                          "    WheelHandler {\n"
+                          "        acceptedModifiers: Qt.NoModifier\n"
+                          "        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad\n"
+                          "        onWheel: event => flick.scrollByWheel(event)\n"
+                          "    }\n"
+                          "    TextEdit {\n"
+                          "        id: e\n"
+                          "        width: flick.width\n"
+                          "        wrapMode: TextEdit.Wrap\n"
+                          "        textFormat: TextEdit.PlainText\n"
+                          "        onCursorRectangleChanged: flick.ensureVisible(cursorRectangle)\n"
+                          "        Binding { target: e; property: \"height\"; value: Math.max(e.implicitHeight, flick.height); delayed: true }\n"
+                          "    }\n"
+                          "}",
+                          QUrl());
+        auto *flick = qobject_cast<QQuickItem *>(component.create());
+        if (!flick) {
+            return nullptr;
+        }
+        m_edits.emplace_back(flick);
+        flick->property("edit").value<QQuickItem *>()->setProperty("text", text);
+        window.contentItem()->setSize(QSizeF(400, 300));
+        flick->setParentItem(window.contentItem());
+        return flick;
+    }
+
+    // The plain wheel scrolls the editor, though the Flickable is not
+    // interactive: a mouse notch moves 60 px, a touchpad's pixel deltas go as
+    // they are, the ends stop it, and Ctrl+wheel (the zoom) doesn't scroll.
+    void plainWheelScrollsTheEditor()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = attachInEditorView(window, QStringLiteral("one two three four five six seven eight nine ten\n").repeated(100));
+        QVERIFY(flick);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        const auto contentY = [flick] { return flick->property("contentY").toReal(); };
+        const auto turn = [&](QPoint pixels, QPoint angle, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+            QWheelEvent wheel(QPointF(50, 50), QPointF(50, 50), pixels, angle, Qt::NoButton, mods, Qt::NoScrollPhase, false);
+            QCoreApplication::sendEvent(&window, &wheel);
+        };
+        // Shown: an unexposed window hands no wheel events to its handlers.
+        window.resize(400, 300);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTRY_VERIFY(flick->property("contentHeight").toReal() > 1000);
+        QCOMPARE(contentY(), 0.0);
+        turn(QPoint(), QPoint(0, -120)); // a notch down
+        QCOMPARE(contentY(), 60.0);
+        turn(QPoint(0, -25), QPoint(0, -120)); // a touchpad: the pixels win
+        QCOMPARE(contentY(), 85.0);
+        turn(QPoint(), QPoint(0, 120)); // up
+        QCOMPARE(contentY(), 25.0);
+        turn(QPoint(), QPoint(0, 120), Qt::ControlModifier);
+        QCOMPARE(contentY(), 25.0);
+        turn(QPoint(), QPoint(0, 1200)); // past the top
+        QCOMPARE(contentY(), 0.0);
+        turn(QPoint(0, -100000), QPoint()); // past the end
+        QCOMPARE(contentY(), flick->property("contentHeight").toReal() - flick->property("height").toReal());
+    }
+
+    // Enter at the end of a long document: the caret stays in the view,
+    // though the TextEdit's height catches up with its text late.
+    void enterAtTheEndOfALongDocumentKeepsTheCaretInView()
+    {
+        QQuickWindow window;
+        QQuickItem *flick = attachInEditorView(window, QStringLiteral("one two three four five six seven eight nine ten\n").repeated(100));
+        QVERIFY(flick);
+        auto unparent = qScopeGuard([flick] { flick->setParentItem(nullptr); });
+        QQuickItem *edit = flick->property("edit").value<QQuickItem *>();
+        QVERIFY(edit);
+        QTRY_VERIFY(flick->property("contentHeight").toReal() > 1000);
+        const auto inView = [&] {
+            const QRectF caret = edit->property("cursorRectangle").toRectF();
+            const qreal top = flick->property("contentY").toReal();
+            const qreal height = flick->property("height").toReal();
+            return caret.top() >= top - 0.5 && caret.bottom() <= top + height + 0.5;
+        };
+        edit->setProperty("cursorPosition", edit->property("length").toInt());
+        QTRY_VERIFY(inView());
+        for (int i = 0; i < 30; ++i) {
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, QStringLiteral("\r"));
+            QCoreApplication::sendEvent(edit, &enter);
+            QTRY_VERIFY(inView());
+        }
+        QVERIFY(flick->property("contentY").toReal() > 1000);
+    }
+
     // A hidden tab's view takes no input: a key in the shown one doesn't
     // end its restore.
     void hiddenViewKeepsItsHeldRestore()

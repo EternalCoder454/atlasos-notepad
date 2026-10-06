@@ -11,6 +11,7 @@
 #include <QGuiApplication>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickItem>
@@ -223,6 +224,14 @@ private:
     void press(int key)
     {
         QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier, key == Qt::Key_Return ? QStringLiteral("\r") : QString());
+        QCoreApplication::sendEvent(m_edit.get(), &event);
+    }
+
+    // A left press far below the text, in the room the TextEdit has under its
+    // last line.
+    void clickBelow()
+    {
+        QMouseEvent event(QEvent::MouseButtonPress, QPointF(20, 5000), QPointF(20, 5000), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
         QCoreApplication::sendEvent(m_edit.get(), &event);
     }
 
@@ -501,6 +510,146 @@ private Q_SLOTS:
         place(6);
         press(Qt::Key_Return);
         QCOMPARE(text(), QStringLiteral("- a\n"));
+    }
+
+    // Enter at the end of an opening fence with no closing one below it adds
+    // a line to type on and the closing fence, with the same fence characters.
+    void enterOnOpeningFenceAddsCloser()
+    {
+        open(QStringLiteral("```rust"));
+        place(7);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```rust\n\n```"));
+        QCOMPARE(caret(), 8);
+        undoesTo(QStringLiteral("```rust"));
+
+        open(QStringLiteral("~~~~"));
+        place(4);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("~~~~\n\n~~~~"));
+        QCOMPARE(caret(), 5);
+
+        open(QStringLiteral("  ```"));
+        place(5);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("  ```\n\n  ```"));
+        QCOMPARE(caret(), 6);
+
+        // Already closed: a plain newline. So when the caret isn't at the end.
+        open(QStringLiteral("```\nx\n```"));
+        place(3);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\n\nx\n```"));
+        open(QStringLiteral("```rust"));
+        place(3);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\nrust"));
+    }
+
+    // A second Enter on the empty last line leaves the block: the empty line
+    // goes and the caret is on a new line after the closing fence.
+    void enterTwiceLeavesCodeBlock()
+    {
+        open(QStringLiteral("```"));
+        place(3);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\n\n```"));
+        QMetaObject::invokeMethod(m_edit.get(), "insert", Q_ARG(int, 4), Q_ARG(QString, QStringLiteral("x")));
+        place(5);
+        press(Qt::Key_Return); // a new code line
+        QCOMPARE(text(), QStringLiteral("```\nx\n\n```"));
+        QCOMPARE(caret(), 6);
+        press(Qt::Key_Return); // out
+        QCOMPARE(text(), QStringLiteral("```\nx\n```\n"));
+        QCOMPARE(caret(), int(text().size()));
+        undoesTo(QStringLiteral("```\nx\n\n```"));
+
+        // Text after the fence stays after the new line; a blank line there is used.
+        open(QStringLiteral("```\n\n```\nafter"));
+        place(4);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\n```\n\nafter"));
+        QCOMPARE(caret(), 8);
+        open(QStringLiteral("```\n\n```\n\nafter"));
+        place(4);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\n```\n\nafter"));
+        QCOMPARE(caret(), 8);
+
+        // Never closed: the empty last line becomes the closing fence.
+        open(QStringLiteral("~~~\nx\n"));
+        place(6);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("~~~\nx\n~~~\n"));
+        QCOMPARE(caret(), int(text().size()));
+        undoesTo(QStringLiteral("~~~\nx\n"));
+
+        // An empty line with more code below is a line in the block.
+        open(QStringLiteral("```\nx\n\ny\n```"));
+        place(6);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\nx\n\n\ny\n```"));
+    }
+
+    void enterAfterClosingFenceIsPlain()
+    {
+        open(QStringLiteral("```\nx\n```"));
+        place(9);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\nx\n```\n"));
+        QCOMPARE(caret(), 10);
+        open(QStringLiteral("```\nx\n```"));
+        place(5); // the end of a code line
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```\nx\n\n```"));
+    }
+
+    // A click below a document that ends in a code block adds a line after
+    // the closing fence (writing it if missing) and puts the caret on it.
+    void clickBelowTrailingCodeBlockAddsParagraph()
+    {
+        open(QStringLiteral("```\ncode\n```"));
+        place(0);
+        clickBelow();
+        QCOMPARE(text(), QStringLiteral("```\ncode\n```\n"));
+        QCOMPARE(caret(), int(text().size()));
+        undoesTo(QStringLiteral("```\ncode\n```"));
+
+        open(QStringLiteral("```\ncode"));
+        clickBelow();
+        QCOMPARE(text(), QStringLiteral("```\ncode\n```\n"));
+        QCOMPARE(caret(), int(text().size()));
+        undoesTo(QStringLiteral("```\ncode"));
+
+        open(QStringLiteral("~~~~\ncode\n"));
+        clickBelow();
+        QCOMPARE(text(), QStringLiteral("~~~~\ncode\n~~~~\n"));
+        QCOMPARE(caret(), int(text().size()));
+
+        // The new last line is a paragraph: another click adds nothing.
+        clickBelow();
+        QCOMPARE(text(), QStringLiteral("~~~~\ncode\n~~~~\n"));
+
+        // Not a code block at the end, and not a text that can't be edited.
+        open(QStringLiteral("```\nx\n```\nafter"));
+        clickBelow();
+        QCOMPARE(text(), QStringLiteral("```\nx\n```\nafter"));
+        open(QStringLiteral("```\nx\n```"));
+        m_edit->setProperty("readOnly", true);
+        clickBelow();
+        QCOMPARE(text(), QStringLiteral("```\nx\n```"));
+    }
+
+    // Plain text has no MarkdownEditor: fences are just text.
+    void plainTextIgnoresFences()
+    {
+        openPlain(QStringLiteral("```rust"));
+        place(7);
+        press(Qt::Key_Return);
+        QCOMPARE(text(), QStringLiteral("```rust\n"));
+        openPlain(QStringLiteral("```\nx\n```"));
+        clickBelow();
+        QCOMPARE(text(), QStringLiteral("```\nx\n```"));
     }
 
     // A quoted rule or heading has no content after its content start, but it

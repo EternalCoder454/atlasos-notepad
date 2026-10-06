@@ -324,6 +324,8 @@ private:
     bool backspace();
     bool deleteForward();
     bool newline();
+    bool enterInCodeBlock(const QTextBlock &block, const BlockInfo *info);
+    bool pressBelowCode(const QPointF &point);
     bool indent(bool outdent);
     bool pressTaskBox(const QPointF &point);
     void toggleTask(const QTextBlock &block);
