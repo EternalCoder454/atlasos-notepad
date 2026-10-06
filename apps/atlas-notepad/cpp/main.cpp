@@ -88,14 +88,18 @@ int main(int argc, char *argv[])
     atlas_crash_install(); // Rust panic hook, before anything can panic.
     s_previousHandler = qInstallMessageHandler(messageHandler);
     // As Atlas Monitor (see its main.cpp): no thread hand-off for the raster
-    // engine's fills, and partial repaints at fractional scales, which
-    // otherwise repaint the whole window on every keystroke.
+    // engine's fills.
     if (qEnvironmentVariableIsEmpty("QT_NO_GUI_THREADPOOL")) {
         qputenv("QT_NO_GUI_THREADPOOL", "1");
     }
-    if (qEnvironmentVariableIsEmpty("QSG_SOFTWARE_RENDERER_FORCE_PARTIAL_UPDATES")) {
-        qputenv("QSG_SOFTWARE_RENDERER_FORCE_PARTIAL_UPDATES", "1");
-    }
+    // Partial repaints are left to Qt, which turns them off at a fractional
+    // scale. They used to be forced on (QSG_SOFTWARE_RENDERER_FORCE_PARTIAL_UPDATES)
+    // so a keystroke at 1.5x didn't repaint the whole window, but the window's
+    // last device pixel row and column are then only partly covered and never
+    // cleared. Notepad's frameless window is see-through (blur, and its
+    // rounded corners), so nothing can cover them: on a 4K screen at 1.5x the
+    // window's border was seen left behind while it was dragged, until a full
+    // repaint.
     // Draw on the CPU unless Settings.gpuRendering is on: for a window of text, the GPU path costs tens of MiB
     // (Mesa, LLVM) and start-up time for nothing. QT_QUICK_BACKEND overrides.
     if (qEnvironmentVariableIsEmpty("QT_QUICK_BACKEND") && !Settings::readGpuRendering()) {
