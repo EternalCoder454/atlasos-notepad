@@ -4,7 +4,7 @@
 # The binary RPM (no source, no debuginfo) is copied to <out dir>.
 # Cargo needs network access.
 # ATLAS_LOCAL_RPMS=<dir> installs the RPMs in <dir> first: atlas-framework's
-# (atlas-ui), which Notepad builds against and no repository has.
+# (telamon-ui), which Notepad builds against and no repository has.
 # ATLAS_SKIP_DEPS=1 skips all dnf and rpm installs (rpm-build, ATLAS_LOCAL_RPMS,
 # the spec's build dependencies): the machine must already have them, as CI's
 # build image does, so the RPM is built against exactly that image.
@@ -25,10 +25,10 @@ main() {
     if [ "${ATLAS_SKIP_DEPS:-}" != 1 ]; then
         dnf -y install rpm-build dnf5-plugins tar gzip >&2
         if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
-            # Atlas.Ui and its fonts. dnf brings their dependencies; rpm then puts
+            # Telamon.Ui and its fonts. dnf brings their dependencies; rpm then puts
             # these exact files in place even when that version is installed.
             local_rpms=()
-            for name in atlas-ui atlas-symbols-fonts; do
+            for name in telamon-ui telamon-symbols-fonts; do
                 found=()
                 for f in "$ATLAS_LOCAL_RPMS/$name"-[0-9]*.rpm; do
                     [ -e "$f" ] && [[ $f != *.src.rpm ]] && found+=("$f")

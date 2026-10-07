@@ -5,8 +5,8 @@
 
 use std::ffi::{CStr, c_char};
 
-use atlas_framework_core::{AppInfo, app_info};
-use atlas_framework_system::crash;
+use telamon_framework_core::{AppInfo, app_info};
+use telamon_framework_system::crash;
 
 pub const APP_ID: &str = "net.eterneon.atlas.notepad";
 pub const REPO: &str = "atlasos-notepad";

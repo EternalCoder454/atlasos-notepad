@@ -4,7 +4,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls as QQC2
-import Atlas.Ui
+import Telamon.Ui
 import net.eterneon.atlas.notepad
 
 ContextMenu {
@@ -18,7 +18,7 @@ ContextMenu {
     signal openRecent(string path)
     Component.onCompleted: contentItem.interactive = Qt.binding(() => contentItem.contentHeight + topPadding + bottomPadding > height)
 
-    // A submenu: inside the window, scrolling when it doesn't fit. (Atlas.Ui
+    // A submenu: inside the window, scrolling when it doesn't fit. (Telamon.Ui
     // scrolls only past the window's height, not past it less the margins.)
     component SubMenu: ContextMenu {
         height: Math.min(implicitHeight, (QQC2.Overlay.overlay ? QQC2.Overlay.overlay.height : implicitHeight) - topMargin - bottomMargin)

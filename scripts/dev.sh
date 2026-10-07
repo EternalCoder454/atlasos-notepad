@@ -5,7 +5,7 @@
 #   scripts/dev.sh                  an interactive shell
 # The first run installs the build dependencies from the spec (cached after).
 # Set CARGO_TARGET_DIR to /src/target/<name> to keep one target dir per task.
-# Atlas.Ui comes installed (atlas-ui, from atlas-framework), which no
+# Telamon.Ui comes installed (telamon-ui, from atlas-framework), which no
 # repository has: the first run needs ATLAS_LOCAL_RPMS=<dir with its RPMs>
 # (built with atlas-framework's packaging/build-rpm.sh). Given later, the
 # image takes those RPMs when they are another build than the one it has.
@@ -15,12 +15,12 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 image=localhost/atlas-notepad-dev:44
 spec_sum=$(sha256sum "$repo/packaging/atlas-notepad.spec" | cut -d' ' -f1)
 
-# The atlas-ui and atlas-symbols-fonts RPMs in $ATLAS_LOCAL_RPMS: exactly one
+# The telamon-ui and telamon-symbols-fonts RPMs in $ATLAS_LOCAL_RPMS: exactly one
 # of each, or nothing is changed.
 local_rpms() {
     local dir=$1 name f
     local -a found
-    for name in atlas-ui atlas-symbols-fonts; do
+    for name in telamon-ui telamon-symbols-fonts; do
         found=()
         for f in "$dir/$name"-[0-9]*.rpm; do
             [ -e "$f" ] && [[ $f != *.src.rpm ]] && found+=("${f##*/}")
@@ -36,7 +36,7 @@ local_rpms() {
 new=1
 podman image exists "$image" && new=0
 if [ "$new" = 1 ] && [ -z "${ATLAS_LOCAL_RPMS:-}" ]; then
-    echo "dev.sh: the first run needs ATLAS_LOCAL_RPMS=<dir with the atlas-ui and atlas-symbols-fonts RPMs>" >&2
+    echo "dev.sh: the first run needs ATLAS_LOCAL_RPMS=<dir with the telamon-ui and telamon-symbols-fonts RPMs>" >&2
     exit 1
 fi
 if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
@@ -45,7 +45,7 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
     [ "${#files[@]}" = 2 ] || exit 1
     # Which build: the label the image was committed with.
     build=$(cd "$rpms" && rpm -qp --qf '%{NEVRA}-%{BUILDTIME},' "${files[@]}")
-    have=$([ "$new" = 1 ] || podman image inspect --format '{{index .Labels "atlas-ui"}}' "$image")
+    have=$([ "$new" = 1 ] || podman image inspect --format '{{index .Labels "telamon-ui"}}' "$image")
     if [ "$build" != "$have" ]; then
         # From the clean base each time (the dnf cache makes it quick), so
         # refreshes don't stack layers on the old image.
@@ -72,7 +72,7 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
             cd /
             rm -r /rpms
             dnf -y builddep /packaging/atlas-notepad.spec' bash "${files[@]}" >&2
-        podman commit --change "LABEL atlas-ui=$build" --change "LABEL spec=$spec_sum" \
+        podman commit --change "LABEL telamon-ui=$build" --change "LABEL spec=$spec_sum" \
             "$ctr" "$image" >/dev/null
         podman rm -f -t 0 "$ctr" >/dev/null
         trap - EXIT
@@ -80,7 +80,7 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
 fi
 
 # A changed spec (new BuildRequires) installs its build dependencies into the
-# image, keeping its Atlas.Ui.
+# image, keeping its Telamon.Ui.
 if [ "$(podman image inspect --format '{{index .Labels "spec"}}' "$image")" != "$spec_sum" ]; then
     ctr=$(podman run -d --security-opt label=disable -v "$repo/packaging":/packaging:ro \
         -v atlas-dnf:/var/cache/libdnf5 "$image" sleep infinity)

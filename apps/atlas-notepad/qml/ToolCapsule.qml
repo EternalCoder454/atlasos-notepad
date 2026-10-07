@@ -9,7 +9,7 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 import net.eterneon.atlas.notepad
 
 Item {
@@ -134,7 +134,7 @@ Item {
         Layout.bottomMargin: Kirigami.Units.smallSpacing
         implicitWidth: Math.round(capsule.buttonSize * 0.55)
         implicitHeight: 1
-        color: AtlasStyle.separator
+        color: TelamonStyle.separator
     }
     // A menu item that runs a window action. Not `action:`, so `checked` is
     // ours (the action's own is bound to the setting it toggles). With
@@ -191,9 +191,9 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: width / 2
-        color: AtlasStyle.chromeBackground
+        color: TelamonStyle.chromeBackground
         border.width: 1
-        border.color: AtlasStyle.controlBorder
+        border.color: TelamonStyle.controlBorder
     }
 
     // Past the window's height the strip scrolls with the wheel.

@@ -27,20 +27,20 @@ set(QT_QML_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml)
 corrosion_import_crate(MANIFEST_PATH ${WORKSPACE_DIR}/Cargo.toml
     CRATES atlas-notepad LOCKED)
 
-# Atlas.Ui, the shared Atlas look, is installed like Kirigami (atlas-ui, from
+# Telamon.Ui, the shared Atlas look, is installed like Kirigami (telamon-ui, from
 # atlas-framework): QML imports it and nothing links it. qmlcachegen and
 # qmllint read its types from the installed copy.
-# 1.3.0 added the form controls (AtlasTextField, AtlasComboBox...) and
+# 1.3.0 added the form controls (TelamonTextField, TelamonComboBox...) and
 # TabBar.contextMenuRequested; an older one only fails later, in qmlcachegen,
 # with "unknown type". (The app has no Rust app! to carry `ui:`, so this is
-# its Atlas.Ui version check.)
-set(_atlas_ui_qmldir "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_QML}/Atlas/Ui/qmldir")
+# its Telamon.Ui version check.)
+set(_atlas_ui_qmldir "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_QML}/Telamon/Ui/qmldir")
 if(NOT EXISTS "${_atlas_ui_qmldir}")
-    message(FATAL_ERROR "Atlas.Ui is not installed: install atlas-ui >= 1.4.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
+    message(FATAL_ERROR "Telamon.Ui is not installed: install telamon-ui >= 1.4.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
 endif()
-file(STRINGS "${_atlas_ui_qmldir}" _atlas_ui_forms REGEX "^AtlasHeaderBar ")
+file(STRINGS "${_atlas_ui_qmldir}" _atlas_ui_forms REGEX "^TelamonHeaderBar ")
 if(NOT _atlas_ui_forms)
-    message(FATAL_ERROR "The installed Atlas.Ui is older than 1.4.0: install atlas-ui >= 1.4.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
+    message(FATAL_ERROR "The installed Telamon.Ui is older than 1.4.0: install telamon-ui >= 1.4.0 (atlas-framework; in the dev container, run scripts/dev.sh once with ATLAS_LOCAL_RPMS)")
 endif()
 
 # The app's QObjects (cpp/app.h), shared with app_test.
@@ -66,7 +66,7 @@ target_include_directories(atlas-notepad-app PRIVATE cpp)
 qt_add_qml_module(atlas-notepad-app
     URI net.eterneon.atlas.notepad
     VERSION 1.0
-    # Atlas.Ui, Kirigami and Qt load their plugins at run time.
+    # Telamon.Ui, Kirigami and Qt load their plugins at run time.
     NO_IMPORT_SCAN
     QML_FILES
         qml/Main.qml qml/EditorView.qml qml/ToolCapsule.qml qml/GlobalMenu.qml

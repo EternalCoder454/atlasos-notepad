@@ -8,10 +8,10 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 import net.eterneon.atlas.notepad
 
-AtlasWindow {
+TelamonWindow {
     id: root
 
     required property DocumentList documents
@@ -137,7 +137,7 @@ AtlasWindow {
     // The editor-only keys act unless another text field (Find, Replace, Go
     // To) or a popup or dialog has the focus: the field keeps its own keys,
     // and nothing edits the text behind a dialog. The tab row having the focus
-    // (Atlas.Ui gives it to the current tab) still leaves them on.
+    // (Telamon.Ui gives it to the current tab) still leaves them on.
     readonly property bool editorKeysNow: {
         const item = root.activeFocusItem;
         if (root.view === null || item instanceof TextInput
@@ -824,7 +824,7 @@ AtlasWindow {
 
     // --- Layout.
 
-    header: AtlasHeaderBar {
+    header: TelamonHeaderBar {
         id: headerBar
         // The installed app icon (the default, the application name, has none).
         iconName: "net.eterneon.atlas.notepad"
@@ -854,7 +854,7 @@ AtlasWindow {
                 }
             }
         }
-        trailing: AtlasSegmentedControl {
+        trailing: TelamonSegmentedControl {
             id: viewSwitch
             // A narrow header has no room for it beside the window buttons
             // (each side gets at most half); the View menu and the shortcut stay.
@@ -1444,7 +1444,7 @@ AtlasWindow {
                     Layout.preferredWidth: Kirigami.Units.gridUnit * 22
                     Layout.preferredHeight: Math.min(implicitHeight, root.height * 0.6)
                     contentWidth: availableWidth
-                    QQC2.ScrollBar.vertical: AtlasScrollBar {}
+                    QQC2.ScrollBar.vertical: TelamonScrollBar {}
 
                     GridLayout {
                         width: parent.width - Kirigami.Units.gridUnit // clear of the scrollbar
@@ -1520,7 +1520,7 @@ AtlasWindow {
                     }
                 }
 
-                AtlasTextField {
+                TelamonTextField {
                     id: lineField
                     Layout.fillWidth: true
                     // Enter or Go To was pressed: an empty field says so too.
@@ -1586,14 +1586,14 @@ AtlasWindow {
                     }
                 }
 
-                AtlasTextField {
+                TelamonTextField {
                     id: linkText
                     Layout.fillWidth: true
                     placeholderText: qsTr("Text to show")
                     Accessible.name: qsTr("Text")
                     onAccepted: linkUrl.forceActiveFocus()
                 }
-                AtlasTextField {
+                TelamonTextField {
                     id: linkUrl
                     Layout.fillWidth: true
                     errorText: linkDialog.addressTried && text.trim().length === 0 ? qsTr("An address is required") : ""

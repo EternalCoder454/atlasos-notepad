@@ -5,10 +5,10 @@ import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 import net.eterneon.atlas.notepad
 
-AtlasPage {
+TelamonPage {
     id: page
 
     readonly property Settings settings: App.settings
@@ -20,9 +20,9 @@ AtlasPage {
         footer: qsTr("Used for plain text and the Markdown syntax view. The formatted view uses your system font at this size.")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Font")
-            AtlasFontPicker {
+            TelamonFontPicker {
                 id: picker
                 Accessible.name: qsTr("Font")
                 font.family: page.settings.font.family
@@ -54,7 +54,7 @@ AtlasPage {
         title: qsTr("Text")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Word wrap")
             subtitle: qsTr("Long lines continue on the next line instead of scrolling sideways")
             showSwitch: true
@@ -62,14 +62,14 @@ AtlasPage {
             onSwitchToggled: checked => page.settings.wordWrap = checked
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Line numbers")
             showSwitch: true
             switchChecked: page.settings.lineNumbers
             onSwitchToggled: checked => page.settings.lineNumbers = checked
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Line numbers in code files")
             subtitle: qsTr("Shown for code even when line numbers are off above")
             showSwitch: true
@@ -77,14 +77,14 @@ AtlasPage {
             onSwitchToggled: checked => page.settings.codeLineNumbers = checked
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Status bar")
             showSwitch: true
             switchChecked: page.settings.statusBar
             onSwitchToggled: checked => page.settings.statusBar = checked
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Check spelling")
             subtitle: qsTr("Underlines misspelled words in Markdown and text files, not in code")
             showSwitch: true
@@ -98,7 +98,7 @@ AtlasPage {
         footer: qsTr("Markdown files (.md) can show their formatting, such as headings, bold text and lists, instead of the symbols that make it. The file itself stays plain text.")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Formatting")
             subtitle: qsTr("Show Markdown files and new tabs with formatting")
             showSwitch: true
@@ -106,7 +106,7 @@ AtlasPage {
             onSwitchToggled: checked => page.settings.formatting = checked
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Open files formatted")
             subtitle: qsTr("Off: files open showing the Markdown syntax")
             enabled: page.settings.formatting
@@ -115,7 +115,7 @@ AtlasPage {
             onSwitchToggled: checked => page.settings.openMarkdownFormatted = checked
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Tools")
             subtitle: qsTr("The formatting capsule at the right edge")
             enabled: page.settings.formatting
@@ -129,7 +129,7 @@ AtlasPage {
         title: qsTr("When Notepad Starts")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Continue previous session")
             subtitle: qsTr("Tabs come back as you left them, unsaved changes too")
             clickable: true
@@ -140,7 +140,7 @@ AtlasPage {
             onClicked: page.settings.continueSession = true
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Start a new session")
             subtitle: qsTr("Closing a window asks about unsaved changes")
             clickable: true
@@ -156,7 +156,7 @@ AtlasPage {
         title: qsTr("Opening Files")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Open in a new tab")
             clickable: true
             radio: true
@@ -166,7 +166,7 @@ AtlasPage {
             onClicked: page.settings.openInNewWindow = false
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Open in a new window")
             clickable: true
             radio: true
@@ -182,7 +182,7 @@ AtlasPage {
         footer: qsTr("Notepad draws its window with the processor, which starts faster and uses less memory. Takes effect the next time Notepad opens.")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Use the graphics card to draw the window")
             showSwitch: true
             switchChecked: page.settings.gpuRendering
@@ -195,7 +195,7 @@ AtlasPage {
         footer: qsTr("Crash reports for every Atlas app are turned on or off in Atlas Updater. They're off unless you turn them on, and each one is shown to you before it's sent. A report you send is posted as a public issue on the AtlasOS GitHub project, with no name or account attached. Anyone can read it, including the error and stack trace and your AtlasOS version, kernel, CPU, GPU and memory.")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Open Atlas Updater")
             chevron: true
             onClicked: updaterMissing.shown = !App.openUpdater()
@@ -216,23 +216,23 @@ AtlasPage {
         footer: qsTr("Notepad collects nothing and needs no account. Crash reports are off unless you turn them on in Atlas Updater, and are sent, as public GitHub issues, only when you choose to.")
 
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Notepad")
             value: qsTr("Version %1").arg(App.version)
             iconName: "accessories-text-editor"
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("License")
             value: qsTr("MIT")
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Made by")
             value: qsTr("Eterneon")
         }
         SectionRow {
-            density: AtlasStyle.Compact
+            density: TelamonStyle.Compact
             title: qsTr("Project Page")
             chevron: true
             onClicked: Qt.openUrlExternally("https://github.com/EternalCoder454/atlasos-notepad")

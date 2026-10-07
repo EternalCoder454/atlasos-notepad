@@ -58,8 +58,8 @@ if ! "$engine" run --rm --pull=never --network none --security-opt label=disable
     hits=$(grep -rIlE -- "$1" /root /home /etc /opt /usr/local /tmp /var/tmp \
         /var/lib /var/log /var/cache 2>/dev/null | head -5)
     [ -n "$hits" ] && { echo "token-shaped strings in: $hits"; rc=1; }
-    if ! rpm -q atlas-ui atlas-symbols-fonts >/dev/null; then
-        echo "atlas-ui or atlas-symbols-fonts is not installed"; rc=1
+    if ! rpm -q telamon-ui telamon-symbols-fonts >/dev/null; then
+        echo "telamon-ui or telamon-symbols-fonts is not installed"; rc=1
     fi
     mapfile -t pkgs < <(rpm -qa --qf "%{NAME}\n" "atlas-*")
     if [ "${#pkgs[@]}" -gt 0 ]; then

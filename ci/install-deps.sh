@@ -1,6 +1,6 @@
 #!/bin/bash
 # Install everything CI builds with, in a fedora:44 container, as root:
-#   ci/install-deps.sh <dir with the atlas-ui and atlas-symbols-fonts RPMs>
+#   ci/install-deps.sh <dir with the telamon-ui and telamon-symbols-fonts RPMs>
 # Used by ci/Containerfile (the prebuilt CI image) and, when no image is
 # available yet, directly by the workflow's jobs. The package list mirrors
 # scripts/dev.sh, minus the GUI test tools CI doesn't use (Xvfb, ImageMagick,
@@ -16,7 +16,7 @@ main() {
 
     # Exactly one of each, as packaging/build-rpm.sh requires.
     files=()
-    for name in atlas-ui atlas-symbols-fonts; do
+    for name in telamon-ui telamon-symbols-fonts; do
         found=()
         for f in "$rpms/$name"-[0-9]*.rpm; do
             [ -e "$f" ] && [[ $f != *.src.rpm ]] && found+=("$f")

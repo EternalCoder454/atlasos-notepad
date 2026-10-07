@@ -7,7 +7,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 import net.eterneon.atlas.notepad
 
 FocusScope {
@@ -287,15 +287,15 @@ FocusScope {
             }
         }
 
-        // Overlaid on the text, as in Atlas.Ui pages.
-        QQC2.ScrollBar.vertical: AtlasScrollBar {
+        // Overlaid on the text, as in Telamon.Ui pages.
+        QQC2.ScrollBar.vertical: TelamonScrollBar {
             id: verticalBar
             parent: flick.parent
             x: flick.x + flick.width - width
             y: flick.y
             height: flick.height
         }
-        QQC2.ScrollBar.horizontal: AtlasScrollBar {
+        QQC2.ScrollBar.horizontal: TelamonScrollBar {
             parent: flick.parent
             policy: view.settings.wordWrap ? QQC2.ScrollBar.AlwaysOff : QQC2.ScrollBar.AsNeeded
             x: flick.x
@@ -410,7 +410,7 @@ FocusScope {
                     linkHover.forget();
                 }
             }
-            AtlasToolTip {
+            TelamonToolTip {
                 x: linkHover.point.position.x
                 y: linkHover.point.position.y + Kirigami.Units.gridUnit
                 visible: linkHover.target.length > 0

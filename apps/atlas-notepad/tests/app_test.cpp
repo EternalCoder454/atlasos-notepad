@@ -2886,7 +2886,7 @@ private Q_SLOTS:
     // The Flickable EditorView builds around its TextEdit: not interactive (so
     // the Flickable ignores the wheel), a WheelHandler for the plain wheel,
     // ensureVisible following the caret, and the TextEdit's height following
-    // its text late. QML can't load EditorView itself here (it needs Atlas.Ui),
+    // its text late. QML can't load EditorView itself here (it needs Telamon.Ui),
     // so this is a copy: keep it in step with qml/EditorView.qml.
     QQuickItem *attachInEditorView(QQuickWindow &window, const QString &text)
     {

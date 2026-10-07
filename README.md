@@ -5,13 +5,13 @@ status bar in the Atlas look, with a WYSIWYG Markdown view. It is a system app
 on AtlasOS and the default editor for plain text and Markdown.
 
 Rust and Qt 6 Quick with Kirigami, built with CMake and Corrosion. The shared
-Atlas look (`Atlas.Ui`) and the opt-in crash reports come from
+Atlas look (`Telamon.Ui`) and the opt-in crash reports come from
 [atlas-framework](https://github.com/EternalCoder454/atlas-framework).
 
 ## Building
 
 Builds and tests run in a Fedora 44 container (`scripts/dev.sh`). The first
-run needs the atlas-framework RPMs (`atlas-ui`, `atlas-symbols-fonts`):
+run needs the atlas-framework RPMs (`telamon-ui`, `telamon-symbols-fonts`):
 
 ```sh
 ATLAS_LOCAL_RPMS=<dir with the RPMs> scripts/dev.sh cargo test --workspace

@@ -35,10 +35,10 @@ env:
 # does locally. Actions are pinned by commit.
 #
 #   plan -> publish (main only, the one job with packages: write)
-#        -> rpms    (branches and PRs without an image: Atlas.Ui RPMs as artifact)
+#        -> rpms    (branches and PRs without an image: Telamon.Ui RPMs as artifact)
 #        -> lint, check, rpm   (after those, in parallel)
 #
-# The CI image on GHCR holds Fedora's packages, Atlas.Ui and the spec's build
+# The CI image on GHCR holds Fedora's packages, Telamon.Ui and the spec's build
 # dependencies. Tags are labels for humans only and are never trusted: any
 # workflow with packages: write can push any tag, so a branch that edits this
 # file could overwrite one. Jobs pull by DIGEST. Only `publish`, which runs on
@@ -53,7 +53,7 @@ env:
 # it (history, environment, files) and only then logs in and pushes. Jobs pull
 # without credentials: after pushing, `publish` checks that the digest pulls
 # anonymously. If not (the registry did not answer, or the package was made
-# private), it warns, records no digest and uploads the Atlas.Ui RPMs as an
+# private), it warns, records no digest and uploads the Telamon.Ui RPMs as an
 # artifact, so this run and the later ones use the fallback.
 #
 # If `publish` fails on main, lint, check and rpm are skipped for that commit
@@ -77,18 +77,18 @@ jobs:
         with:
           persist-credentials: false
 
-      # The same rev as the crates, so Atlas.Ui and the crash code match.
+      # The same rev as the crates, so Telamon.Ui and the crash code match.
       - name: Read the atlas-framework rev and compute the hash
         id: tag
         env:
           MAIN: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
         run: |
           url='https://github.com/EternalCoder454/atlas-framework'
-          revs=$(sed -n "s|^atlas-framework-[a-z]* = { git = \"$url\", rev = \"\([0-9a-f]\{40\}\)\" }\$|\1|p" Cargo.toml | sort -u)
-          crates=$(grep -c '^atlas-framework-' Cargo.toml || true)
-          pinned=$(grep -c "^atlas-framework-[a-z]* = { git = \"$url\", rev = \"[0-9a-f]\{40\}\" }\$" Cargo.toml || true)
+          revs=$(sed -n "s|^telamon-framework-[a-z]* = { git = \"$url\", rev = \"\([0-9a-f]\{40\}\)\" }\$|\1|p" Cargo.toml | sort -u)
+          crates=$(grep -c '^telamon-framework-' Cargo.toml || true)
+          pinned=$(grep -c "^telamon-framework-[a-z]* = { git = \"$url\", rev = \"[0-9a-f]\{40\}\" }\$" Cargo.toml || true)
           if [ "$crates" = 0 ] || [ "$pinned" != "$crates" ] || [ "$(printf '%s\n' "$revs" | wc -l)" != 1 ]; then
-            echo "Cargo.toml must pin every atlas-framework crate to $url at one 40-character rev" >&2
+            echo "Cargo.toml must pin every telamon-framework crate to $url at one 40-character rev" >&2
             exit 1
           fi
           # Cargo.lock: every atlas-framework package from exactly that source; no
@@ -273,7 +273,7 @@ jobs:
           retention-days: 1
 
   # Branches and pull requests (forks and Dependabot too) when main has no
-  # image for these inputs yet: Atlas.Ui's RPMs, for the jobs to install.
+  # image for these inputs yet: Telamon.Ui's RPMs, for the jobs to install.
   rpms:
     name: atlas-framework RPMs
     needs: plan
@@ -369,7 +369,7 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      # Not verified offline: whether qmllint resolves Atlas.Ui and Kirigami from
+      # Not verified offline: whether qmllint resolves Telamon.Ui and Kirigami from
       # the installed modules and passes on the current QML. Reported but not
       # blocking until a run shows it is clean; then drop continue-on-error.
       # No clang-format step: the repository has no .clang-format.

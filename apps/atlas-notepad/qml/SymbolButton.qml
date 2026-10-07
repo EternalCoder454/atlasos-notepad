@@ -1,4 +1,4 @@
-// A small icon button like Atlas.Ui's ToolbarButton, drawn with a Material
+// A small icon button like Telamon.Ui's ToolbarButton, drawn with a Material
 // Symbol so the glyph is always the theme's text colour (an SVG used as a mask
 // came out black in dark mode). It never takes the keyboard focus from the
 // editor. `checkable` makes it a toggle with the accent tint. The tooltip is
@@ -6,7 +6,7 @@
 import QtQuick
 import QtQuick.Templates as T
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 
 T.AbstractButton {
     id: control
@@ -38,7 +38,7 @@ T.AbstractButton {
     Accessible.checkable: control.checkable
     Accessible.checked: control.checked
 
-    AtlasToolTip {
+    TelamonToolTip {
         parent: control
         shown: control.tipEnabled && (control.hovered || control.visualFocus) && !control.down && control.text.length > 0
         text: control.shortcutText.length > 0 ? qsTr("%1 (%2)").arg(control.text).arg(control.shortcutText) : control.text
@@ -47,30 +47,30 @@ T.AbstractButton {
     }
 
     background: Rectangle {
-        radius: control.round ? Math.min(width, height) / 2 : AtlasStyle.radiusSmall
-        // As Atlas.Ui's ToolbarButton: on is the selection fill with an
+        radius: control.round ? Math.min(width, height) / 2 : TelamonStyle.radiusSmall
+        // As Telamon.Ui's ToolbarButton: on is the selection fill with an
         // accent border; hover and press are the grey overlay.
-        color: control.checked ? AtlasStyle.selection : "transparent"
+        color: control.checked ? TelamonStyle.selection : "transparent"
         border.width: control.checked ? 1 : 0
-        border.color: control.enabled ? AtlasStyle.accent : AtlasStyle.controlBorder
+        border.color: control.enabled ? TelamonStyle.accent : TelamonStyle.controlBorder
         Behavior on color {
             ColorAnimation {
-                duration: AtlasStyle.durationShort
+                duration: TelamonStyle.durationShort
             }
         }
         Rectangle {
             anchors.fill: parent
             radius: parent.radius
-            color: !control.enabled ? "transparent" : control.down ? AtlasStyle.pressed : control.hovered ? AtlasStyle.hover : "transparent"
+            color: !control.enabled ? "transparent" : control.down ? TelamonStyle.pressed : control.hovered ? TelamonStyle.hover : "transparent"
             Behavior on color {
                 ColorAnimation {
-                    duration: AtlasStyle.durationShort
+                    duration: TelamonStyle.durationShort
                 }
             }
         }
         // A click never focuses it, so any focus here came from the keyboard
         // (or a menu handing it back, which Qt gives a popup reason).
-        AtlasFocusRing {
+        TelamonFocusRing {
             radius: parent.radius + gap
             shown: control.keyboardFocus && control.activeFocus
         }
@@ -81,7 +81,7 @@ T.AbstractButton {
             anchors.centerIn: parent
             name: control.symbol
             size: Kirigami.Units.iconSizes.smallMedium
-            color: !control.enabled ? AtlasStyle.textDisabled : control.checked ? AtlasStyle.accent : Kirigami.Theme.textColor
+            color: !control.enabled ? TelamonStyle.textDisabled : control.checked ? TelamonStyle.accent : Kirigami.Theme.textColor
         }
     }
 }

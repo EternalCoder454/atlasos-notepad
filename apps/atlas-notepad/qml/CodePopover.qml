@@ -6,10 +6,10 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
-import Atlas.Ui
+import Telamon.Ui
 import net.eterneon.atlas.notepad
 
-AtlasPopover {
+TelamonPopover {
     id: popover
 
     // The tab's document and its CodeEditor (for the language list).
@@ -17,7 +17,7 @@ AtlasPopover {
     property CodeEditor editor: null
     readonly property var languages: editor ? editor.languages() : []
 
-    // "left": beside the target, centred on it, instead of AtlasPopover's own
+    // "left": beside the target, centred on it, instead of TelamonPopover's own
     // below-or-above placement (the capsule is a strip at the window's edge).
     property bool _left: false
 
@@ -49,11 +49,11 @@ AtlasPopover {
         Accessible.name: qsTr("Language and indentation")
         spacing: Kirigami.Units.largeSpacing
 
-        AtlasLabel {
+        TelamonLabel {
             text: qsTr("Language")
-            textStyle: AtlasLabel.Heading
+            textStyle: TelamonLabel.Heading
         }
-        AtlasComboBox {
+        TelamonComboBox {
             id: language
             Layout.fillWidth: true
             Accessible.name: qsTr("Language")
@@ -68,14 +68,14 @@ AtlasPopover {
             }
         }
 
-        AtlasLabel {
+        TelamonLabel {
             text: qsTr("Indentation")
-            textStyle: AtlasLabel.Heading
+            textStyle: TelamonLabel.Heading
         }
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.largeSpacing
-            AtlasSegmentedControl {
+            TelamonSegmentedControl {
                 id: indentSwitch
                 Accessible.name: qsTr("Indent with")
                 model: [
@@ -100,10 +100,10 @@ AtlasPopover {
             Item {
                 Layout.fillWidth: true
             }
-            AtlasLabel {
+            TelamonLabel {
                 text: qsTr("Width")
             }
-            AtlasSpinBox {
+            TelamonSpinBox {
                 Accessible.name: qsTr("Indent width")
                 from: 1
                 to: 8

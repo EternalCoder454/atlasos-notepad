@@ -1,8 +1,8 @@
 # The CI build image (ghcr.io/eternalcoder454/atlas-notepad-dev), built by the
 # `publish` job of .github/workflows/ci.yml from the repo root, on main only.
-# Context: framework-rpms/ holds atlas-ui and atlas-symbols-fonts, built from
+# Context: framework-rpms/ holds telamon-ui and telamon-symbols-fonts, built from
 # atlas-framework at the rev Cargo.toml pins. ci/install-deps.sh does the work
-# (packages, Atlas.Ui, the spec's build dependencies). Nothing secret goes in:
+# (packages, Telamon.Ui, the spec's build dependencies). Nothing secret goes in:
 # the inputs are bind-mounted for the one RUN, so they add no layer.
 # Pull by digest only: tags are informational and not trusted.
 FROM registry.fedoraproject.org/fedora:44

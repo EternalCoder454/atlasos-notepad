@@ -44,16 +44,16 @@ BuildRequires:  cmake(KF6GuiAddons)
 BuildRequires:  cmake(KF6SyntaxHighlighting)
 # the spell check tests
 BuildRequires:  hunspell-en-US
-# QML modules qmlcachegen resolves at build time (not linked). atlas-ui comes
+# QML modules qmlcachegen resolves at build time (not linked). telamon-ui comes
 # from atlas-framework, which is in no repository: install its RPMs first
 # (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
 BuildRequires:  kf6-kirigami-devel
-BuildRequires:  atlas-ui >= 1.4.0
+BuildRequires:  telamon-ui >= 2.0.0
 
 Requires:       kf6-kirigami
 Recommends:     kio-extras
-# Atlas.Ui (1.4.0: the merged header, floating toolbar, popover, segmented control)
-Requires:       atlas-ui >= 1.4.0
+# Telamon.Ui (1.4.0: the merged header, floating toolbar, popover, segmented control)
+Requires:       telamon-ui >= 2.0.0
 Requires:       kf6-qqc2-desktop-style
 # spell check (dictionaries come from the system's langpacks)
 Requires:       kf6-sonnet

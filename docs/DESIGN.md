@@ -20,11 +20,11 @@ plain C ABI. The QObjects are C++: they mostly wrap Qt (the TextEdit's
 document, file watching, the session bus), and the Rust work behind them is a
 handful of pure functions, so CXX-Qt would add a build step for little.
 
-The shared Atlas parts come from atlas-framework: the `Atlas.Ui` QML module
+The shared Atlas parts come from atlas-framework: the `Telamon.Ui` QML module
 (the window and its merged header, tabs, banners, sections, menus, the status
-bar, the scroll bars, popovers and dialogs) is the installed `atlas-ui`
+bar, the scroll bars, popovers and dialogs) is the installed `telamon-ui`
 package (1.4.0 or later), loaded like Kirigami, and the opt-in crash reports are the
-`atlas-framework-system` crate, pinned in the workspace `Cargo.toml`.
+`telamon-framework-system` crate, pinned in the workspace `Cargo.toml`.
 
 Find and replace search the document's text (`QString`/`QRegularExpression`
 on a snapshot), not `QTextDocument::find`, which is slower and can't count
@@ -296,7 +296,7 @@ it is the layout or spell check (above).
 134 ms with a small file, 162 ms with 50 KB Markdown (219 and 250 before
 the menus, dialogs, find bar and code popover were made on first use, by
 `qml/Lazy.qml`). About 15 ms of it is the dynamic linker relocating
-Atlas.Ui's plugin (31,000 exported symbols), which only atlas-framework
+Telamon.Ui's plugin (31,000 exported symbols), which only atlas-framework
 can change. The first open of the menu button's menu takes about 30 ms,
 of the Keyboard Shortcuts dialog about 13 ms, of the others 1 to 6 ms.
 
@@ -320,7 +320,7 @@ build, median of five; before is a2f4d67):
 | 3 Markdown tabs and a C++ one, each shown | 150 MB (189) | | 55 MB (91) |
 
 What is left is mostly the libraries (Qt, KDE Frameworks, about 12 MB of
-Atlas.Ui's plugin alone) and the QML engine's types; a 50 KB file costs
+Telamon.Ui's plugin alone) and the QML engine's types; a 50 KB file costs
 about 4 MB of `QTextDocument` layout, and spell checking loads the Hunspell
 dictionary (about 3 MB) on the first word. Kate 26.08, measured earlier
 another way: 80 MB empty, 102 MB with 50 KB Markdown.
@@ -381,7 +381,7 @@ on the session bus can send it files to open.
 ## Building and testing
 
 Everything builds in the `localhost/atlas-notepad-dev:44` container
-(`scripts/dev.sh`); see `CLAUDE.md` for the commands. `atlas-ui` is in no
+(`scripts/dev.sh`); see `CLAUDE.md` for the commands. `telamon-ui` is in no
 repository: build atlas-framework's RPMs (its `packaging/build-rpm.sh`) and
 give their directory as `ATLAS_LOCAL_RPMS` to the first `scripts/dev.sh` run
 and to `packaging/build-rpm.sh`.

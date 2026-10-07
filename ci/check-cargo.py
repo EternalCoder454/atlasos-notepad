@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Guard against a redirected atlas-framework, run from the repo root:
+"""Guard against a redirected framework (the telamon-framework crates), run from the repo root:
 
     ci/check-cargo.py <git url> <rev> [Cargo.lock]
 
-Fails unless every atlas-framework package in Cargo.lock comes from that URL
+Fails unless every telamon-framework package in Cargo.lock comes from that URL
 at that rev (one with no source, i.e. a path or patched one, fails too), there
 is at least one, and no other git source appears (a renamed dependency could
 otherwise bring in other code under the crate's name). Among the files git
@@ -54,7 +54,7 @@ def check_lock(path, want, errors):
         if not isinstance(name, str):
             errors.append(f"{path}: a package has no name")
             continue
-        if norm(name).startswith("atlas-framework"):
+        if norm(name).startswith("telamon-framework"):
             pinned += 1
             if src != want:
                 errors.append(f"{path}: package {name}: source {src!r}, want {want!r}")
@@ -63,7 +63,7 @@ def check_lock(path, want, errors):
         ):
             errors.append(f"{path}: package {name} comes from {src!r}")
     if pinned == 0:
-        errors.append(f"{path}: no atlas-framework package")
+        errors.append(f"{path}: no telamon-framework package")
 
 
 def check_tree(errors):
@@ -108,7 +108,7 @@ def main(argv):
     for e in errors:
         print(e, file=sys.stderr)
     if errors:
-        print(f"Every atlas-framework package must come from {url} at rev {rev}, unredirected (above)", file=sys.stderr)
+        print(f"Every telamon-framework package must come from {url} at rev {rev}, unredirected (above)", file=sys.stderr)
         return 1
     return 0
 
