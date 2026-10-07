@@ -377,6 +377,7 @@ protected:
     void updatePolish() override;
     void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry) override;
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *data) override;
+    void itemChange(ItemChange change, const ItemChangeData &value) override;
 
 private:
     struct Shape {

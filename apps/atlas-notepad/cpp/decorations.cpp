@@ -195,16 +195,25 @@ void MarkdownDecorations::updatePolish()
     }
 }
 
-// Nothing to draw (no Markdown shapes in view, or a new tab): no node, so
-// no transparent image the size of the view, held twice by the software
-// renderer, and nothing for it to blend on every frame.
+// Nothing to draw (no Markdown shapes in view, or a new tab), or a tab not
+// shown: no node, so no image the size of the view, which the software
+// renderer holds twice, and nothing for it to blend on every frame.
 QSGNode *MarkdownDecorations::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *data)
 {
-    if (m_shapes.empty()) {
+    if (m_shapes.empty() || !isVisible()) {
         delete oldNode;
         return nullptr;
     }
     return QQuickPaintedItem::updatePaintNode(oldNode, data);
+}
+
+void MarkdownDecorations::itemChange(ItemChange change, const ItemChangeData &value)
+{
+    QQuickPaintedItem::itemChange(change, value);
+    if (change == ItemVisibleHasChanged) {
+        update();
+        polish();
+    }
 }
 
 static bool isCode(const QTextBlock &block)
