@@ -1,4 +1,4 @@
-# The CI build image (ghcr.io/eternalcoder454/atlas-notepad-dev), built by the
+# The CI build image (ghcr.io/eternalcoder454/telamon-notepad-dev), built by the
 # `publish` job of .github/workflows/ci.yml from the repo root, on main only.
 # Context: framework-rpms/ holds telamon-ui and telamon-symbols-fonts, built from
 # atlas-framework at the rev Cargo.toml pins. ci/install-deps.sh does the work
@@ -8,7 +8,7 @@
 FROM registry.fedoraproject.org/fedora:44
 
 LABEL org.opencontainers.image.source="https://github.com/EternalCoder454/atlasos-notepad" \
-      org.opencontainers.image.description="CI build image for atlas-notepad. Pull by digest only; tags are informational and not trusted." \
+      org.opencontainers.image.description="CI build image for telamon-notepad. Pull by digest only; tags are informational and not trusted." \
       org.opencontainers.image.licenses="MIT AND Apache-2.0"
 
 RUN --mount=type=bind,source=ci,target=/src/ci \

@@ -1,4 +1,4 @@
-Notepad (atlas-notepad)
+Notepad (telamon-notepad)
 Copyright (c) 2026 EternalHell
 
 Notepad's own source is covered by LICENSE (MIT). The terms below apply only to
@@ -8,7 +8,7 @@ the third-party material named here.
 Material Symbols
 --------------------------------------------------------------------------------
 
-The icons in apps/atlas-notepad/icons/ are derived from Material Symbols by
+The icons in apps/telamon-notepad/icons/ are derived from Material Symbols by
 Google, used under the Apache License, Version 2.0. They are copied from Atlas
 Notes (internal/app/icons), which keeps the unmodified exports. One style for
 all of them: Outlined, weight 400, grade 0, optical size 20.

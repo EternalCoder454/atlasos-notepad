@@ -19,7 +19,7 @@ main() {
 
     here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     src=$(dirname "$here")
-    spec=$here/atlas-notepad.spec
+    spec=$here/telamon-notepad.spec
     version=$(awk '/^Version:/ {print $2; exit}' "$spec")
 
     if [ "${ATLAS_SKIP_DEPS:-}" != 1 ]; then
@@ -63,8 +63,8 @@ main() {
     mkdir -p "$top"/{SOURCES,BUILD,RPMS,SRPMS,SPECS}
     tar -C "$src" \
         --exclude=./.git --exclude=./.claude --exclude=./target --exclude=./out --exclude=./build \
-        --transform "s,^\./,atlas-notepad-$version/," \
-        -czf "$top/SOURCES/atlas-notepad-$version.tar.gz" .
+        --transform "s,^\./,telamon-notepad-$version/," \
+        -czf "$top/SOURCES/telamon-notepad-$version.tar.gz" .
 
     rpmbuild -bb "$@" --define "_topdir $top" "$spec"
 

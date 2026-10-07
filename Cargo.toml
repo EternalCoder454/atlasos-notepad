@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/notepad-core", "apps/atlas-notepad"]
+members = ["crates/notepad-core", "apps/telamon-notepad"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/EternalCoder454/atlasos-notepad"
@@ -13,7 +13,7 @@ rust-version = "1.89"
 # atlas-framework: the crash reports. Its Telamon.Ui QML module is not built
 # from here: it comes installed (the telamon-ui RPM), like Kirigami. This rev is
 # the v1.6.0 tag's commit (CI wants a rev, not a tag). Move it together with
-# `telamon-ui >=` in packaging/atlas-notepad.spec (see CLAUDE.md).
+# `telamon-ui >=` in packaging/telamon-notepad.spec (see CLAUDE.md).
 telamon-framework-core = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "8e6a53569363aec3d7e42920875d03ca113ef3eb" }
 telamon-framework-system = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "8e6a53569363aec3d7e42920875d03ca113ef3eb" }
 

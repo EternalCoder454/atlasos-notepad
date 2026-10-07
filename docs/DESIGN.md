@@ -1,6 +1,6 @@
 # Notepad: design
 
-Notepad (`atlas-notepad`, app ID `net.eterneon.atlas.notepad`) is the AtlasOS
+Notepad (`telamon-notepad`, app ID `net.eterneon.telamon.notepad`) is the Telamon OS
 text editor: Windows 11 Notepad's layout (tabs, editor, status bar) in the
 Atlas look, with a WYSIWYG Markdown view. The plan and the roadmap live in
 Atlas Notes (`AtlasOS/Atlas Text Editor/Plan` and `/Roadmap`).
@@ -10,10 +10,10 @@ Atlas Notes (`AtlasOS/Atlas Text Editor/Plan` and `/Roadmap`).
 | Path | What |
 | --- | --- |
 | `crates/notepad-core` | Rust, no Qt: the Markdown line reader (`markdown.rs`), and reading, decoding, encoding and saving files (`file.rs`). |
-| `apps/atlas-notepad/src/lib.rs` | The C ABI the C++ side calls (`np_md_*`, `np_file_*`). |
-| `apps/atlas-notepad/cpp/` | Qt: the editor (highlighter, editing, decorations), and the app's objects in `app.h`: `App`, `Settings`, `DocumentList`, `Document`, `LineNumbers`, plus the session. |
-| `apps/atlas-notepad/qml/` | The window: tabs, toolbar, editors, find, banners, status bar, menus, settings. |
-| `apps/atlas-notepad/icons/` | Material Symbols from Atlas Notes (Apache-2.0, see `NOTICE`). |
+| `apps/telamon-notepad/src/lib.rs` | The C ABI the C++ side calls (`np_md_*`, `np_file_*`). |
+| `apps/telamon-notepad/cpp/` | Qt: the editor (highlighter, editing, decorations), and the app's objects in `app.h`: `App`, `Settings`, `DocumentList`, `Document`, `LineNumbers`, plus the session. |
+| `apps/telamon-notepad/qml/` | The window: tabs, toolbar, editors, find, banners, status bar, menus, settings. |
+| `apps/telamon-notepad/icons/` | Material Symbols from Atlas Notes (Apache-2.0, see `NOTICE`). |
 
 The Rust side is linked as a static library through Corrosion and exposes a
 plain C ABI. The QObjects are C++: they mostly wrap Qt (the TextEdit's
@@ -85,12 +85,12 @@ The Syntax view uses the same code with the markers visible and dimmed.
 plain spaces. Saving must read the document's raw text and turn its paragraph
 separators back into the file's line endings, or a round trip changes the file.
 
-The editing rules are tested in `apps/atlas-notepad/tests/editor_test.cpp`
+The editing rules are tested in `apps/telamon-notepad/tests/editor_test.cpp`
 (a real `TextEdit`, offscreen).
 
 ## S1 figures
 
-`atlas-notepad --bench FILE` sends key events to the `TextEdit` and times each
+`telamon-notepad --bench FILE` sends key events to the `TextEdit` and times each
 from the event to `QQuickWindow::frameSwapped`. `scripts/bench-s1.sh` runs it
 on `bench/sample-50k.md` (52 KB, 599 lines) in Xvfb, software backend, with
 `QT_QPA_UPDATE_IDLE_TIME=0` (xcb otherwise waits 5 ms before each frame).
@@ -220,7 +220,7 @@ node dirty. A three-hunk patch to `qquicktextedit.cpp` (set the matrix only
 when it changes, move nodes only by a non-zero delta, redo nodes from the
 edit on rather than from the top) took Markdown typing from 2.7 ms mean and
 6 ms p95 to 1.9 and 3.5. It isn't shipped: it would mean carrying a patched
-Qt in AtlasOS for one app. Worth sending upstream.
+Qt in Telamon OS for one app. Worth sending upstream.
 
 Other Qt costs that set the limits for big files:
 - `QQuickTextEdit::invalidateFontCaches` and `QTextDocumentLayout`'s
@@ -232,7 +232,7 @@ Other Qt costs that set the limits for big files:
   dirty one at a time: quadratic on big files. `MarkdownHighlighter` mutes
   that pass and highlights itself (below).
 
-**Opening** (`NP_BENCH_OPEN_ONLY=1 atlas-notepad --bench FILE`: from
+**Opening** (`NP_BENCH_OPEN_ONLY=1 telamon-notepad --bench FILE`: from
 process start to the first frame with text, and to the frame with all of
 it; median of three; ms):
 
@@ -300,7 +300,7 @@ Telamon.Ui's plugin (31,000 exported symbols), which only atlas-framework
 can change. The first open of the menu button's menu takes about 30 ms,
 of the Keyboard Shortcuts dialog about 13 ms, of the others 1 to 6 ms.
 
-**Second launch** (a running Notepad, `atlas-notepad FILE` again): 21 to
+**Second launch** (a running Notepad, `telamon-notepad FILE` again): 21 to
 23 ms to bring up a file that's open, 37 to 63 ms (median 56) to open a
 new tab, most of it the running window making the tab's view. The target
 was 50 ms.
@@ -343,7 +343,7 @@ on the session bus can send it files to open.
     place. Replacing it would hand it to us, setuid bits included. The old
     bytes are kept and written back if the write fails part way.
 - **Session.**
-  - Unsaved text lives in `$XDG_STATE_HOME/atlas-notepad/session`. Nothing
+  - Unsaved text lives in `$XDG_STATE_HOME/telamon-notepad/session`. Nothing
     is written unless that folder (or what a link there points to, for a
     state folder kept elsewhere) is a folder owned by the user; it is set to
     0700 first.
@@ -372,15 +372,45 @@ on the session bus can send it files to open.
 - **Second launches.** `--` ends the options. At most 100 files are taken,
   and a relative path is used only with an absolute working directory.
 - **Other.**
-  - Atlas Updater is started from `/usr/bin` rather than found on `$PATH`.
+  - Telamon Updater is started from `/usr/bin` rather than found on `$PATH`.
   - The C ABI refuses null pointers, and no panic crosses into C++.
   - The locked crates have no known advisories (OSV, October 2026).
   - The RPM's binary is PIE, full RELRO, NX, FORTIFY, stack protector and
     CET shadow stack.
 
+## Renamed from Atlas Notepad (0.2.0)
+
+Notepad was `atlas-notepad` (`net.eterneon.atlas.notepad`) until 0.2.0. The
+user's data comes over once, by `rename(2)` that never replaces what is at
+the new name (`cpp/legacy.cpp`), so every file moves or none does:
+
+- `~/.config/atlas-notepadrc` becomes `telamon-notepadrc`, when the new file
+  is absent (`Settings::filePath()`, so `main()` reads the GPU switch from
+  the moved file too).
+- `$XDG_STATE_HOME/atlas-notepad/session` (tabs, unsaved texts, the backup
+  and the crash counter) becomes `$XDG_STATE_HOME/telamon-notepad/session`
+  (`Session::moveOld()`), and the old `session.lock` and folder are removed.
+  The session from before 0.1, in `$XDG_DATA_HOME/atlas-notepad`, moves the
+  same way. A session already at the new name is never touched, nor is an old
+  one that a running `atlas-notepad` holds (see below).
+- Crash-report settings and state are the framework's (it reads the 1.x names
+  while the new ones are absent).
+
+For this release the old names still work: `atlas-notepad` is a link to
+`telamon-notepad`, `net.eterneon.atlas.notepad.desktop` is a hidden copy of
+the desktop file (default-application lists and panel launchers name it), the
+package `Provides: atlas-notepad` and `Obsoletes` older ones, and
+`openUpdater()` falls back to `atlas-updater`. An `atlas-notepad` that is still
+running when this one starts (the package was upgraded under it) owns the
+old D-Bus name and the old session lock: the new process hands it its launch
+(`Legacy::forwardLaunch`, as a second launch of it would) and exits, and
+when the lock is held on another bus, starts with no session like any second
+Notepad. Remove `cpp/legacy.*`, the alias desktop file and the link in the
+release after.
+
 ## Building and testing
 
-Everything builds in the `localhost/atlas-notepad-dev:44` container
+Everything builds in the `localhost/telamon-notepad-dev:44` container
 (`scripts/dev.sh`); see `CLAUDE.md` for the commands. `telamon-ui` is in no
 repository: build atlas-framework's RPMs (its `packaging/build-rpm.sh`) and
 give their directory as `ATLAS_LOCAL_RPMS` to the first `scripts/dev.sh` run

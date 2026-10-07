@@ -11,7 +11,7 @@ set -euo pipefail
 main() {
     rpms=${1:?usage: install-deps.sh <rpm dir>}
     here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-    spec=$here/../packaging/atlas-notepad.spec
+    spec=$here/../packaging/telamon-notepad.spec
     [ -f "$spec" ] || { echo "install-deps.sh: no $spec" >&2; exit 1; }
 
     # Exactly one of each, as packaging/build-rpm.sh requires.

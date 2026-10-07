@@ -29,9 +29,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  IMAGE: ghcr.io/eternalcoder454/atlas-notepad-dev
+  IMAGE: ghcr.io/eternalcoder454/telamon-notepad-dev
 
-# Everything runs in Fedora 44, the release AtlasOS is built on, as scripts/dev.sh
+# Everything runs in Fedora 44, the release Telamon OS is built on, as scripts/dev.sh
 # does locally. Actions are pinned by commit.
 #
 #   plan -> publish (main only, the one job with packages: write)
@@ -95,7 +95,7 @@ jobs:
           # [patch]/[replace], .cargo/config or symlink (parsed as TOML, see the script).
           ci/check-cargo.py "$url" "$revs"
           week=$(date -u +%G-W%V)
-          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/atlas-notepad.spec; find ci -type f ! -name check-cargo.py ! -name check-image-secrets.sh | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
+          sum=$({ printf '%s\n%s\n' "$revs" "$week"; cat packaging/telamon-notepad.spec; find ci -type f ! -name check-cargo.py ! -name check-image-secrets.sh | LC_ALL=C sort | xargs cat; } | sha256sum | cut -c1-16)
           {
             echo "rev=$revs"
             echo "week=$week"
@@ -109,7 +109,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: image-digest.txt
-          key: atlas-notepad-dev-digest-${{ steps.tag.outputs.sum }}
+          key: telamon-notepad-dev-digest-${{ steps.tag.outputs.sum }}
 
       - name: Read the digest
         id: digest
@@ -190,7 +190,7 @@ jobs:
           tags: ${{ env.IMAGE }}:f44-${{ needs.plan.outputs.sum }}
           labels: |
             org.opencontainers.image.source=https://github.com/EternalCoder454/atlasos-notepad
-            org.opencontainers.image.description=CI build image for atlas-notepad. Pull by digest only; tags are informational and not trusted.
+            org.opencontainers.image.description=CI build image for telamon-notepad. Pull by digest only; tags are informational and not trusted.
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Check the image for secrets
@@ -258,7 +258,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: image-digest.txt
-          key: atlas-notepad-dev-digest-${{ needs.plan.outputs.sum }}
+          key: telamon-notepad-dev-digest-${{ needs.plan.outputs.sum }}
 
       # The fallback's input when the image is not usable.
       - name: Upload the RPMs (image not public)
@@ -376,7 +376,7 @@ jobs:
       - name: qmllint
         run: |
           qmllint=$(command -v qmllint-qt6 || command -v qmllint || echo /usr/lib64/qt6/bin/qmllint)
-          if ! out=$("$qmllint" -I /usr/lib64/qt6/qml apps/atlas-notepad/qml/*.qml 2>&1); then
+          if ! out=$("$qmllint" -I /usr/lib64/qt6/qml apps/telamon-notepad/qml/*.qml 2>&1); then
             printf '%s\n' "$out"
             n=$(printf '%s\n' "$out" | grep -ci 'warning\|error' || true)
             echo "::warning::qmllint reported $n warning/error lines (not blocking yet)"
@@ -460,7 +460,7 @@ jobs:
       - name: CMake build
         run: |
           ccache -z
-          cmake -S apps/atlas-notepad -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S apps/telamon-notepad -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build/ci
           ccache -s
 
@@ -479,7 +479,7 @@ jobs:
   # paths in those flags are the same on every run. Under out/, which the
   # source tarball leaves out, as is the ccache.
   # Only pull requests read the cache. A run that uploads its RPM (it goes into
-  # the AtlasOS image) compiles everything and only writes the cache
+  # the Telamon OS image) compiles everything and only writes the cache
   # (CCACHE_RECACHE), so a bad object in it can never reach a shipped RPM.
   rpm:
     name: RPM
@@ -561,23 +561,23 @@ jobs:
       # The package installs, and dnf then refuses to remove it (protected.d).
       - name: Install, then try to remove
         run: |
-          dnf -y install out/rpm/atlas-notepad-*.rpm
-          rpm -q atlas-notepad
-          test -f /etc/dnf/protected.d/atlas-notepad.conf
-          if out=$(dnf -y remove atlas-notepad 2>&1); then
+          dnf -y install out/rpm/telamon-notepad-*.rpm
+          rpm -q telamon-notepad
+          test -f /etc/dnf/protected.d/telamon-notepad.conf
+          if out=$(dnf -y remove telamon-notepad 2>&1); then
             printf '%s\n' "$out"
-            echo "dnf removed atlas-notepad: protected.d is not working" >&2
+            echo "dnf removed telamon-notepad: protected.d is not working" >&2
             exit 1
           fi
           printf '%s\n' "$out"
-          printf '%s\n' "$out" | grep -q 'protected packages:.*atlas-notepad'
-          rpm -q atlas-notepad
+          printf '%s\n' "$out" | grep -q 'protected packages:.*telamon-notepad'
+          rpm -q telamon-notepad
 
       - name: Upload the RPM (not from pull requests)
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: atlas-notepad-rpm
+          name: telamon-notepad-rpm
           path: out/rpm/*.rpm
           if-no-files-found: error
           retention-days: 14

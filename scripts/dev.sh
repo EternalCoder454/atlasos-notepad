@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run a command in the fedora:44 build container, with the repo at /src and
-# the cargo and dnf caches in named podman volumes (shared with the other Atlas apps).
+# the cargo and dnf caches in named podman volumes (shared with the other Telamon apps).
 #   scripts/dev.sh <command...>     e.g. scripts/dev.sh cargo test --workspace
 #   scripts/dev.sh                  an interactive shell
 # The first run installs the build dependencies from the spec (cached after).
@@ -12,8 +12,8 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-image=localhost/atlas-notepad-dev:44
-spec_sum=$(sha256sum "$repo/packaging/atlas-notepad.spec" | cut -d' ' -f1)
+image=localhost/telamon-notepad-dev:44
+spec_sum=$(sha256sum "$repo/packaging/telamon-notepad.spec" | cut -d' ' -f1)
 
 # The telamon-ui and telamon-symbols-fonts RPMs in $ATLAS_LOCAL_RPMS: exactly one
 # of each, or nothing is changed.
@@ -71,7 +71,7 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
             rpm -U --replacepkgs --oldpackage "$@"
             cd /
             rm -r /rpms
-            dnf -y builddep /packaging/atlas-notepad.spec' bash "${files[@]}" >&2
+            dnf -y builddep /packaging/telamon-notepad.spec' bash "${files[@]}" >&2
         podman commit --change "LABEL telamon-ui=$build" --change "LABEL spec=$spec_sum" \
             "$ctr" "$image" >/dev/null
         podman rm -f -t 0 "$ctr" >/dev/null
@@ -85,7 +85,7 @@ if [ "$(podman image inspect --format '{{index .Labels "spec"}}' "$image")" != "
     ctr=$(podman run -d --security-opt label=disable -v "$repo/packaging":/packaging:ro \
         -v atlas-dnf:/var/cache/libdnf5 "$image" sleep infinity)
     trap 'podman rm -f -t 0 "$ctr" >/dev/null' EXIT
-    podman exec "$ctr" bash -c 'dnf -y install ccache && dnf -y builddep /packaging/atlas-notepad.spec' >&2
+    podman exec "$ctr" bash -c 'dnf -y install ccache && dnf -y builddep /packaging/telamon-notepad.spec' >&2
     podman commit --change "LABEL spec=$spec_sum" "$ctr" "$image" >/dev/null
     podman rm -f -t 0 "$ctr" >/dev/null
     trap - EXIT
@@ -101,7 +101,7 @@ exec podman run --rm --init "${tty[@]}" --security-opt label=disable \
     -v "$repo":/src -w /src \
     -v atlas-cargo:/root/.cargo/registry \
     -v atlas-cargo-git:/root/.cargo/git \
-    -v atlas-notepad-ccache:/root/.cache/ccache \
+    -v telamon-notepad-ccache:/root/.cache/ccache \
     -e CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/src/target/dev}" \
     "$image" bash -c '
         # C++ through ccache (its own volume), so a new build dir or a

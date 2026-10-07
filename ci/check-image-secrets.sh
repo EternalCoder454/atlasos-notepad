@@ -39,7 +39,7 @@ fi
 
 # The work paths may exist as empty directories (BuildKit leaves the mount
 # points of RUN --mount behind); a file in them fails. Token shapes are looked
-# for where a build writes and in every file of the atlas-* RPMs (binaries
+# for where a build writes and in every file of the telamon-* RPMs (binaries
 # too), the only packages not from Fedora, which must be there; file names only, never the matching line.
 # shellcheck disable=SC2016 # expanded inside the container
 if ! "$engine" run --rm --pull=never --network none --security-opt label=disable "$image" bash -c '
@@ -61,7 +61,7 @@ if ! "$engine" run --rm --pull=never --network none --security-opt label=disable
     if ! rpm -q telamon-ui telamon-symbols-fonts >/dev/null; then
         echo "telamon-ui or telamon-symbols-fonts is not installed"; rc=1
     fi
-    mapfile -t pkgs < <(rpm -qa --qf "%{NAME}\n" "atlas-*")
+    mapfile -t pkgs < <(rpm -qa --qf "%{NAME}\n" "telamon-*")
     if [ "${#pkgs[@]}" -gt 0 ]; then
         # Binaries too (-a): these are libraries and fonts.
         hits=$(rpm -ql "${pkgs[@]}" | while IFS= read -r f; do

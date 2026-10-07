@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes bench/sample-50k.md: about 50 KB of everyday Markdown (headings,
 paragraphs with inline syntax, nested lists, tasks, quotes, code blocks), the
-same every time, for `atlas-notepad --bench`."""
+same every time, for `telamon-notepad --bench`."""
 import random
 from pathlib import Path
 

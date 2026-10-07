@@ -1,15 +1,15 @@
-# Notepad (atlas-notepad)
+# Notepad (telamon-notepad)
 
-AtlasOS's text editor: Rust + Qt 6.11 Quick + Kirigami, CMake + Corrosion.
+Telamon OS's text editor: Rust + Qt 6.11 Quick + Kirigami, CMake + Corrosion.
 Design and S1 figures: `docs/DESIGN.md`. Plan and roadmap: Atlas Notes,
 `AtlasOS/Atlas Text Editor/Plan` and `/Roadmap` (tick a box only after it was
 built and tested).
 
 ## Rules
 
-- Never touch Kate on this machine. The AtlasOS image (Notepad as a
+- Never touch Kate on this machine. The Telamon OS image (Notepad as a
   protected system app and the default text editor, Kate removed) belongs to
-  the AtlasOS session: hand it the RPM or commit, don't edit the image from
+  the Telamon OS session: hand it the RPM or commit, don't edit the image from
   here. Develop here and test in the VM with the RPM installed there.
 - Never read the `Financials/*` or `QuickScript/Keys` notes.
 - Repo: `EternalCoder454/atlasos-notepad` (public). No push without the
@@ -31,7 +31,7 @@ install telamon-ui and telamon-symbols-fonts before the Notepad RPM.
 scripts/dev.sh cargo fmt --all
 scripts/dev.sh cargo clippy --workspace --all-targets -- -D warnings
 scripts/dev.sh cargo test --workspace
-scripts/dev.sh bash -c 'cmake -S apps/atlas-notepad -B build/s1 -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/s1'
+scripts/dev.sh bash -c 'cmake -S apps/telamon-notepad -B build/s1 -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/s1'
 scripts/dev.sh ctest --test-dir build/s1 -j10 --output-on-failure
 scripts/dev.sh ctest --test-dir build/s1 -R editor_test   # one suite while working
 scripts/dev.sh scripts/bench-s1.sh build/s1

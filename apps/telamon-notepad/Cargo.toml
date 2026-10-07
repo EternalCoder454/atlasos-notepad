@@ -1,0 +1,19 @@
+[package]
+name = "telamon-notepad"
+description = "Notepad: the text editor of Telamon OS (Kirigami UI over a Rust core)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# CMake (Corrosion) links the static library into the C++ executable.
+# `rlib` is there so `cargo test` and `cargo clippy` work as usual.
+[lib]
+name = "telamon_notepad"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+telamon-framework-core.workspace = true
+telamon-framework-system.workspace = true
+notepad-core = { path = "../../crates/notepad-core" }
