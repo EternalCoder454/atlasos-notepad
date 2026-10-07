@@ -3,7 +3,7 @@
 # on the software backend at 1x and 1.5x, in Xvfb. Run inside the dev
 # container:  scripts/dev.sh scripts/bench-s1.sh [build dir]
 set -euo pipefail
-bin=${1:-build/s1}/atlas-notepad
+bin=${1:-build/s1}/telamon-notepad
 run=$(mktemp -d)
 export XDG_CONFIG_HOME=$run/config XDG_DATA_HOME=$run/data XDG_CACHE_HOME=$run/cache XDG_STATE_HOME=$run/state
 # Qt's xcb backend waits QT_QPA_UPDATE_IDLE_TIME (5 ms) before every frame it

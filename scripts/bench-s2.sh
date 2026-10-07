@@ -3,7 +3,7 @@
 # (out/s2, written by bench/make-large.py), Markdown and plain, at 1x, in Xvfb.
 # Run inside the dev container:  scripts/dev.sh scripts/bench-s2.sh [build dir] [files...]
 set -uo pipefail
-bin=${1:-build/s1}/atlas-notepad
+bin=${1:-build/s1}/telamon-notepad
 shift || true
 files=("${@:-out/s2/md-1m.md out/s2/md-10m.md out/s2/line-5m.txt}")
 run=$(mktemp -d)

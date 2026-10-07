@@ -3,39 +3,6 @@
 version = 4
 
 [[package]]
-name = "atlas-framework-core"
-version = "1.6.0"
-source = "git+https://github.com/EternalCoder454/atlas-framework?rev=b9d72940fb94178f400c3f074fe8f9744b6c6f53#b9d72940fb94178f400c3f074fe8f9744b6c6f53"
-dependencies = [
- "libc",
- "log",
- "serde",
-]
-
-[[package]]
-name = "atlas-framework-system"
-version = "1.6.0"
-source = "git+https://github.com/EternalCoder454/atlas-framework?rev=b9d72940fb94178f400c3f074fe8f9744b6c6f53#b9d72940fb94178f400c3f074fe8f9744b6c6f53"
-dependencies = [
- "atlas-framework-core",
- "getrandom 0.3.4",
- "libc",
- "log",
- "serde",
- "serde_json",
- "unicode-normalization",
-]
-
-[[package]]
-name = "atlas-notepad"
-version = "0.1.0"
-dependencies = [
- "atlas-framework-core",
- "atlas-framework-system",
- "notepad-core",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -144,7 +111,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "notepad-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "encoding_rs",
  "libc",
@@ -270,6 +237,39 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "telamon-framework-core"
+version = "2.0.0"
+source = "git+https://github.com/EternalCoder454/atlas-framework?rev=8e6a53569363aec3d7e42920875d03ca113ef3eb#8e6a53569363aec3d7e42920875d03ca113ef3eb"
+dependencies = [
+ "libc",
+ "log",
+ "serde",
+]
+
+[[package]]
+name = "telamon-framework-system"
+version = "2.0.0"
+source = "git+https://github.com/EternalCoder454/atlas-framework?rev=8e6a53569363aec3d7e42920875d03ca113ef3eb#8e6a53569363aec3d7e42920875d03ca113ef3eb"
+dependencies = [
+ "getrandom 0.3.4",
+ "libc",
+ "log",
+ "serde",
+ "serde_json",
+ "telamon-framework-core",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "telamon-notepad"
+version = "0.2.0"
+dependencies = [
+ "notepad-core",
+ "telamon-framework-core",
+ "telamon-framework-system",
 ]
 
 [[package]]

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Notepad
+GenericName=Text Editor
+Comment=Write and edit text and Markdown files
+Exec=telamon-notepad %U
+Icon=net.eterneon.telamon.notepad
+Terminal=false
+Categories=Qt;KDE;Utility;TextEditor;
+Keywords=text;editor;notepad;markdown;notes;txt;md;
+MimeType=text/plain;text/markdown;
+StartupNotify=true
+X-KDE-StartupNotify=true
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=telamon-notepad --new-window

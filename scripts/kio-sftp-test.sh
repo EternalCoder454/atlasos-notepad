@@ -129,7 +129,7 @@ status=0
 echo "== app_test over sftp"
 # umask 000 for the test process only: the files it makes are writable for
 # the server's user too.
-(umask 000; dbus-run-session --config-file="$here/../apps/atlas-notepad/tests/dbus-session.conf" -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab kioSaveRaisesNoBanner relocateDuringRemoteSave renameDuringRemoteLoad) > "$work/app_test.log" 2>&1
+(umask 000; dbus-run-session --config-file="$here/../apps/telamon-notepad/tests/dbus-session.conf" -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab kioSaveRaisesNoBanner relocateDuringRemoteSave renameDuringRemoteLoad) > "$work/app_test.log" 2>&1
 test_rc=$?
 grep -E "^(PASS|FAIL|SKIP|Totals|   Loc|   Actual|   Expected)" "$work/app_test.log"
 [ "$test_rc" = 0 ] || { status=1; echo "app_test exit $test_rc"; tail -15 "$work/app_test.log"; tail -15 "$work/sshd.log"; }
@@ -146,11 +146,11 @@ sessions_before=$(grep -c "subsystem 'sftp'" "$work/sshd.log")
     # The bus inside the display, so the services KIO starts (kpasswdserver)
     # are born with it.
     xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session -- \
-        timeout -s TERM 25 "$build/atlas-notepad" "sftp://np-sftp@127.0.0.1:2222$work/files/e2e.txt" > "$work/app.log" 2>&1
+        timeout -s TERM 25 "$build/telamon-notepad" "sftp://np-sftp@127.0.0.1:2222$work/files/e2e.txt" > "$work/app.log" 2>&1
 )
 # Only the app's and KIO's own lines: the container's portal daemons grumble
 # about having no desktop.
-grep -iE "atlas-notepad|qrc:|kf\.kio|kioworker|sftp|Main\.qml|QML|qt\." "$work/app.log" | grep -iE "error|fail|critical|warn|cannot|can't" | grep -v "fuse init" | grep -v xdg-desktop-portal > "$work/app.errors"
+grep -iE "telamon-notepad|qrc:|kf\.kio|kioworker|sftp|Main\.qml|QML|qt\." "$work/app.log" | grep -iE "error|fail|critical|warn|cannot|can't" | grep -v "fuse init" | grep -v xdg-desktop-portal > "$work/app.errors"
 echo "app log lines with errors or warnings: $(wc -l < "$work/app.errors")"
 head -10 "$work/app.errors"
 if [ "$(grep -c "subsystem 'sftp'" "$work/sshd.log")" -gt "$sessions_before" ]; then
