@@ -10,10 +10,10 @@
 #include <QFont>
 #include <QFontMetricsF>
 #include <QHash>
+#include <QImage>
 #include <QList>
 #include <QPointer>
 #include <QQuickItem>
-#include <QQuickPaintedItem>
 #include <QQuickTextDocument>
 #include <QSyntaxHighlighter>
 #include <QTextBlock>
@@ -342,9 +342,9 @@ private:
 
 // Draws a Formatted view's bullets, checkboxes, quote bars, rules and code
 // block backgrounds. Make it a child of the TextEdit with z below it, laid
-// over the visible part only (y = the view's contentY, height = the view's):
-// sized to the whole document, its image would be as tall.
-class MarkdownDecorations : public QQuickPaintedItem
+// over the visible part only (y = the view's contentY, height = the view's).
+// They are drawn into one image covering just the shapes, not the view.
+class MarkdownDecorations : public QQuickItem
 {
     Q_OBJECT
     QML_ELEMENT
@@ -358,8 +358,6 @@ public:
         return m_editor;
     }
     void setEditor(MarkdownEditor *editor);
-
-    void paint(QPainter *painter) override;
 
     // The language shown on an opening fence line ("```rust title=x" gives
     // "rust"): its first word, after an optional "{" (```{r}), cut at the first
@@ -400,12 +398,16 @@ private:
     const Elided &elide(const QString &label, qreal width) const;
     void watch();
     void layOut(std::vector<Shape> &out) const;
+    void paint(QPainter *painter) const;
     static int afterQuotesOf(const QTextBlock &block);
 
     QPointer<MarkdownEditor> m_editor;
     QPointer<QTextDocument> m_doc;
-    std::vector<Shape> m_shapes;
+    std::vector<Shape> m_shapes; // in the document's coordinates
     std::vector<Shape> m_scratch;
+    QPointF m_offset; // from the document's coordinates to the item's, for m_shapes
+    QImage m_image; // what the node shows (its top left part), kept to be painted again
+    QSize m_imageFor; // the item's size in pixels m_image was made for
     mutable QFont m_labelFont;
     mutable qreal m_labelDpr = 1;
     mutable QFontMetricsF m_labelMetrics{QFont()};

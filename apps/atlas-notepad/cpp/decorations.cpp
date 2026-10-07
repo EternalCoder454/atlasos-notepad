@@ -6,10 +6,14 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QFontMetricsF>
+#include <QImage>
 #include <QPainter>
 #include <QQuickWindow>
 #include <QPainterPath>
+#include <QSGImageNode>
 #include <QTextLayout>
+
+#include <cmath>
 
 namespace
 {
@@ -134,9 +138,9 @@ const MarkdownDecorations::Elided &MarkdownDecorations::elide(const QString &lab
 }
 
 MarkdownDecorations::MarkdownDecorations(QQuickItem *parent)
-    : QQuickPaintedItem(parent)
+    : QQuickItem(parent)
 {
-    setAntialiasing(true);
+    setFlag(ItemHasContents);
 }
 
 void MarkdownDecorations::setEditor(MarkdownEditor *editor)
@@ -182,37 +186,116 @@ void MarkdownDecorations::watch()
 
 void MarkdownDecorations::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry)
 {
-    QQuickPaintedItem::geometryChange(newGeometry, oldGeometry);
+    QQuickItem::geometryChange(newGeometry, oldGeometry);
+    if (newGeometry.size() != oldGeometry.size()) {
+        update(); // the image is cut to the item
+    }
     polish();
 }
 
+// Again when the shapes or where they land in the item changed: the item
+// follows the view, so a scroll that keeps the same shapes still moves them.
 void MarkdownDecorations::updatePolish()
 {
     layOut(m_scratch);
-    if (m_scratch != m_shapes) {
+    const QPointF origin = m_editor ? m_editor->textOrigin() : QPointF();
+    const QPointF offset(origin.x(), origin.y() - y());
+    if (m_scratch != m_shapes || (!m_scratch.empty() && offset != m_offset)) {
         m_shapes.swap(m_scratch);
+        m_offset = offset;
         update();
     }
 }
 
-// Nothing to draw (no Markdown shapes in view, or a new tab), or a tab not
-// shown: no node, so no image the size of the view, which the software
-// renderer holds twice, and nothing for it to blend on every frame.
-QSGNode *MarkdownDecorations::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *data)
+// One image of the part of the item the shapes cover, on the same pixel grid
+// as an image of the whole item (what a QQuickPaintedItem would draw), so the
+// pixels are the same. Nothing to draw (no shapes in view, a new tab) or a
+// tab not shown: no node and no image.
+QSGNode *MarkdownDecorations::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 {
-    if (m_shapes.empty() || !isVisible()) {
-        delete oldNode;
+    auto *node = static_cast<QSGImageNode *>(oldNode);
+    QQuickWindow *win = window();
+    const QSize size(qRound(width()), qRound(height()));
+    QRect pixels;
+    QSize texture;
+    if (!m_shapes.empty() && isVisible() && win && !size.isEmpty()) {
+        texture = size * win->effectiveDevicePixelRatio();
+        QRectF extent;
+        for (const Shape &s : m_shapes) {
+            extent |= s.rect;
+        }
+        // Pens and antialiasing reach a little past the rectangles.
+        extent = extent.translated(m_offset).adjusted(-3, -3, 3, 3);
+        const qreal sx = qreal(texture.width()) / size.width();
+        const qreal sy = qreal(texture.height()) / size.height();
+        const QPoint topLeft(int(std::floor(extent.left() * sx)), int(std::floor(extent.top() * sy)));
+        const QPoint bottomRight(int(std::ceil(extent.right() * sx)), int(std::ceil(extent.bottom() * sy)));
+        pixels = QRect(topLeft, bottomRight - QPoint(1, 1)).intersected(QRect(QPoint(0, 0), texture));
+        // At a scale where the item's size in pixels isn't whole, the image is
+        // stretched a little when drawn; the stretch lands on the same pixels
+        // only from where the whole item's image would start.
+        const qreal dpr = win->effectiveDevicePixelRatio();
+        if (texture.width() != size.width() * dpr) {
+            pixels.setLeft(0);
+        }
+        if (texture.height() != size.height() * dpr) {
+            pixels.setTop(0);
+        }
+    }
+    if (pixels.isEmpty()) {
+        delete node;
+        m_image = QImage();
         return nullptr;
     }
-    return QQuickPaintedItem::updatePaintNode(oldNode, data);
+    const qreal sx = qreal(texture.width()) / size.width();
+    const qreal sy = qreal(texture.height()) / size.height();
+    if (node) {
+        // The texture shares m_image: let it go first, or painting would copy
+        // the image. The node gets the new texture below, before it is drawn.
+        node->setOwnsTexture(false);
+        delete node->texture();
+    }
+    // Grown to the largest part needed so far (a scroll then paints into the
+    // same image), dropped when the item changes size.
+    if (m_imageFor != texture) {
+        m_image = QImage();
+        m_imageFor = texture;
+    }
+    if (m_image.width() < pixels.width() || m_image.height() < pixels.height()) {
+        m_image = QImage(pixels.size().expandedTo(m_image.size()), QImage::Format_ARGB32_Premultiplied);
+    }
+    {
+        QPainter painter(&m_image);
+        const QRect used(QPoint(0, 0), pixels.size());
+        painter.setClipRect(used);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(used, Qt::transparent);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
+        painter.translate(-pixels.x(), -pixels.y());
+        painter.scale(sx, sy);
+        paint(&painter);
+    }
+    if (!node) {
+        node = win->createImageNode();
+        node->setOwnsTexture(true);
+        node->setFiltering(QSGTexture::Linear);
+    }
+    node->setTexture(win->createTextureFromImage(m_image));
+    node->setOwnsTexture(true);
+    node->setSourceRect(QRectF(QPointF(0, 0), pixels.size()));
+    node->setRect(QRectF(pixels.x() / sx, pixels.y() / sy, pixels.width() / sx, pixels.height() / sy));
+    return node;
 }
 
 void MarkdownDecorations::itemChange(ItemChange change, const ItemChangeData &value)
 {
-    QQuickPaintedItem::itemChange(change, value);
+    QQuickItem::itemChange(change, value);
     if (change == ItemVisibleHasChanged) {
-        update();
         polish();
+    }
+    if (change == ItemVisibleHasChanged || change == ItemDevicePixelRatioHasChanged) {
+        update();
     }
 }
 
@@ -302,14 +385,13 @@ int MarkdownDecorations::afterQuotesOf(const QTextBlock &block)
     return info->quoteMarks.last() + 2;
 }
 
-void MarkdownDecorations::paint(QPainter *painter)
+void MarkdownDecorations::paint(QPainter *painter) const
 {
     if (!m_editor || m_shapes.empty()) {
         return;
     }
-    const QPointF origin = m_editor->textOrigin();
     painter->setRenderHint(QPainter::Antialiasing);
-    painter->translate(origin.x(), origin.y() - y());
+    painter->translate(m_offset);
     const QColor text = m_editor->textColor();
     const QColor dim = m_editor->dimColor();
     const QColor accent = m_editor->accentColor();
