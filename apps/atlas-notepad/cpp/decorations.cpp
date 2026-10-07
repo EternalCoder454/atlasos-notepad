@@ -255,14 +255,15 @@ QSGNode *MarkdownDecorations::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeD
         node->setOwnsTexture(false);
         delete node->texture();
     }
-    // Grown to the largest part needed so far (a scroll then paints into the
-    // same image), dropped when the item changes size.
+    // The part needed at first; once that grows (a scroll), the whole item,
+    // so scrolling paints into the same image. Dropped when the item changes
+    // size.
     if (m_imageFor != texture) {
         m_image = QImage();
         m_imageFor = texture;
     }
     if (m_image.width() < pixels.width() || m_image.height() < pixels.height()) {
-        m_image = QImage(pixels.size().expandedTo(m_image.size()), QImage::Format_ARGB32_Premultiplied);
+        m_image = QImage(m_image.isNull() ? pixels.size() : texture, QImage::Format_ARGB32_Premultiplied);
     }
     {
         QPainter painter(&m_image);
