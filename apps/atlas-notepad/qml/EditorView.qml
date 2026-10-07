@@ -431,9 +431,10 @@ FocusScope {
                     if (position < edit.selectionStart || position > edit.selectionEnd) {
                         edit.cursorPosition = position;
                     }
-                    contextMenu.link = view.document.markdown ? md.linkAt(position) : "";
-                    contextMenu.spelling = spell.wordAt(position);
-                    contextMenu.popup(edit, point.position.x, point.position.y);
+                    const menu = lazyContextMenu.get();
+                    menu.link = view.document.markdown ? md.linkAt(position) : "";
+                    menu.spelling = spell.wordAt(position);
+                    menu.popup(edit, point.position.x, point.position.y);
                 }
             }
 
@@ -573,129 +574,136 @@ FocusScope {
         indentWidth: view.document.indentWidth
     }
 
-    ContextMenu {
-        id: contextMenu
+    // The context menu, made on the first right-click.
+    Lazy {
+        id: lazyContextMenu
+        host: view
+        component: Component {
+            ContextMenu {
+                id: contextMenu
 
-        property string link
-        // The misspelled word under the click: {start, end, word, suggestions}.
-        property var spelling: ({})
-        readonly property bool misspelled: spelling.word !== undefined
-        readonly property var suggestions: misspelled ? spelling.suggestions : []
+                property string link
+                // The misspelled word under the click: {start, end, word, suggestions}.
+                property var spelling: ({})
+                readonly property bool misspelled: spelling.word !== undefined
+                readonly property var suggestions: misspelled ? spelling.suggestions : []
 
-        component Suggestion: ContextMenuItem {
-            required property int index
-            visible: contextMenu.suggestions.length > index
-            text: visible ? contextMenu.suggestions[index] : ""
-            onTriggered: spell.replace(contextMenu.spelling.start, contextMenu.spelling.end, contextMenu.spelling.word, text)
-        }
+                component Suggestion: ContextMenuItem {
+                    required property int index
+                    visible: contextMenu.suggestions.length > index
+                    text: visible ? contextMenu.suggestions[index] : ""
+                    onTriggered: spell.replace(contextMenu.spelling.start, contextMenu.spelling.end, contextMenu.spelling.word, text)
+                }
 
-        Suggestion { index: 0 }
-        Suggestion { index: 1 }
-        Suggestion { index: 2 }
-        Suggestion { index: 3 }
-        Suggestion { index: 4 }
-        ContextMenuItem {
-            visible: contextMenu.misspelled && contextMenu.suggestions.length === 0
-            enabled: false
-            text: qsTr("No Suggestions")
-        }
-        ContextMenuItem {
-            visible: contextMenu.misspelled
-            text: qsTr("Add to Dictionary")
-            onTriggered: spell.addToDictionary(contextMenu.spelling.word)
-        }
-        ContextMenuItem {
-            visible: contextMenu.misspelled
-            text: qsTr("Ignore")
-            onTriggered: spell.ignore(contextMenu.spelling.word)
-        }
-        ContextMenuSeparator {
-            visible: contextMenu.misspelled
-        }
+                Suggestion { index: 0 }
+                Suggestion { index: 1 }
+                Suggestion { index: 2 }
+                Suggestion { index: 3 }
+                Suggestion { index: 4 }
+                ContextMenuItem {
+                    visible: contextMenu.misspelled && contextMenu.suggestions.length === 0
+                    enabled: false
+                    text: qsTr("No Suggestions")
+                }
+                ContextMenuItem {
+                    visible: contextMenu.misspelled
+                    text: qsTr("Add to Dictionary")
+                    onTriggered: spell.addToDictionary(contextMenu.spelling.word)
+                }
+                ContextMenuItem {
+                    visible: contextMenu.misspelled
+                    text: qsTr("Ignore")
+                    onTriggered: spell.ignore(contextMenu.spelling.word)
+                }
+                ContextMenuSeparator {
+                    visible: contextMenu.misspelled
+                }
 
-        ContextMenuItem {
-            visible: contextMenu.link.length > 0
-            enabled: App.linkUrl(contextMenu.link).length > 0
-            text: App.linkTarget(contextMenu.link).length > 0 ? qsTr("Open Link (%1)").arg(App.linkTarget(contextMenu.link)) : qsTr("Open Link")
-            icon.name: "internet-services"
-            onTriggered: view.openLink(contextMenu.link)
-        }
-        ContextMenuItem {
-            visible: contextMenu.link.length > 0
-            text: qsTr("Copy Link")
-            icon.name: "edit-copy"
-            onTriggered: App.copyToClipboard(contextMenu.link)
-        }
-        ContextMenuSeparator {
-            visible: contextMenu.link.length > 0
-        }
-        ContextMenuItem {
-            text: qsTr("Undo")
-            icon.name: "edit-undo"
-            shortcutText: "Ctrl+Z"
-            enabled: edit.canUndo
-            onTriggered: edit.undo()
-        }
-        ContextMenuItem {
-            text: qsTr("Redo")
-            icon.name: "edit-redo"
-            shortcutText: "Ctrl+Y"
-            enabled: edit.canRedo
-            onTriggered: edit.redo()
-        }
-        ContextMenuSeparator {}
-        ContextMenuItem {
-            text: qsTr("Cut")
-            icon.name: "edit-cut"
-            shortcutText: "Ctrl+X"
-            enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
-            onTriggered: edit.cut()
-        }
-        ContextMenuItem {
-            text: qsTr("Copy")
-            icon.name: "edit-copy"
-            shortcutText: "Ctrl+C"
-            enabled: edit.selectionStart !== edit.selectionEnd
-            onTriggered: edit.copy()
-        }
-        ContextMenuItem {
-            text: qsTr("Paste")
-            icon.name: "edit-paste"
-            shortcutText: "Ctrl+V"
-            enabled: edit.canPaste
-            onTriggered: edit.paste()
-        }
-        ContextMenuItem {
-            text: qsTr("Delete")
-            icon.name: "edit-delete"
-            enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
-            onTriggered: edit.remove(edit.selectionStart, edit.selectionEnd)
-        }
-        ContextMenuSeparator {}
-        ContextMenuItem {
-            text: qsTr("Select All")
-            icon.name: "edit-select-all"
-            shortcutText: "Ctrl+A"
-            onTriggered: edit.selectAll()
-        }
-        ContextMenuSeparator {
-            visible: view.document.markdown
-        }
-        ContextMenuItem {
-            visible: view.document.markdown
-            enabled: !edit.readOnly
-            text: qsTr("Link…")
-            icon.name: "insert-link"
-            shortcutText: "Ctrl+K"
-            onTriggered: view.linkRequested()
-        }
-        ContextMenuItem {
-            visible: view.document.markdown
-            enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
-            text: qsTr("Clear Formatting")
-            icon.name: "edit-clear-all"
-            shortcutText: "Ctrl+Space"
-            onTriggered: md.clearFormatting()
+                ContextMenuItem {
+                    visible: contextMenu.link.length > 0
+                    enabled: App.linkUrl(contextMenu.link).length > 0
+                    text: App.linkTarget(contextMenu.link).length > 0 ? qsTr("Open Link (%1)").arg(App.linkTarget(contextMenu.link)) : qsTr("Open Link")
+                    icon.name: "internet-services"
+                    onTriggered: view.openLink(contextMenu.link)
+                }
+                ContextMenuItem {
+                    visible: contextMenu.link.length > 0
+                    text: qsTr("Copy Link")
+                    icon.name: "edit-copy"
+                    onTriggered: App.copyToClipboard(contextMenu.link)
+                }
+                ContextMenuSeparator {
+                    visible: contextMenu.link.length > 0
+                }
+                ContextMenuItem {
+                    text: qsTr("Undo")
+                    icon.name: "edit-undo"
+                    shortcutText: "Ctrl+Z"
+                    enabled: edit.canUndo
+                    onTriggered: edit.undo()
+                }
+                ContextMenuItem {
+                    text: qsTr("Redo")
+                    icon.name: "edit-redo"
+                    shortcutText: "Ctrl+Y"
+                    enabled: edit.canRedo
+                    onTriggered: edit.redo()
+                }
+                ContextMenuSeparator {}
+                ContextMenuItem {
+                    text: qsTr("Cut")
+                    icon.name: "edit-cut"
+                    shortcutText: "Ctrl+X"
+                    enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
+                    onTriggered: edit.cut()
+                }
+                ContextMenuItem {
+                    text: qsTr("Copy")
+                    icon.name: "edit-copy"
+                    shortcutText: "Ctrl+C"
+                    enabled: edit.selectionStart !== edit.selectionEnd
+                    onTriggered: edit.copy()
+                }
+                ContextMenuItem {
+                    text: qsTr("Paste")
+                    icon.name: "edit-paste"
+                    shortcutText: "Ctrl+V"
+                    enabled: edit.canPaste
+                    onTriggered: edit.paste()
+                }
+                ContextMenuItem {
+                    text: qsTr("Delete")
+                    icon.name: "edit-delete"
+                    enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
+                    onTriggered: edit.remove(edit.selectionStart, edit.selectionEnd)
+                }
+                ContextMenuSeparator {}
+                ContextMenuItem {
+                    text: qsTr("Select All")
+                    icon.name: "edit-select-all"
+                    shortcutText: "Ctrl+A"
+                    onTriggered: edit.selectAll()
+                }
+                ContextMenuSeparator {
+                    visible: view.document.markdown
+                }
+                ContextMenuItem {
+                    visible: view.document.markdown
+                    enabled: !edit.readOnly
+                    text: qsTr("Link…")
+                    icon.name: "insert-link"
+                    shortcutText: "Ctrl+K"
+                    onTriggered: view.linkRequested()
+                }
+                ContextMenuItem {
+                    visible: view.document.markdown
+                    enabled: !edit.readOnly && edit.selectionStart !== edit.selectionEnd
+                    text: qsTr("Clear Formatting")
+                    icon.name: "edit-clear-all"
+                    shortcutText: "Ctrl+Space"
+                    onTriggered: md.clearFormatting()
+                }
+            }
         }
     }
 

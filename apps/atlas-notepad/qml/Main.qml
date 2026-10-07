@@ -170,6 +170,24 @@ AtlasWindow {
         onActivated: action.trigger()
     }
 
+    // A status bar cell with a menu, made when the cell is first pressed
+    // or focused (Return opens it from the keyboard).
+    component MenuCell: StatusBarItem {
+        id: cell
+        property Component menuComponent
+        readonly property Lazy lazyMenu: Lazy {
+            component: cell.menuComponent
+            host: cell
+        }
+        menu: lazyMenu.object
+        onPressed: lazyMenu.get()
+        onActiveFocusChanged: {
+            if (activeFocus) {
+                lazyMenu.get();
+            }
+        }
+    }
+
     KeyedAction {
         id: newTabAction
         text: qsTr("New Tab")
@@ -358,7 +376,7 @@ AtlasWindow {
         text: qsTr("Go To Line…")
         keys: "Ctrl+G"
         enabled: root.view !== null && !root.settingsOpen
-        onTriggered: goToDialog.open()
+        onTriggered: lazyGoTo.get().open()
     }
     KeyedAction {
         id: timeDateAction
@@ -619,12 +637,12 @@ AtlasWindow {
     KeyedAction {
         id: keyboardShortcutsAction
         text: qsTr("Keyboard Shortcuts")
-        onTriggered: shortcutsDialog.open()
+        onTriggered: lazyShortcuts.get().open()
     }
     KeyedAction {
         id: aboutAction
         text: qsTr("About Notepad")
-        onTriggered: aboutDialog.open()
+        onTriggered: lazyAbout.get().open()
     }
     KeyedAction {
         id: settingsAction
@@ -791,12 +809,17 @@ AtlasWindow {
 
     // --- Menus.
 
-    GlobalMenu {
-        window: root
-        actions: root.actions
-        withShortcuts: App.hasGlobalMenu
-        editorKeys: root.editorKeys
-        onOpenRecent: path => root.documents.open([path])
+    // Only with a global menu to show it in: without one its menus are
+    // never seen.
+    Instantiator {
+        active: App.hasGlobalMenu
+        delegate: GlobalMenu {
+            window: root
+            actions: root.actions
+            withShortcuts: App.hasGlobalMenu
+            editorKeys: root.editorKeys
+            onOpenRecent: path => root.documents.open([path])
+        }
     }
 
     // --- Layout.
@@ -811,7 +834,7 @@ AtlasWindow {
             symbol: Symbols.Menu
             text: qsTr("Menu")
             shortcutText: "F10"
-            onClicked: fallbackMenu.popup(menuButton, 0, menuButton.height)
+            onClicked: lazyFallbackMenu.get().popup(menuButton, 0, menuButton.height)
 
             // The keyboard way in, as F10 opens a menu bar elsewhere.
             Shortcut {
@@ -820,10 +843,15 @@ AtlasWindow {
                 onActivated: menuButton.clicked()
             }
 
-            FallbackMenu {
-                id: fallbackMenu
-                actions: root.actions
-                onOpenRecent: path => root.documents.open([path])
+            Lazy {
+                id: lazyFallbackMenu
+                host: menuButton
+                component: Component {
+                    FallbackMenu {
+                        actions: root.actions
+                        onOpenRecent: path => root.documents.open([path])
+                    }
+                }
             }
         }
         trailing: AtlasSegmentedControl {
@@ -883,35 +911,42 @@ AtlasWindow {
             onContextMenuRequested: (index, position) => {
                 // The tab's document, not its place: another tab may
                 // close while the menu is open.
-                tabMenu.target = root.documents.documents()[index] ?? null;
-                tabMenu.popup(tabBar, position.x, position.y);
+                const menu = lazyTabMenu.get();
+                menu.target = root.documents.documents()[index] ?? null;
+                menu.popup(tabBar, position.x, position.y);
             }
         }
-        ContextMenu {
-            id: tabMenu
-            property var target: null
-            // Focus that fell to nothing when the menu closed goes back to
-            // the editor through the window's fallback; a click elsewhere
-            // keeps the focus where it landed.
-            onClosed: target = null
-            ContextMenuItem {
-                text: qsTr("New Tab")
-                shortcutText: App.shortcutText(newTabAction.keys)
-                onTriggered: root.documents.newTab()
-            }
-            ContextMenuItem {
-                text: qsTr("Reopen Closed Tab")
-                shortcutText: App.shortcutText(reopenTabAction.keys)
-                enabled: root.documents.canReopenClosed
-                onTriggered: root.documents.reopenClosed()
-            }
-            ContextMenuSeparator {}
-            ContextMenuItem {
-                text: qsTr("Close Tab")
-                onTriggered: {
-                    const index = tabMenu.target ? root.documents.indexOf(tabMenu.target) : -1;
-                    if (index >= 0) {
-                        root.closeTab(index);
+        Lazy {
+            id: lazyTabMenu
+            host: tabRow
+            component: Component {
+                ContextMenu {
+                    id: tabMenu
+                    property var target: null
+                    // Focus that fell to nothing when the menu closed goes back to
+                    // the editor through the window's fallback; a click elsewhere
+                    // keeps the focus where it landed.
+                    onClosed: target = null
+                    ContextMenuItem {
+                        text: qsTr("New Tab")
+                        shortcutText: App.shortcutText(newTabAction.keys)
+                        onTriggered: root.documents.newTab()
+                    }
+                    ContextMenuItem {
+                        text: qsTr("Reopen Closed Tab")
+                        shortcutText: App.shortcutText(reopenTabAction.keys)
+                        enabled: root.documents.canReopenClosed
+                        onTriggered: root.documents.reopenClosed()
+                    }
+                    ContextMenuSeparator {}
+                    ContextMenuItem {
+                        text: qsTr("Close Tab")
+                        onTriggered: {
+                            const index = tabMenu.target ? root.documents.indexOf(tabMenu.target) : -1;
+                            if (index >= 0) {
+                                root.closeTab(index);
+                            }
+                        }
                     }
                 }
             }
@@ -1032,8 +1067,8 @@ AtlasWindow {
                 visible: (root.markdown || root.code) && root.settings.formattingToolbar && !root.settingsOpen
                 z: 5
                 code: root.code
-                popoverOpen: codePopover.visible
-                onCodeSettingsRequested: button => codePopover.openAt(button, "left")
+                popoverOpen: lazyCodePopover.visible
+                onCodeSettingsRequested: button => lazyCodePopover.get().openAt(button, "left")
                 pointerNear: editorsHover.hovered && editorsHover.point.position.x >= x - nearDistance && editorsHover.point.position.y >= y - nearDistance && editorsHover.point.position.y <= y + height + nearDistance
                 actions: root.actions
                 heading: root.view ? root.view.heading : 0
@@ -1050,14 +1085,20 @@ AtlasWindow {
                 }
             }
 
-            CodePopover {
-                id: codePopover
-                document: root.document
-                editor: root.view ? root.view.code : null
-                // The editor gets the keyboard back.
-                onClosed: {
-                    if (root.view) {
-                        root.view.focusEditor();
+            Lazy {
+                id: lazyCodePopover
+                host: editors
+                component: Component {
+                    CodePopover {
+                        id: codePopover
+                        document: root.document
+                        editor: root.view ? root.view.code : null
+                        // The editor gets the keyboard back.
+                        onClosed: {
+                            if (root.view) {
+                                root.view.focusEditor();
+                            }
+                        }
                     }
                 }
             }
@@ -1198,7 +1239,7 @@ AtlasWindow {
                 text: root.code ? root.document.language : ""
                 clickable: true
                 toolTip: qsTr("Language")
-                onClicked: codePopover.openAt(languageCell, "above")
+                onClicked: lazyCodePopover.get().openAt(languageCell, "above")
             }
             StatusBarItem {
                 id: indentCell
@@ -1206,7 +1247,7 @@ AtlasWindow {
                 text: !root.code ? "" : root.document.insertSpaces ? qsTr("Spaces: %1").arg(root.document.indentWidth) : qsTr("Tabs")
                 clickable: true
                 toolTip: qsTr("Indentation")
-                onClicked: codePopover.openAt(indentCell, "above")
+                onClicked: lazyCodePopover.get().openAt(indentCell, "above")
             }
             StatusBarItem {
                 visible: root.document !== null && root.document.isRemote
@@ -1214,87 +1255,93 @@ AtlasWindow {
                 text: root.document ? root.document.host : ""
                 toolTip: root.document ? root.document.toolTip : ""
             }
-            StatusBarItem {
+            MenuCell {
                 visible: root.settings.zoom !== 100
                 text: qsTr("%1%").arg(root.settings.zoom)
                 clickable: true
                 toolTip: qsTr("Zoom")
-                menu: ContextMenu {
-                    ContextMenuItem {
-                        action: zoomInAction
-                        shortcutText: "Ctrl++"
-                    }
-                    ContextMenuItem {
-                        action: zoomOutAction
-                        shortcutText: "Ctrl+-"
-                    }
-                    ContextMenuItem {
-                        action: zoomResetAction
-                        shortcutText: "Ctrl+0"
+                menuComponent: Component {
+                    ContextMenu {
+                        ContextMenuItem {
+                            action: zoomInAction
+                            shortcutText: "Ctrl++"
+                        }
+                        ContextMenuItem {
+                            action: zoomOutAction
+                            shortcutText: "Ctrl+-"
+                        }
+                        ContextMenuItem {
+                            action: zoomResetAction
+                            shortcutText: "Ctrl+0"
+                        }
                     }
                 }
             }
-            StatusBarItem {
+            MenuCell {
                 text: !root.document ? "" : root.document.lineEnding === Document.CrLf ? qsTr("CRLF") : root.document.lineEnding === Document.Cr ? qsTr("CR") : qsTr("LF")
                 clickable: root.editable
                 toolTip: qsTr("Line endings")
-                menu: ContextMenu {
-                    Repeater {
-                        model: [
-                            [Document.Lf, qsTr("Unix (LF)")],
-                            [Document.CrLf, qsTr("Windows (CRLF)")],
-                            [Document.Cr, qsTr("Macintosh (CR)")]
-                        ]
-                        delegate: ContextMenuItem {
-                            required property var modelData
-                            text: modelData[1]
-                            checkable: true
-                            checked: root.document !== null && root.document.lineEnding === modelData[0]
-                            onTriggered: root.document.lineEnding = modelData[0]
+                menuComponent: Component {
+                    ContextMenu {
+                        Repeater {
+                            model: [
+                                [Document.Lf, qsTr("Unix (LF)")],
+                                [Document.CrLf, qsTr("Windows (CRLF)")],
+                                [Document.Cr, qsTr("Macintosh (CR)")]
+                            ]
+                            delegate: ContextMenuItem {
+                                required property var modelData
+                                text: modelData[1]
+                                checkable: true
+                                checked: root.document !== null && root.document.lineEnding === modelData[0]
+                                onTriggered: root.document.lineEnding = modelData[0]
+                            }
                         }
                     }
                 }
             }
-            StatusBarItem {
+            MenuCell {
                 text: root.document ? root.document.encodingName : ""
                 clickable: true
                 toolTip: qsTr("Encoding")
-                menu: ContextMenu {
-                    id: encodingMenu
-                    readonly property var encodings: [
-                        [Document.Utf8, "UTF-8"],
-                        [Document.Utf8Bom, qsTr("UTF-8 with BOM")],
-                        [Document.Utf16Le, "UTF-16 LE"],
-                        [Document.Utf16Be, "UTF-16 BE"],
-                        [Document.Windows1252, "Windows-1252"]
-                    ]
-                    ContextMenuItem {
-                        text: qsTr("Save With")
-                        enabled: false
-                    }
-                    Repeater {
-                        model: encodingMenu.encodings
-                        delegate: ContextMenuItem {
-                            required property var modelData
-                            text: modelData[1]
-                            checkable: true
-                            enabled: root.editable
-                            checked: root.document !== null && root.document.encoding === modelData[0]
-                            onTriggered: root.document.encoding = modelData[0]
+                menuComponent: Component {
+                    ContextMenu {
+                        id: encodingMenu
+                        readonly property var encodings: [
+                            [Document.Utf8, "UTF-8"],
+                            [Document.Utf8Bom, qsTr("UTF-8 with BOM")],
+                            [Document.Utf16Le, "UTF-16 LE"],
+                            [Document.Utf16Be, "UTF-16 BE"],
+                            [Document.Windows1252, "Windows-1252"]
+                        ]
+                        ContextMenuItem {
+                            text: qsTr("Save With")
+                            enabled: false
                         }
-                    }
-                    ContextMenuSeparator {}
-                    ContextMenuItem {
-                        text: qsTr("Reopen With")
-                        enabled: false
-                    }
-                    Repeater {
-                        model: encodingMenu.encodings
-                        delegate: ContextMenuItem {
-                            required property var modelData
-                            text: modelData[1]
-                            enabled: root.document !== null && root.document.path.length > 0 && !root.document.modified
-                            onTriggered: root.document.reopenWithEncoding(modelData[0])
+                        Repeater {
+                            model: encodingMenu.encodings
+                            delegate: ContextMenuItem {
+                                required property var modelData
+                                text: modelData[1]
+                                checkable: true
+                                enabled: root.editable
+                                checked: root.document !== null && root.document.encoding === modelData[0]
+                                onTriggered: root.document.encoding = modelData[0]
+                            }
+                        }
+                        ContextMenuSeparator {}
+                        ContextMenuItem {
+                            text: qsTr("Reopen With")
+                            enabled: false
+                        }
+                        Repeater {
+                            model: encodingMenu.encodings
+                            delegate: ContextMenuItem {
+                                required property var modelData
+                                text: modelData[1]
+                                enabled: root.document !== null && root.document.path.length > 0 && !root.document.modified
+                                onTriggered: root.document.reopenWithEncoding(modelData[0])
+                            }
                         }
                     }
                 }
@@ -1304,218 +1351,254 @@ AtlasWindow {
 
     // --- Dialogs.
 
-    ConfirmDialog {
-        id: unsavedDialog
+    Lazy {
+        id: lazyUnsaved
+        host: root.contentItem
+        component: Component {
+            ConfirmDialog {
+                id: unsavedDialog
 
-        property Document target: null
-        property var then: null
-        // This showing has its answer: Save, Don't Save, or a close (Cancel,
-        // Escape, the window). Later clicks during the fade-out are ignored.
-        property bool answered: false
-        property bool cancelled: false
-        // When the last answer came: the next prompt of a chain opens under
-        // the pointer at once, and a double-click must not answer it too.
-        property double answeredAt: 0
+                property Document target: null
+                property var then: null
+                // This showing has its answer: Save, Don't Save, or a close (Cancel,
+                // Escape, the window). Later clicks during the fade-out are ignored.
+                property bool answered: false
+                property bool cancelled: false
+                // When the last answer came: the next prompt of a chain opens under
+                // the pointer at once, and a double-click must not answer it too.
+                property double answeredAt: 0
 
-        function answer(): bool {
-            if (answered || Date.now() - answeredAt < Qt.styleHints.mouseDoubleClickInterval) {
-                return false;
-            }
-            answered = true;
-            answeredAt = Date.now();
-            return true;
-        }
+                function answer(): bool {
+                    if (answered || Date.now() - answeredAt < Qt.styleHints.mouseDoubleClickInterval) {
+                        return false;
+                    }
+                    answered = true;
+                    answeredAt = Date.now();
+                    return true;
+                }
 
-        title: qsTr("Do you want to save changes to %1?").arg(fileName)
-        text: App.sessionProblem.length > 0 ? qsTr("Notepad can't keep your unsaved changes for next time: %1").arg(App.sessionProblem) : ""
-        acceptText: qsTr("Save")
-        alternativeText: qsTr("Don't Save")
-        rejectText: qsTr("Cancel")
-        // Closed here, before the action: the action may ask again (close all).
-        closeOnAccept: false
-        closePolicy: QQC2.Popup.CloseOnEscape
-        property string fileName
+                title: qsTr("Do you want to save changes to %1?").arg(fileName)
+                text: App.sessionProblem.length > 0 ? qsTr("Notepad can't keep your unsaved changes for next time: %1").arg(App.sessionProblem) : ""
+                acceptText: qsTr("Save")
+                alternativeText: qsTr("Don't Save")
+                rejectText: qsTr("Cancel")
+                // Closed here, before the action: the action may ask again (close all).
+                closeOnAccept: false
+                closePolicy: QQC2.Popup.CloseOnEscape
+                property string fileName
 
-        onAboutToShow: {
-            answered = false;
-            cancelled = false;
-        }
-        onAccepted: {
-            if (answer()) {
-                close();
-                root.saveThen(target, then);
-            }
-        }
-        onAlternative: {
-            if (answer()) {
-                close();
-                then();
-            }
-        }
-        // When the closing starts, not after the fade: the dialog may be
-        // asked to open again before it ends.
-        onAboutToHide: {
-            if (!answered) {
-                answered = true;
-                cancelled = true;
-                root.resetSave();
-            }
-        }
-        // After a cancel the editor takes the keyboard back; the window's
-        // focus fallback skipped it while the dialog was fading out.
-        onClosed: {
-            if (cancelled && !visible && root.view && !root.settingsOpen) {
-                root.view.focusEditor();
-            }
-        }
-    }
-
-    ConfirmDialog {
-        id: shortcutsDialog
-        title: qsTr("Keyboard Shortcuts")
-        acceptText: qsTr("Close")
-        showReject: false
-
-        QQC2.ScrollView {
-            Layout.fillWidth: true
-            Layout.preferredWidth: Kirigami.Units.gridUnit * 22
-            Layout.preferredHeight: Math.min(implicitHeight, root.height * 0.6)
-            contentWidth: availableWidth
-            QQC2.ScrollBar.vertical: AtlasScrollBar {}
-
-            GridLayout {
-                width: parent.width - Kirigami.Units.gridUnit // clear of the scrollbar
-                columns: 2
-                columnSpacing: Kirigami.Units.largeSpacing * 2
-                rowSpacing: Kirigami.Units.smallSpacing
-
-                Repeater {
-                    model: root.shortcutRows()
-                    delegate: QQC2.Label {
-                        required property var modelData
-                        required property int index
-                        Layout.row: Math.floor(index / 2)
-                        Layout.column: index % 2
-                        Layout.fillWidth: index % 2 === 0
-                        text: modelData
-                        opacity: index % 2 === 1 ? 0.7 : 1
-                        Layout.alignment: index % 2 === 1 ? Qt.AlignRight : Qt.AlignLeft
+                onAboutToShow: {
+                    answered = false;
+                    cancelled = false;
+                }
+                onAccepted: {
+                    if (answer()) {
+                        close();
+                        root.saveThen(target, then);
+                    }
+                }
+                onAlternative: {
+                    if (answer()) {
+                        close();
+                        then();
+                    }
+                }
+                // When the closing starts, not after the fade: the dialog may be
+                // asked to open again before it ends.
+                onAboutToHide: {
+                    if (!answered) {
+                        answered = true;
+                        cancelled = true;
+                        root.resetSave();
+                    }
+                }
+                // After a cancel the editor takes the keyboard back; the window's
+                // focus fallback skipped it while the dialog was fading out.
+                onClosed: {
+                    if (cancelled && !visible && root.view && !root.settingsOpen) {
+                        root.view.focusEditor();
                     }
                 }
             }
         }
     }
 
-    ConfirmDialog {
-        id: aboutDialog
-        title: qsTr("About Notepad")
-        text: qsTr("Version %1\nA simple, fast Notepad for plain text and Markdown.\nMIT licence, made by Eterneon. Notepad collects nothing and needs no account.").arg(App.version)
-        acceptText: qsTr("Close")
-        showReject: false
+    Lazy {
+        id: lazyShortcuts
+        host: root.contentItem
+        component: Component {
+            ConfirmDialog {
+                id: shortcutsDialog
+                title: qsTr("Keyboard Shortcuts")
+                acceptText: qsTr("Close")
+                showReject: false
 
-        QQC2.Label {
-            Layout.fillWidth: true
-            text: "<a href=\"https://github.com/EternalCoder454/atlasos-notepad\">%1</a>".arg(qsTr("Project page"))
-            textFormat: Text.StyledText
-            linkColor: Kirigami.Theme.linkColor
-            onLinkActivated: link => Qt.openUrlExternally(link)
-            HoverHandler {
-                cursorShape: Qt.PointingHandCursor
+                QQC2.ScrollView {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: Kirigami.Units.gridUnit * 22
+                    Layout.preferredHeight: Math.min(implicitHeight, root.height * 0.6)
+                    contentWidth: availableWidth
+                    QQC2.ScrollBar.vertical: AtlasScrollBar {}
+
+                    GridLayout {
+                        width: parent.width - Kirigami.Units.gridUnit // clear of the scrollbar
+                        columns: 2
+                        columnSpacing: Kirigami.Units.largeSpacing * 2
+                        rowSpacing: Kirigami.Units.smallSpacing
+
+                        Repeater {
+                            model: root.shortcutRows()
+                            delegate: QQC2.Label {
+                                required property var modelData
+                                required property int index
+                                Layout.row: Math.floor(index / 2)
+                                Layout.column: index % 2
+                                Layout.fillWidth: index % 2 === 0
+                                text: modelData
+                                opacity: index % 2 === 1 ? 0.7 : 1
+                                Layout.alignment: index % 2 === 1 ? Qt.AlignRight : Qt.AlignLeft
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    ConfirmDialog {
-        id: goToDialog
-        title: qsTr("Go To Line")
-        acceptText: qsTr("Go To")
-        onAboutToShow: {
-            const lc = root.document.lineColumn(root.view.edit.cursorPosition);
-            lineField.tried = false;
-            lineField.text = String(lc.x);
-            lineField.selectAll();
-        }
-        onOpened: lineField.forceActiveFocus()
-        // A number past the last line shows its error and keeps the dialog.
-        closeOnAccept: lineField.valid
-        onAccepted: {
-            lineField.tried = true;
-            if (lineField.valid) {
-                root.view.goToLine(parseInt(lineField.text));
-            }
-        }
+    Lazy {
+        id: lazyAbout
+        host: root.contentItem
+        component: Component {
+            ConfirmDialog {
+                id: aboutDialog
+                title: qsTr("About Notepad")
+                text: qsTr("Version %1\nA simple, fast Notepad for plain text and Markdown.\nMIT licence, made by Eterneon. Notepad collects nothing and needs no account.").arg(App.version)
+                acceptText: qsTr("Close")
+                showReject: false
 
-        AtlasTextField {
-            id: lineField
-            Layout.fillWidth: true
-            // Enter or Go To was pressed: an empty field says so too.
-            property bool tried: false
-            readonly property int number: parseInt(text) || 0
-            readonly property bool valid: root.document !== null && number >= 1 && number <= root.document.lineCount
-            errorText: {
-                if (root.document && number > root.document.lineCount) {
-                    return qsTr("The file has %1 lines").arg(root.document.lineCount);
-                }
-                return tried && number < 1 ? qsTr("Enter a line number") : "";
-            }
-            inputMethodHints: Qt.ImhDigitsOnly
-            validator: IntValidator {
-                bottom: 1
-            }
-            placeholderText: root.document ? qsTr("1 to %1").arg(root.document.lineCount) : ""
-            Accessible.name: qsTr("Line number")
-            // Return also when the field isn't acceptable (empty): the
-            // error says why nothing happened.
-            function submit() {
-                goToDialog.accepted();
-                if (goToDialog.closeOnAccept) {
-                    goToDialog.close();
+                QQC2.Label {
+                    Layout.fillWidth: true
+                    text: "<a href=\"https://github.com/EternalCoder454/atlasos-notepad\">%1</a>".arg(qsTr("Project page"))
+                    textFormat: Text.StyledText
+                    linkColor: Kirigami.Theme.linkColor
+                    onLinkActivated: link => Qt.openUrlExternally(link)
+                    HoverHandler {
+                        cursorShape: Qt.PointingHandCursor
+                    }
                 }
             }
-            Keys.onReturnPressed: submit()
-            Keys.onEnterPressed: submit()
         }
     }
 
-    ConfirmDialog {
-        id: linkDialog
-        title: qsTr("Insert Link")
-        acceptText: qsTr("Insert")
-        onOpened: (linkText.text.length > 0 ? linkUrl : linkText).forceActiveFocus()
-        // An empty address shows its error and keeps the dialog.
-        property bool addressTried: false
-        closeOnAccept: linkUrl.text.trim().length > 0
-        onAccepted: {
-            if (closeOnAccept) {
-                root.view.md.insertLink(linkText.text, linkUrl.text.trim());
-            } else {
-                addressTried = true;
-                linkUrl.forceActiveFocus();
-            }
-        }
-        onClosed: {
-            if (root.view) {
-                root.view.focusEditor();
-            }
-        }
+    Lazy {
+        id: lazyGoTo
+        host: root.contentItem
+        component: Component {
+            ConfirmDialog {
+                id: goToDialog
+                title: qsTr("Go To Line")
+                acceptText: qsTr("Go To")
+                onAboutToShow: {
+                    const lc = root.document.lineColumn(root.view.edit.cursorPosition);
+                    lineField.tried = false;
+                    lineField.text = String(lc.x);
+                    lineField.selectAll();
+                }
+                onOpened: lineField.forceActiveFocus()
+                // A number past the last line shows its error and keeps the dialog.
+                closeOnAccept: lineField.valid
+                onAccepted: {
+                    lineField.tried = true;
+                    if (lineField.valid) {
+                        root.view.goToLine(parseInt(lineField.text));
+                    }
+                }
 
-        AtlasTextField {
-            id: linkText
-            Layout.fillWidth: true
-            placeholderText: qsTr("Text to show")
-            Accessible.name: qsTr("Text")
-            onAccepted: linkUrl.forceActiveFocus()
+                AtlasTextField {
+                    id: lineField
+                    Layout.fillWidth: true
+                    // Enter or Go To was pressed: an empty field says so too.
+                    property bool tried: false
+                    readonly property int number: parseInt(text) || 0
+                    readonly property bool valid: root.document !== null && number >= 1 && number <= root.document.lineCount
+                    errorText: {
+                        if (root.document && number > root.document.lineCount) {
+                            return qsTr("The file has %1 lines").arg(root.document.lineCount);
+                        }
+                        return tried && number < 1 ? qsTr("Enter a line number") : "";
+                    }
+                    inputMethodHints: Qt.ImhDigitsOnly
+                    validator: IntValidator {
+                        bottom: 1
+                    }
+                    placeholderText: root.document ? qsTr("1 to %1").arg(root.document.lineCount) : ""
+                    Accessible.name: qsTr("Line number")
+                    // Return also when the field isn't acceptable (empty): the
+                    // error says why nothing happened.
+                    function submit() {
+                        goToDialog.accepted();
+                        if (goToDialog.closeOnAccept) {
+                            goToDialog.close();
+                        }
+                    }
+                    Keys.onReturnPressed: submit()
+                    Keys.onEnterPressed: submit()
+                }
+            }
         }
-        AtlasTextField {
-            id: linkUrl
-            Layout.fillWidth: true
-            errorText: linkDialog.addressTried && text.trim().length === 0 ? qsTr("An address is required") : ""
-            placeholderText: qsTr("Address, such as https://example.com")
-            Accessible.name: qsTr("Address")
-            onAccepted: {
-                linkDialog.accepted();
-                if (linkDialog.closeOnAccept) {
-                    linkDialog.close();
+    }
+
+    Lazy {
+        id: lazyLink
+        host: root.contentItem
+        component: Component {
+            ConfirmDialog {
+                id: linkDialog
+                title: qsTr("Insert Link")
+                acceptText: qsTr("Insert")
+                onOpened: (linkText.text.length > 0 ? linkUrl : linkText).forceActiveFocus()
+                // An empty address shows its error and keeps the dialog.
+                property bool addressTried: false
+                function show(text, url) {
+                    addressTried = false;
+                    linkText.text = text;
+                    linkUrl.text = url;
+                    open();
+                }
+                closeOnAccept: linkUrl.text.trim().length > 0
+                onAccepted: {
+                    if (closeOnAccept) {
+                        root.view.md.insertLink(linkText.text, linkUrl.text.trim());
+                    } else {
+                        addressTried = true;
+                        linkUrl.forceActiveFocus();
+                    }
+                }
+                onClosed: {
+                    if (root.view) {
+                        root.view.focusEditor();
+                    }
+                }
+
+                AtlasTextField {
+                    id: linkText
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Text to show")
+                    Accessible.name: qsTr("Text")
+                    onAccepted: linkUrl.forceActiveFocus()
+                }
+                AtlasTextField {
+                    id: linkUrl
+                    Layout.fillWidth: true
+                    errorText: linkDialog.addressTried && text.trim().length === 0 ? qsTr("An address is required") : ""
+                    placeholderText: qsTr("Address, such as https://example.com")
+                    Accessible.name: qsTr("Address")
+                    onAccepted: {
+                        linkDialog.accepted();
+                        if (linkDialog.closeOnAccept) {
+                            linkDialog.close();
+                        }
+                    }
                 }
             }
         }
@@ -1527,7 +1610,7 @@ AtlasWindow {
     onActiveFocusItemChanged: {
         if (activeFocusItem === null && active) {
             Qt.callLater(() => {
-                if (root.active && root.activeFocusItem === null && !root.settingsOpen && root.view && !unsavedDialog.visible) {
+                if (root.active && root.activeFocusItem === null && !root.settingsOpen && root.view && !lazyUnsaved.visible) {
                     root.view.focusEditor();
                 }
             });
@@ -1549,10 +1632,7 @@ AtlasWindow {
         }
         const selected = view.edit.selectedText;
         const isUrl = /^[a-z][a-z0-9+.-]*:\S+$/i.test(selected);
-        linkDialog.addressTried = false;
-        linkText.text = isUrl ? "" : selected;
-        linkUrl.text = isUrl ? selected : (view.md.linkAt(view.edit.cursorPosition) || "");
-        linkDialog.open();
+        lazyLink.get().show(isUrl ? "" : selected, isUrl ? selected : (view.md.linkAt(view.edit.cursorPosition) || ""));
     }
 
     // The file dialogs are made in C++ (DocumentList.openDialog, saveAsDialog).
@@ -1662,10 +1742,11 @@ AtlasWindow {
 
     function askToSave(doc, then) {
         documents.currentIndex = documents.indexOf(doc);
-        unsavedDialog.target = doc;
-        unsavedDialog.then = then;
-        unsavedDialog.fileName = doc.title;
-        unsavedDialog.open();
+        const dialog = lazyUnsaved.get();
+        dialog.target = doc;
+        dialog.then = then;
+        dialog.fileName = doc.title;
+        dialog.open();
     }
 
     function closeTab(index) {

@@ -40,7 +40,7 @@ Item {
     property bool pointerNear: false
     // A button has the keyboard focus (Tab): full strength, like the pointer.
     property bool focusInside: false
-    readonly property bool near: pointerNear || focusInside || headingMenu.visible || moreMenu.visible || caseMenu.visible || popoverOpen
+    readonly property bool near: pointerNear || focusInside || lazyHeadingMenu.visible || lazyMoreMenu.visible || lazyCaseMenu.visible || popoverOpen
     readonly property real nearDistance: 80
 
     // The language and indentation button was pressed (the popover opens
@@ -257,29 +257,35 @@ Item {
                 visible: !capsule.code
                 Keys.onEscapePressed: capsule.editorFocusRequested(true)
                 text: qsTr("Heading")
-                tipEnabled: !headingMenu.visible
+                tipEnabled: !lazyHeadingMenu.visible
                 checked: capsule.heading > 0
                 enabled: capsule.actions.heading1.enabled
                 onClicked: {
-                    capsule.popupLeft(headingMenu, headingButton);
+                    capsule.popupLeft(lazyHeadingMenu.get(), headingButton);
                 }
-                ContextMenu {
-                    id: headingMenu
-                    onClosed: capsule.menuClosed()
-                    Entry {
-                        command: capsule.actions.heading1
-                        showMark: true
-                        marked: capsule.heading === 1
-                    }
-                    Entry {
-                        command: capsule.actions.heading2
-                        showMark: true
-                        marked: capsule.heading === 2
-                    }
-                    Entry {
-                        command: capsule.actions.bodyText
-                        showMark: true
-                        marked: capsule.heading === 0
+                Lazy {
+                    id: lazyHeadingMenu
+                    host: headingButton
+                    component: Component {
+                        ContextMenu {
+                            id: headingMenu
+                            onClosed: capsule.menuClosed()
+                            Entry {
+                                command: capsule.actions.heading1
+                                showMark: true
+                                marked: capsule.heading === 1
+                            }
+                            Entry {
+                                command: capsule.actions.heading2
+                                showMark: true
+                                marked: capsule.heading === 2
+                            }
+                            Entry {
+                                command: capsule.actions.bodyText
+                                showMark: true
+                                marked: capsule.heading === 0
+                            }
+                        }
                     }
                 }
             }
@@ -314,22 +320,28 @@ Item {
                 visible: !capsule.code
                 Keys.onEscapePressed: capsule.editorFocusRequested(true)
                 text: qsTr("More")
-                tipEnabled: !moreMenu.visible
-                onClicked: capsule.popupLeft(moreMenu, moreButton)
-                ContextMenu {
-                    id: moreMenu
-                    onClosed: capsule.menuClosed()
-                    Entry {
-                        command: capsule.actions.strikethrough
-                    }
-                    Entry {
-                        command: capsule.actions.numberedList
-                    }
-                    ContextMenuSeparator {}
-                    Entry {
-                        command: capsule.actions.toggleFormatted
-                        showMark: true
-                        marked: !capsule.formatted
+                tipEnabled: !lazyMoreMenu.visible
+                onClicked: capsule.popupLeft(lazyMoreMenu.get(), moreButton)
+                Lazy {
+                    id: lazyMoreMenu
+                    host: moreButton
+                    component: Component {
+                        ContextMenu {
+                            id: moreMenu
+                            onClosed: capsule.menuClosed()
+                            Entry {
+                                command: capsule.actions.strikethrough
+                            }
+                            Entry {
+                                command: capsule.actions.numberedList
+                            }
+                            ContextMenuSeparator {}
+                            Entry {
+                                command: capsule.actions.toggleFormatted
+                                showMark: true
+                                marked: !capsule.formatted
+                            }
+                        }
                     }
                 }
             }
@@ -374,20 +386,26 @@ Item {
                 symbol: "text_fields"
                 Keys.onEscapePressed: capsule.editorFocusRequested(true)
                 text: qsTr("Change Case")
-                tipEnabled: !caseMenu.visible
+                tipEnabled: !lazyCaseMenu.visible
                 enabled: capsule.actions.upperCase.enabled
-                onClicked: capsule.popupLeft(caseMenu, caseButton)
-                ContextMenu {
-                    id: caseMenu
-                    onClosed: capsule.menuClosed()
-                    Entry {
-                        command: capsule.actions.upperCase
-                    }
-                    Entry {
-                        command: capsule.actions.lowerCase
-                    }
-                    Entry {
-                        command: capsule.actions.titleCase
+                onClicked: capsule.popupLeft(lazyCaseMenu.get(), caseButton)
+                Lazy {
+                    id: lazyCaseMenu
+                    host: caseButton
+                    component: Component {
+                        ContextMenu {
+                            id: caseMenu
+                            onClosed: capsule.menuClosed()
+                            Entry {
+                                command: capsule.actions.upperCase
+                            }
+                            Entry {
+                                command: capsule.actions.lowerCase
+                            }
+                            Entry {
+                                command: capsule.actions.titleCase
+                            }
+                        }
                     }
                 }
             }
