@@ -48,10 +48,11 @@ search all work on the file as it is on disk.
    "unset" in `QTextEngine`, and a 1 px glyph alone still advances half a
    pixel.) List and quote prefixes stay in place but transparent, widened to
    160 %, to make room for what is drawn there.
-3. **Drawing.** `MarkdownDecorations`, a `QQuickPaintedItem` behind the text,
-   draws bullets, checkboxes, quote bars, rules and code-block backgrounds for
-   the visible blocks only. It recomputes the shapes in `updatePolish` and
-   repaints only when they change.
+3. **Drawing.** `MarkdownDecorations`, an item behind the text, draws
+   bullets, checkboxes, quote bars, rules and code-block backgrounds for the
+   visible blocks only, into one image covering just those shapes (none
+   when there are none, or the tab is hidden). It recomputes the shapes in
+   `updatePolish` and repaints only when they change or move.
 4. **Editing.** `MarkdownEditor` filters the `TextEdit`'s keys and mouse:
    - the caret steps over hidden syntax;
    - Backspace and Delete take the visible character, or remove the span's
@@ -291,10 +292,13 @@ and was not traced), and the 5 MB single-line JSON still stalls about 1.3 s
 in the 2 s after its first frame: that line is not highlighted any more, so
 it is the layout or spell check (above).
 
-**Launch** (first frame, cold process, warm caches): 213 to 223 ms with an
-empty tab, 221 to 226 ms with a small file, 254 to 261 ms with 50 KB
-Markdown. About 20 ms of each is loading the libraries Qt Quick pulls in
-(`libQt6Quick` alone brings 83), which a QML app can't avoid.
+**Launch** (first frame, cold process, warm caches, the RPM's build):
+134 ms with a small file, 162 ms with 50 KB Markdown (219 and 250 before
+the menus, dialogs, find bar and code popover were made on first use, by
+`qml/Lazy.qml`). About 15 ms of it is the dynamic linker relocating
+Atlas.Ui's plugin (31,000 exported symbols), which only atlas-framework
+can change. The first open of the menu button's menu takes about 30 ms,
+of the Keyboard Shortcuts dialog about 13 ms, of the others 1 to 6 ms.
 
 **Second launch** (a running Notepad, `atlas-notepad FILE` again): 21 to
 23 ms to bring up a file that's open, 37 to 63 ms (median 56) to open a
@@ -305,17 +309,21 @@ was 50 ms.
 wakeups of Notepad's own; with it on, about 8 wakeups a second from the
 caret, as in Kate, stopping when the window loses focus.
 
-**Memory** (`smaps_rollup` after 5 s, the same container image for both):
+**Memory** (`smaps_rollup` after 5 s, Xvfb, software backend, the RPM's
+build, median of five; before is a2f4d67):
 
-| | Rss | Pss | Private dirty |
+| | Rss | Pss | Anonymous |
 | --- | --- | --- | --- |
-| Notepad, empty tab | 117 MB | 108 MB | 36 MB |
-| Notepad, 50 KB Markdown | 126 MB | 117 MB | 42 MB |
-| Kate 26.08, empty | 80 MB | 75 MB | 25 MB |
-| Kate 26.08, 50 KB Markdown | 102 MB | 97 MB | 35 MB |
+| Empty tab | 113 MB (137 before) | 101 MB (131) | 26 MB (48) |
+| 50 KB Markdown | 126 MB (149) | 111 MB (135) | 34 MB (55) |
+| 50 KB C++ | 128 MB (151) | 113 MB (137) | 36 MB (57) |
+| 3 Markdown tabs and a C++ one, each shown | 150 MB (189) | | 55 MB (91) |
 
-Notepad starts about 33 MB (Pss) above Kate, most of it the QML engine,
-Qt Quick and Kirigami; the file itself costs Notepad 9 MB and Kate 22.
+What is left is mostly the libraries (Qt, KDE Frameworks, about 12 MB of
+Atlas.Ui's plugin alone) and the QML engine's types; a 50 KB file costs
+about 4 MB of `QTextDocument` layout, and spell checking loads the Hunspell
+dictionary (about 3 MB) on the first word. Kate 26.08, measured earlier
+another way: 80 MB empty, 102 MB with 50 KB Markdown.
 
 ## Security
 
