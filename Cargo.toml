@@ -11,11 +11,11 @@ rust-version = "1.89"
 
 [workspace.dependencies]
 # atlas-framework: the crash reports. Its Atlas.Ui QML module is not built
-# from here: it comes installed (the atlas-ui RPM), like Kirigami. This tag is
-# atlas-ui 1.4.0; apps pin a tag. Move it together with `atlas-ui >=` in
-# packaging/atlas-notepad.spec (see CLAUDE.md).
-atlas-framework-core = { git = "https://github.com/EternalCoder454/atlas-framework", tag = "v1.6.0" }
-atlas-framework-system = { git = "https://github.com/EternalCoder454/atlas-framework", tag = "v1.6.0" }
+# from here: it comes installed (the atlas-ui RPM), like Kirigami. This rev is
+# the v1.6.0 tag's commit (CI wants a rev, not a tag). Move it together with
+# `atlas-ui >=` in packaging/atlas-notepad.spec (see CLAUDE.md).
+atlas-framework-core = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "b9d72940fb94178f400c3f074fe8f9744b6c6f53" }
+atlas-framework-system = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "b9d72940fb94178f400c3f074fe8f9744b6c6f53" }
 
 [profile.release]
 lto = "thin"
