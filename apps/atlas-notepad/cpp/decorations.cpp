@@ -195,6 +195,18 @@ void MarkdownDecorations::updatePolish()
     }
 }
 
+// Nothing to draw (no Markdown shapes in view, or a new tab): no node, so
+// no transparent image the size of the view, held twice by the software
+// renderer, and nothing for it to blend on every frame.
+QSGNode *MarkdownDecorations::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *data)
+{
+    if (m_shapes.empty()) {
+        delete oldNode;
+        return nullptr;
+    }
+    return QQuickPaintedItem::updatePaintNode(oldNode, data);
+}
+
 static bool isCode(const QTextBlock &block)
 {
     const BlockInfo *info = block.isValid() ? BlockInfo::of(block) : nullptr;
