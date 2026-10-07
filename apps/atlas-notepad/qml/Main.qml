@@ -354,14 +354,14 @@ AtlasWindow {
         id: findNextAction
         text: qsTr("Find Next")
         keys: StandardKey.FindNext
-        enabled: (root.view !== null && findBar.findText.length > 0) && !root.settingsOpen
+        enabled: (root.view !== null && root.findBar !== null && root.findBar.findText.length > 0) && !root.settingsOpen
         onTriggered: root.find(false)
     }
     KeyedAction {
         id: findPreviousAction
         text: qsTr("Find Previous")
         keys: StandardKey.FindPrevious
-        enabled: (root.view !== null && findBar.findText.length > 0) && !root.settingsOpen
+        enabled: (root.view !== null && root.findBar !== null && root.findBar.findText.length > 0) && !root.settingsOpen
         onTriggered: root.find(true)
     }
     KeyedAction {
@@ -1074,7 +1074,7 @@ AtlasWindow {
                 heading: root.view ? root.view.heading : 0
                 formatted: root.document !== null && root.document.formatted
                 formats: root.view ? root.view.formats : 0
-                topInset: findBar.visible ? findBar.height + Kirigami.Units.smallSpacing : 0
+                topInset: lazyFind.visible ? lazyFind.object.height + Kirigami.Units.smallSpacing : 0
                 // After a menu: the editor takes the focus back when an item ran,
                 // or when nothing else (the find bar's field) has it.
                 onEditorFocusRequested: force => {
@@ -1103,25 +1103,31 @@ AtlasWindow {
                 }
             }
 
-            FindBar {
-                id: findBar
-                anchors.top: parent.top
-                anchors.right: parent.right
-                anchors.margins: Kirigami.Units.smallSpacing
-                anchors.rightMargin: Kirigami.Units.gridUnit
-                width: Math.min(implicitWidth, parent.width - Kirigami.Units.gridUnit * 2)
-                z: 10
-                onFindTextChanged: root.find(false, true)
-                onMatchCaseChanged: root.find(false, true)
-                onWholeWordsChanged: root.find(false, true)
-                onRegularExpressionChanged: root.find(false, true)
-                onFindNext: root.find(false)
-                onFindPrevious: root.find(true)
-                onReplaceOne: root.replaceOne()
-                onReplaceAll: root.replaceAll()
-                onClosed: {
-                    if (root.view) {
-                        root.view.focusEditor();
+            // Made the first time Find or Replace opens.
+            Lazy {
+                id: lazyFind
+                host: editors
+                component: Component {
+                    FindBar {
+                        anchors.top: parent.top
+                        anchors.right: parent.right
+                        anchors.margins: Kirigami.Units.smallSpacing
+                        anchors.rightMargin: Kirigami.Units.gridUnit
+                        width: Math.min(implicitWidth, parent.width - Kirigami.Units.gridUnit * 2)
+                        z: 10
+                        onFindTextChanged: root.find(false, true)
+                        onMatchCaseChanged: root.find(false, true)
+                        onWholeWordsChanged: root.find(false, true)
+                        onRegularExpressionChanged: root.find(false, true)
+                        onFindNext: root.find(false)
+                        onFindPrevious: root.find(true)
+                        onReplaceOne: root.replaceOne()
+                        onReplaceAll: root.replaceAll()
+                        onClosed: {
+                            if (root.view) {
+                                root.view.focusEditor();
+                            }
+                        }
                     }
                 }
             }
@@ -1830,7 +1836,8 @@ AtlasWindow {
         root.close();
     }
 
-    // Find, on the current tab.
+    // Find, on the current tab. The find bar, once made (null before).
+    readonly property FindBar findBar: lazyFind.object
     function findFlags() {
         return (findBar.matchCase ? Document.MatchCase : 0) | (findBar.wholeWords ? Document.WholeWords : 0) | (findBar.regularExpression ? Document.RegularExpression : 0);
     }
@@ -1844,7 +1851,7 @@ AtlasWindow {
     }
     // `typing`: the search text changed, so the match at the caret may grow.
     function find(backward, typing) {
-        if (!view || !findBar.opened && findBar.findText.length === 0) {
+        if (!view || !findBar || !findBar.opened && findBar.findText.length === 0) {
             return;
         }
         const edit = view.edit;
@@ -1869,6 +1876,7 @@ AtlasWindow {
         find(false, true);
     }
     function openFind(withReplace) {
+        const findBar = lazyFind.get();
         const selected = view.edit.selectedText;
         if (selected.length > 0 && selected.indexOf(" ") < 0 && selected.indexOf("\n") < 0) {
             findBar.findText = selected;
@@ -1880,7 +1888,7 @@ AtlasWindow {
     }
     // Another tab: recount, but leave its caret and selection alone.
     onDocumentChanged: {
-        if (findBar.opened) {
+        if (findBar && findBar.opened) {
             Qt.callLater(() => {
                 if (!view || findBar.findText.length === 0) {
                     return;
