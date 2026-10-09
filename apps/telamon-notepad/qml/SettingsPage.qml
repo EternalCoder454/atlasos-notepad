@@ -44,6 +44,7 @@ TelamonPage {
             padding: Kirigami.Units.largeSpacing
             leftPadding: Kirigami.Units.gridUnit
             text: qsTr("The quick brown fox jumps over the lazy dog")
+            textFormat: Text.PlainText
             font: page.settings.font
             elide: Text.ElideRight
             Accessible.name: qsTr("Preview: %1").arg(text)
