@@ -621,13 +621,26 @@ fn files_special_files_are_refused_quickly() {
         assert!(file::save(p, b"x").is_err(), "{p:?}");
     }
     // A symlink to each of them is the same file.
-    let link = d.path().join("link-to-zero");
-    symlink("/dev/zero", &link).unwrap();
-    assert_eq!(
-        file::read(&link, 1 << 20).unwrap_err().raw_os_error(),
-        Some(libc::EINVAL)
-    );
-    assert!(file::save(&link, b"x").is_err());
+    for (i, target) in [
+        fifo.as_path(),
+        Path::new("/dev/zero"),
+        Path::new("/dev/null"),
+        Path::new("/dev/full"),
+        Path::new("/dev/urandom"),
+        d.path(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let link = d.path().join(format!("link-{i}"));
+        symlink(target, &link).unwrap();
+        assert_eq!(
+            file::read(&link, 1 << 20).unwrap_err().raw_os_error(),
+            Some(libc::EINVAL),
+            "a link to {target:?}"
+        );
+        assert!(file::save(&link, b"x").is_err(), "a link to {target:?}");
+    }
     assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
 }
 
@@ -708,7 +721,10 @@ fn files_size_limits_hold_for_sparse_and_growing_files() {
         })
     };
     let mut refused = 0;
-    for _ in 0..50 {
+    let started = Instant::now();
+    // Reads until the file has outgrown the limit (the writer is a thread that
+    // may start late), at most 10 s.
+    while refused == 0 && started.elapsed() < Duration::from_secs(10) {
         match file::read(&grow, 256 * 1024) {
             Err(e) => {
                 assert_eq!(e.raw_os_error(), Some(libc::EFBIG));
