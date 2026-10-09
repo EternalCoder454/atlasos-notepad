@@ -1382,9 +1382,7 @@ private Q_SLOTS:
                      {"TypeScript/PHP", "<a "},        {"Makefile", "0x"},            {"C", "0"},         {"Julia", "<!--"}};
         for (const auto &c : cases) {
             const KSyntaxHighlighting::Definition def = codeRepository().definitionForName(QString::fromLatin1(c.language));
-            if (!def.isValid()) {
-                continue; // not installed here
-            }
+            QVERIFY2(def.isValid(), c.language); // the dev image has all of KDE's definitions
             QString line;
             while (line.size() < Limits::lineLength - 10) {
                 line += QString::fromLatin1(c.unit);
@@ -1403,6 +1401,39 @@ private Q_SLOTS:
             // The long line is left plain.
             QVERIFY(doc.findBlockByNumber(1).layout()->formats().isEmpty());
         }
+    }
+
+    // Many lines just under the cap: the slices carry them, and the window's
+    // thread is never held for long at a time.
+    void codeHighlighterLinesNearTheCapStayInSlices()
+    {
+        const KSyntaxHighlighting::Definition def = codeRepository().definitionForName(QStringLiteral("TypeScript React (TSX)"));
+        QVERIFY(def.isValid());
+        QString line;
+        while (line.size() < Limits::highlightedLineLength - 4) {
+            line += QStringLiteral("<<");
+        }
+        QStringList lines;
+        for (int i = 0; i < 60; ++i) {
+            lines << line;
+        }
+        QTextDocument doc;
+        (void)doc.documentLayout();
+        doc.setPlainText(lines.join(u'\n'));
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(def);
+        QElapsedTimer total, turn;
+        total.start();
+        qint64 longest = 0;
+        while (total.elapsed() < 6000) {
+            turn.start();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            longest = qMax(longest, turn.elapsed());
+            QTest::qWait(1);
+        }
+        qInfo() << "60 lines of" << line.size() << "characters: the longest turn of the event loop was" << longest << "ms";
+        QVERIFY2(longest < 1000, qPrintable(QString::number(longest)));
     }
 
     // The cap leaves ordinary long lines alone (a minified line of 9,000 characters).

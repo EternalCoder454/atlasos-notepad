@@ -275,7 +275,7 @@ line; if the state after it changed (typing `/*`) it carries on for 2 ms,
 then the slices go on until a line starts in the state it had. The layout is
 told at most once in ten times what telling it costs (it walks the rest of
 the document each time), and not at all for a line that stays plain. A line
-over `Limits::highlightedLineLength` (10,000 characters) is not highlighted:
+over `Limits::highlightedLineLength` (4,000 characters) is not highlighted:
 the syntax definitions' regular expressions are quadratic on some long lines
 (19 s for 100,000 characters of `<<` in TSX), and the highlighter runs on the
 window's thread (docs/SECURITY.md).
@@ -377,7 +377,7 @@ on the session bus can send it files to open.
   joiner follows each `<` in a path.
 - **Second launches.** `--` ends the options. At most 100 files are taken,
   and a relative path is used only with an absolute working directory.
-- **Highlighting.** Code lines over 10,000 characters are left plain, so no
+- **Highlighting.** Code lines over 4,000 characters are left plain, so no
   line the editor accepts can hold the window for seconds.
 - **Other.**
   - Telamon Updater is started from `/usr/bin` rather than found on `$PATH`.

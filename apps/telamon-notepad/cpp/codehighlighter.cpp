@@ -250,6 +250,7 @@ QTextBlock CodeHighlighter::run(QTextBlock block, bool all, int through, qint64 
             }
             *end = block.position() + block.length();
         }
+        const int lineLength = block.length();
         block = block.next();
         if (!all && block.isValid() && block.position() > through) {
             const auto *data = dataOf(block);
@@ -257,7 +258,9 @@ QTextBlock CodeHighlighter::run(QTextBlock block, bool all, int through, qint64 
                 return QTextBlock();
             }
         }
-        if (budgetNs > 0 && n % 16 == 0 && clock.nsecsElapsed() > budgetNs) {
+        // The clock is read every 16 lines, and after every long one: 16 lines
+        // at the cap would otherwise run on for seconds in a slice.
+        if (budgetNs > 0 && (n % 16 == 0 || lineLength > 1000) && clock.nsecsElapsed() > budgetNs) {
             break;
         }
     }

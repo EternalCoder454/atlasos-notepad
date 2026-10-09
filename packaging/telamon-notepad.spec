@@ -137,7 +137,7 @@ appstream-util validate-relax --nonet \
 
 %changelog
 * Thu Oct 08 2026 Atlas <atlas@eterneon.net> - 0.2.0-2
-- Secure phase (docs/SECURITY.md): a code line over 10,000 characters is no
+- Secure phase (docs/SECURITY.md): a code line over 4,000 characters is no
   longer syntax highlighted (some definitions' regular expressions took
   seconds to minutes on it and held the window); property tests for the file
   reader and writer and the Markdown reader; a lint that keeps every text in
