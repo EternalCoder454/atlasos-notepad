@@ -2218,6 +2218,186 @@ private Q_SLOTS:
         QVERIFY(m_app->recentFiles().contains(a));
     }
 
+    // ------------------------------------------------------------- Secure
+    // docs/SECURITY.md: what files, launch arguments, the recent list and the
+    // session may hold, and what Notepad does with it.
+
+    void exoticCharactersSurviveASave_data()
+    {
+        QTest::addColumn<QByteArray>("bytes");
+        QTest::newRow("line separator U+2028") << QByteArray("a\xE2\x80\xA8" "b\n");
+        QTest::newRow("next line U+0085") << QByteArray("a\xC2\x85" "b\n");
+        QTest::newRow("vertical tab and form feed") << QByteArray("a\x0B" "b\x0C" "c\n");
+        QTest::newRow("escape and delete") << QByteArray("\x1b[31mred\x7f\n");
+        QTest::newRow("BOM in the middle") << QByteArray("a\xEF\xBB\xBF" "b\n");
+        QTest::newRow("bidi controls") << QByteArray("\xE2\x80\xAE" "abc\xE2\x81\xA6 d\xE2\x80\xAC\n");
+        QTest::newRow("zero width joiner family") << QByteArray("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9 e\xCC\x81\n");
+        QTest::newRow("trailing blanks, no final newline") << QByteArray("a \t\nb \t");
+        QTest::newRow("empty lines") << QByteArray("\n\n\n");
+        QTest::newRow("NUL after the binary scan") << QByteArray(65536, 'a') + QByteArray("\nx\0y\n", 5);
+        QTest::newRow("form feed lines") << QByteArray("\x0C\n\x0C\n");
+    }
+    void exoticCharactersSurviveASave()
+    {
+        // Open, edit and undo an edit by hand, save: the bytes are the same.
+        // A character the editor or the layer between would turn into
+        // another would silently corrupt a file the user only meant to touch.
+        QFETCH(QByteArray, bytes);
+        const QString path = write(QStringLiteral("exotic.txt"), bytes);
+        Document *doc = openFile(newList(), path);
+        QVERIFY(doc);
+        attach(doc);
+        QTRY_VERIFY(!doc->isLoading()); // a big text goes into the editor in pieces
+        if (doc->isReadOnly()) {
+            QSKIP("opened read-only: saving cannot change it");
+        }
+        insert(doc, 0, QStringLiteral("Z"));
+        QMetaObject::invokeMethod(doc->textEdit(), "remove", Q_ARG(int, 0), Q_ARG(int, 1));
+        QVERIFY2(saveAndWait(doc), qPrintable(doc->bannerText()));
+        QVERIFY2(read(path) == bytes, qPrintable(QString::fromLatin1(read(path).left(80).toHex())));
+    }
+
+    void linksNeverCarryControlCharacters()
+    {
+        // What reaches the desktop's URL opener is one clean, encoded URL.
+        QString controls = QStringLiteral("\n\r\t \x01\x1b\x7f");
+        for (const char16_t extra : {char16_t(0x0085), char16_t(0x2028), char16_t(0x2029), char16_t(0x202e), char16_t(0x2066), char16_t(0x200b)}) {
+            controls += QChar(extra);
+        }
+        for (const QChar c : std::as_const(controls)) {
+            for (const QString &pattern : {QStringLiteral("https://exa%1mple.com/"), QStringLiteral("http://example.com/a%1b"),
+                                           QStringLiteral("https://example.com/?q=%1"), QStringLiteral("https://example.com/#%1"),
+                                           QStringLiteral("mailto:a%1@b.example"), QStringLiteral("mailto:a@b.example?subject=%1x"),
+                                           QStringLiteral("www.exa%1mple.com")}) {
+                const QString link = pattern.arg(c);
+                const QString url = m_app->linkUrl(link);
+                if (url.isEmpty()) {
+                    QVERIFY(!m_app->openLink(link));
+                    continue;
+                }
+                QVERIFY2(url.startsWith(QStringLiteral("http://")) || url.startsWith(QStringLiteral("https://")) || url.startsWith(QStringLiteral("mailto:")),
+                         qPrintable(url));
+                for (const QChar u : url) {
+                    QVERIFY2(u.unicode() > 0x20 && u.unicode() < 0x7f, qPrintable(link.toHtmlEscaped() + QStringLiteral(" -> ") + url));
+                }
+            }
+        }
+        // The target shown beside a link is the host that will be asked.
+        QCOMPARE(m_app->linkTarget(QStringLiteral("https://google.com@evil.example/")), QStringLiteral("evil.example"));
+        QCOMPARE(m_app->linkTarget(QStringLiteral("https://evil.example:8443/x")), QStringLiteral("evil.example"));
+        // Other schemes, in any case or spacing.
+        for (const char *refused : {"JAVASCRIPT:alert(1)", "File:///etc/passwd", "ftp://example.com/", "sftp://example.com/x", "vnc://h", "ssh://h",
+                                    "x-scheme-handler/https://a", "//example.com/", "\\\\host\\share", "/etc/passwd", "~/x", "tel:123",
+                                    "http:///nohost", "http://", "https://%00example.com"}) {
+            QVERIFY2(m_app->linkUrl(QString::fromUtf8(refused)).isEmpty(), refused);
+        }
+    }
+
+    void launchArgumentsAreBounded()
+    {
+        m_app->settings()->setContinueSession(false);
+        m_app->start({});
+        DocumentList *list = m_app->windows().first();
+        const int before = list->rowCount();
+        // A second launch (or anything on the session bus) lists 300 files:
+        // at most 100 are taken.
+        QStringList args{QStringLiteral("telamon-notepad")};
+        for (int i = 0; i < 300; ++i) {
+            args << write(QStringLiteral("many%1.txt").arg(i), "x\n");
+        }
+        m_app->activate(args, m_dir);
+        QVERIFY2(list->rowCount() <= before + 100, qPrintable(QString::number(list->rowCount())));
+        QVERIFY(list->rowCount() > before);
+        // Options are never files, a '-' name needs "--", empty names and
+        // URLs that aren't valid are dropped, and none of it makes a tab.
+        const int now = list->rowCount();
+        write(QStringLiteral("-opt"), "o\n");
+        write(QStringLiteral("--help"), "o\n");
+        m_app->activate({QStringLiteral("telamon-notepad"), QStringLiteral("-opt"), QStringLiteral("--help"), QString(), QStringLiteral("-"),
+                         QStringLiteral("sftp://host/a\nb"), QStringLiteral("sftp://host/a b"), QStringLiteral("ht!tp://x/y"),
+                         QStringLiteral("file:///nonexistent-dir-xyz/a.txt"), QStringLiteral("javascript:alert(1)"), QStringLiteral("data:text/plain,hi"),
+                         QStringLiteral("mailto:a@b.example"), QStringLiteral("trash:/x"), QStringLiteral("fish://h/x")},
+                        m_dir);
+        QCOMPARE(list->rowCount(), now);
+        // No program name at all, or only options: nothing, no crash.
+        m_app->activate({}, m_dir);
+        m_app->activate({QStringLiteral("telamon-notepad"), QStringLiteral("--new-window")}, QStringLiteral("not/absolute"));
+        // A hostile working directory is only used when absolute, and never
+        // makes a path leave it through the argument being relative.
+        m_app->activate({QStringLiteral("telamon-notepad"), QStringLiteral("/no/such/dir/x.txt")}, QStringLiteral("/proc/self"));
+        QVERIFY(m_app->windows().size() >= 1);
+    }
+
+    void storedRecentListIsBounded()
+    {
+        // A planted or corrupt settings file: thousands of entries, entries
+        // that are control characters, URLs of schemes Notepad doesn't open.
+        QSettings rc(Settings::filePath(), QSettings::IniFormat);
+        rc.beginGroup(QStringLiteral("Recent"));
+        for (int i = 0; i < 5000; ++i) {
+            rc.setValue(QString::number(i), QStringLiteral("sftp://host/dir/%1\n").arg(i) + QChar(0x202e) + QStringLiteral("txt.exe"));
+        }
+        rc.endGroup();
+        rc.sync();
+        restart();
+        QVERIFY(m_app->recentFiles().size() <= 10);
+        // Adding one keeps the cap and puts it first.
+        m_app->addRecentFile(write(QStringLiteral("rec.txt"), "x"));
+        QVERIFY(m_app->recentFiles().size() <= 10);
+        QCOMPARE(m_app->recentFiles().first(), m_dir + QStringLiteral("/rec.txt"));
+        // A hostile entry opened from the list goes through the same checks
+        // as any URL: a scheme Notepad doesn't open makes a message, not a tab.
+        DocumentList *list = newList();
+        QSignalSpy failed(list, &DocumentList::openFailed);
+        const int before = list->rowCount();
+        list->open({QUrl(QStringLiteral("smb2://host/x")), QUrl(QStringLiteral("trash:/x")), QUrl(QStringLiteral("javascript:1")),
+                    QUrl(QStringLiteral("recentlyused:/")), QUrl(QStringLiteral("settings:/")), QUrl(QStringLiteral("desktop:/x"))});
+        QCOMPARE(list->rowCount(), before);
+        QCOMPARE(failed.size(), 6);
+    }
+
+    void sessionTextNamesCannotEscape()
+    {
+        // session.json names a text file: only a bare name under texts/.
+        QVERIFY(QDir().mkpath(sessionDir() + QStringLiteral("/texts")));
+        write(QStringLiteral("outside.txt"), "outside\n");
+        Session session;
+        for (const char *name : {"../../../outside", "..", ".", "a/b", "/etc/passwd", "texts/x", "x/../x", ""}) {
+            QVERIFY2(!session.readText(QString::fromUtf8(name)).has_value(), name);
+        }
+        QFile f(sessionDir() + QStringLiteral("/texts/ok.txt"));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("fine");
+        f.close();
+        QCOMPARE(session.readText(QStringLiteral("ok")).value_or(QString()), QStringLiteral("fine"));
+        // A FIFO or a folder under that name is not read (a blocking open
+        // would hang the start).
+        QCOMPARE(mkfifo(QFile::encodeName(sessionDir() + QStringLiteral("/texts/pipe.txt")).constData(), 0600), 0);
+        QVERIFY(!session.readText(QStringLiteral("pipe")).has_value());
+        QVERIFY(QDir().mkpath(sessionDir() + QStringLiteral("/texts/dir.txt")));
+        QVERIFY(!session.readText(QStringLiteral("dir")).has_value());
+    }
+
+    void oddPathsOpenNothing()
+    {
+        // A loop of links, a folder, /proc files, a path with a NUL-free but
+        // odd name: a message each, no tab, no hang.
+        QVERIFY(QFile::link(m_dir + QStringLiteral("/loop-b"), m_dir + QStringLiteral("/loop-a")));
+        QVERIFY(QFile::link(m_dir + QStringLiteral("/loop-a"), m_dir + QStringLiteral("/loop-b")));
+        DocumentList *list = newList();
+        QSignalSpy failed(list, &DocumentList::openFailed);
+        const int before = list->rowCount();
+        list->open({QUrl::fromLocalFile(m_dir + QStringLiteral("/loop-a")), QUrl::fromLocalFile(m_dir), QUrl::fromLocalFile(QStringLiteral("/dev/null")),
+                    QUrl::fromLocalFile(QStringLiteral("/dev/zero")), QUrl::fromLocalFile(QStringLiteral("/dev/full")),
+                    QUrl::fromLocalFile(QStringLiteral("/dev/urandom")), QUrl::fromLocalFile(QStringLiteral("/proc/self/cwd"))});
+        QCOMPARE(failed.size(), 7);
+        QCOMPARE(list->rowCount(), before);
+        // A /proc file is regular, reports size 0 and has text: it opens.
+        Document *doc = openFile(list, QStringLiteral("/proc/self/status"));
+        QVERIFY(doc);
+        QVERIFY(doc->text().contains(QStringLiteral("Name:")));
+    }
+
     // ------------------------------------------------------------ Reliable
 
     void closeAsksWhenSessionCantBeWritten()
