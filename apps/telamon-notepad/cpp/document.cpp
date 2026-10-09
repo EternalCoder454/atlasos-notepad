@@ -2493,6 +2493,10 @@ void Document::saveAs(const QUrl &url)
         }
     }
     const QString newPath = remote ? Remote::display(url) : url.isLocalFile() ? url.toLocalFile() : QString();
+    if (newPath.contains(QChar(0))) {
+        Q_EMIT saveFailed(tr("That isn't a valid file name."));
+        return;
+    }
     if (newPath.isEmpty() || d->saving) {
         Q_EMIT saveFailed(newPath.isEmpty() ? tr("That isn't a file on this computer.") : tr("A save is already running."));
         return;

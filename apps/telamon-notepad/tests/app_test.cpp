@@ -702,8 +702,8 @@ private Q_SLOTS:
     // local save keeps it, and a remote one that took the server's default
     // (0644 for most) would widen a file the user had locked down. KIO's sftp
     // worker gives the new file the old one's mode; this keeps it that way.
-    // The server's user is not the test's, so the file is 0606: the group bits,
-    // which a default would add, are the ones to watch.
+    // The server's user is not the test's, so it reads the file as "other". 0705
+    // has an execute bit, which no default (0666 less any umask) can give.
     void sftpSaveKeepsTheFilesMode()
     {
         if (qEnvironmentVariableIsEmpty("NP_KIO_TEST_BASE")) {
@@ -711,7 +711,7 @@ private Q_SLOTS:
         }
         const QString local = sftpLocal(QStringLiteral("mode.txt"));
         putFile(local, "private\n");
-        QCOMPARE(chmod(QFile::encodeName(local).constData(), 0606), 0);
+        QCOMPARE(chmod(QFile::encodeName(local).constData(), 0705), 0);
         Document *doc = openSftp(newList(), QStringLiteral("mode.txt"));
         QVERIFY(doc);
         attach(doc);
@@ -720,7 +720,7 @@ private Q_SLOTS:
         QCOMPARE(read(local), QByteArray("edited private\n"));
         struct stat st = {};
         QCOMPARE(stat(QFile::encodeName(local).constData(), &st), 0);
-        QCOMPARE(int(st.st_mode & 07777), 0606);
+        QCOMPARE(int(st.st_mode & 07777), 0705);
     }
 
     // ---- KDirNotify and KDE integration. These need a session bus
@@ -1121,6 +1121,8 @@ private Q_SLOTS:
         QCOMPARE(App::urlFromArgument(QStringLiteral("sftp://h/a.txt"), QString()), QUrl(QStringLiteral("sftp://h/a.txt")));
         QCOMPARE(App::urlFromArgument(QStringLiteral("file:///x/a%20b.txt"), QString()), QUrl::fromLocalFile(QStringLiteral("/x/a b.txt")));
         QCOMPARE(App::urlFromArgument(QStringLiteral("smb://h/s/a.txt"), QStringLiteral("/w")), QUrl(QStringLiteral("smb://h/s/a.txt")));
+        // "%00" is a NUL, which would cut the name short in the C calls.
+        QVERIFY(!App::urlFromArgument(QStringLiteral("file:///tmp/q/safe.txt%00.png"), QString()).isValid());
     }
 
 
@@ -2418,6 +2420,20 @@ private Q_SLOTS:
                     QUrl::fromLocalFile(QStringLiteral("/dev/urandom")), QUrl::fromLocalFile(QStringLiteral("/proc/self/cwd"))});
         QCOMPARE(failed.size(), 7);
         QCOMPARE(list->rowCount(), before);
+        // A NUL in the name must not cut it short and open "safe.txt".
+        write(QStringLiteral("safe.txt"), "safe\n");
+        QUrl nul = QUrl::fromLocalFile(m_dir + QStringLiteral("/safe.txt"));
+        nul.setPath(nul.path() + QChar(0) + QStringLiteral(".png"), QUrl::DecodedMode);
+        QVERIFY(nul.toLocalFile().contains(QChar(0)));
+        list->open({nul});
+        QCOMPARE(failed.size(), 8);
+        QCOMPARE(list->rowCount(), before);
+        Document *saved = openFile(list, m_dir + QStringLiteral("/safe.txt"));
+        QVERIFY(saved);
+        QSignalSpy saveFailed(saved, &Document::saveFailed);
+        saved->saveAs(nul);
+        QCOMPARE(saveFailed.size(), 1);
+        QCOMPARE(saved->path(), m_dir + QStringLiteral("/safe.txt"));
         // A /proc file is regular, reports size 0 and has text: it opens.
         Document *doc = openFile(list, QStringLiteral("/proc/self/status"));
         QVERIFY(doc);
@@ -2563,8 +2579,20 @@ private Q_SLOTS:
     void restoreMarkerLivesWhileRestoring()
     {
         markdownSession();
+        // An older, wider file and a link at the name: the counter is 0600 and
+        // never written through the link.
+        const QString marker = sessionDir() + QStringLiteral("/restoring");
+        const QString elsewhere = m_dir + QStringLiteral("/theirs");
+        write(QStringLiteral("theirs"), "keep\n");
+        QVERIFY(QFile::link(elsewhere, marker));
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("can't write")));
+        m_app->start({});
+        QCOMPARE(read(elsewhere), QByteArray("keep\n"));
+        QVERIFY(QFile::remove(marker));
+        restart();
         m_app->start({});
         QVERIFY(QFile::exists(sessionDir() + QStringLiteral("/restoring")));
+        QCOMPARE(int(QFileInfo(marker).permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ReadOther | QFileDevice::WriteOther)), 0);
         restart(); // a clean exit ends it
         QVERIFY(!QFile::exists(sessionDir() + QStringLiteral("/restoring")));
         m_app->start({});
