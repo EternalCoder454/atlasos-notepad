@@ -55,12 +55,12 @@ BuildRequires:  hunspell-en-US
 # from atlas-framework, which is in no repository: install its RPMs first
 # (build-rpm.sh does, given ATLAS_LOCAL_RPMS).
 BuildRequires:  kf6-kirigami-devel
-BuildRequires:  telamon-ui >= 2.0.0
+BuildRequires:  telamon-ui >= 2.0.9
 
 Requires:       kf6-kirigami
 Recommends:     kio-extras
 # Telamon.Ui (1.4.0: the merged header, floating toolbar, popover, segmented control)
-Requires:       telamon-ui >= 2.0.0
+Requires:       telamon-ui >= 2.0.9
 Requires:       kf6-qqc2-desktop-style
 # spell check (dictionaries come from the system's langpacks)
 Requires:       kf6-sonnet
@@ -143,6 +143,8 @@ appstream-util validate-relax --nonet \
   reader and writer and the Markdown reader; a lint that keeps every text in
   the QML plain; the build fails when the program loses PIE, full RELRO, stack
   protectors or gains the tests' KIO hook (scripts/check-hardening.sh)
+- atlas-framework and telamon-ui 2.0.9: the crash reports' text is scrubbed
+  and capped by the framework before it is saved
 
 * Wed Oct 07 2026 Atlas <atlas@eterneon.net> - 0.2.0-1
 - Renamed to Telamon Notepad: telamon-notepad, net.eterneon.telamon.notepad,

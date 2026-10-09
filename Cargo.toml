@@ -12,10 +12,10 @@ rust-version = "1.89"
 [workspace.dependencies]
 # atlas-framework: the crash reports. Its Telamon.Ui QML module is not built
 # from here: it comes installed (the telamon-ui RPM), like Kirigami. This rev is
-# the v1.6.0 tag's commit (CI wants a rev, not a tag). Move it together with
+# the v2.0.9 tag's commit (CI wants a rev, not a tag). Move it together with
 # `telamon-ui >=` in packaging/telamon-notepad.spec (see CLAUDE.md).
-telamon-framework-core = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "8e6a53569363aec3d7e42920875d03ca113ef3eb" }
-telamon-framework-system = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "8e6a53569363aec3d7e42920875d03ca113ef3eb" }
+telamon-framework-core = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "cda51cea326fbad492d3328a8d7fb10db737dbfc" }
+telamon-framework-system = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "cda51cea326fbad492d3328a8d7fb10db737dbfc" }
 
 # Property tests (docs/SECURITY.md, "Tests"): a dev-dependency only.
 proptest = { version = "1", default-features = false, features = ["std"] }
