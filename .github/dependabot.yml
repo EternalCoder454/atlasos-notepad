@@ -1,0 +1,24 @@
+# Weekly pull requests for the dependencies Notepad builds with. Nothing is
+# merged by itself: CI (and the security workflow) must pass, and a person
+# reads the change.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      # atlas-framework is pinned by commit, together with `telamon-ui >=` in
+      # the spec and the image CI builds (CLAUDE.md, "Moving the pin"): it is
+      # moved by hand, not by a bot.
+      - dependency-name: "telamon-framework-*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /ci
+    schedule:
+      interval: weekly

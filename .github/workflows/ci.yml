@@ -369,6 +369,10 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
+      # The scripts the build and CI run (docs/SECURITY.md, "Build hardening").
+      - name: shellcheck
+        run: shellcheck scripts/*.sh ci/*.sh packaging/*.sh apps/telamon-notepad/tests/shard.sh
+
       # Not verified offline: whether qmllint resolves Telamon.Ui and Kirigami from
       # the installed modules and passes on the current QML. Reported but not
       # blocking until a run shows it is clean; then drop continue-on-error.
@@ -456,6 +460,21 @@ jobs:
 
       - name: cargo test
         run: cargo test --locked --workspace
+
+      # The parsers that read what other programs wrote (files, Markdown lines)
+      # with far more random input than a local run uses (docs/SECURITY.md,
+      # "Tests"). A failure prints the input that broke the rule. Every
+      # property test is in a module named `props`.
+      - name: Property tests, long run
+        timeout-minutes: 10
+        env:
+          PROPTEST_CASES: 20000
+        run: cargo test --locked --workspace -- props
+
+      # The check the RPM build runs on the finished program (%check), against
+      # small programs with and without the hardening.
+      - name: Hardening check self-test
+        run: scripts/test-check-hardening.sh
 
       - name: CMake build
         run: |
