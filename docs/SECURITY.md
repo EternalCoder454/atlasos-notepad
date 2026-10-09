@@ -305,8 +305,9 @@ Updater, and sent only when the user sends them.
 
 - **No document text is put in a report by Notepad.** The Rust code indexes
   UTF-16 slices and never formats the text into an error or a `panic!`/`expect`
-  message (none exists outside tests); the FFI functions catch panics and return
-  an error. Qt's fatal messages are Qt's own words (assertions, plugin and
+  message (none exists outside tests; `tests/source_rules.rs` fails on a new one in the
+  file layer, the Markdown reader or the C ABI); the FFI functions catch panics
+  and return an error. Qt's fatal messages are Qt's own words (assertions, plugin and
   platform failures). From telamon-framework **2.0.8** the framework scrubs
   message and frames (home paths, user names, control and bidi characters),
   caps the payload at 64 KiB and never includes a command line, a host or an
@@ -410,6 +411,7 @@ A non-local URL (`sftp://`, `smb://`, ...) is read and written through KIO
 | The file reader, writer and encodings; the Markdown line reader (properties and a corpus of nasty inputs) | `crates/notepad-core/src/props.rs` | `PROPTEST_CASES=20000 cargo test --workspace --locked -- props` |
 | The C ABI | `apps/telamon-notepad/src/props.rs` | the same command |
 | The QML text and link rules, and the checker's own tests | `apps/telamon-notepad/tests/qml_text.rs` | `cargo test --workspace --locked` |
+| No panicking macro in the code that sees document text | `apps/telamon-notepad/tests/source_rules.rs` | `cargo test --workspace --locked` |
 | Opening, saving, the session, recents, launch arguments, links, remote files | `apps/telamon-notepad/tests/app_test.cpp` (`AppTest`) | `ctest --test-dir build/s1 -j10 --output-on-failure` |
 | The highlighters and editing | `apps/telamon-notepad/tests/editor_test.cpp` | the same |
 | Hardening of the built program, and the check's own test | `scripts/check-hardening.sh` (the spec's `%check`), `scripts/test-check-hardening.sh` | `scripts/test-check-hardening.sh` |
