@@ -1,5 +1,5 @@
 //! Guards of the QML that shows or opens what other programs wrote
-//! (docs/SECURITY.md, "Rich text" and "Opening links"). They read the QML
+//! (docs/SECURITY.md, section 4, "Showing text that came from outside"). They read the QML
 //! source, so a new `Text`, link or image that skips a rule fails here, in CI,
 //! and not in a review three releases later.
 //!
@@ -203,14 +203,34 @@ fn blocks<'a>(src: &'a str, masked: &str, types: &[&str]) -> Vec<(usize, String,
     out
 }
 
-/// The `textFormat:` values of a block (those of the blocks inside it count
-/// too: a block is checked as a whole, which is stricter).
+/// The `textFormat:` values a block sets on itself: its own lines, not those
+/// of the blocks nested in it (`Label { Item { textFormat: ... } }` must not
+/// make the Label plain). Braces are counted on the masked text.
 fn text_formats(block: &str) -> Vec<&str> {
-    block
-        .lines()
-        .filter_map(|l| l.trim().strip_prefix("textFormat:"))
-        .map(|v| v.trim().trim_end_matches(';').trim())
-        .collect()
+    let masked = mask(block);
+    let mut depth = 0i32;
+    let mut out = Vec::new();
+    for (line, shown) in masked.lines().zip(block.lines()) {
+        // The block's own properties are on depth 1 (inside its first brace).
+        if depth == 1
+            && let Some(v) = shown.trim().strip_prefix("textFormat:")
+        {
+            out.push(v.trim().trim_end_matches(';').trim());
+        }
+        // `Type { textFormat: X }` on one line is also the block's own.
+        if depth == 0
+            && let Some(at) = shown.find("textFormat:")
+            && shown[..at].contains('{')
+        {
+            let v = shown[at + "textFormat:".len()..]
+                .split(['}', ';'])
+                .next()
+                .unwrap_or("");
+            out.push(v.trim());
+        }
+        depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+    }
+    out
 }
 
 /// Every violation of the rules in one file, as messages.
@@ -359,6 +379,8 @@ fn checker_passes_good_snippets() {
         "Item {\n    delegate: QQC2.Label {\n        textFormat: Text.PlainText\n        text: modelData\n    }\n}\n",
         "TextEdit {\n    textFormat: TextEdit.PlainText\n}\n",
         "Item {\n    TelamonLabel { text: x }\n}\n",
+        "Item {\n    QQC2.Label { textFormat: Text.PlainText }\n}\n",
+        "Item {\n    QQC2.Label {\n        textFormat: Text.PlainText\n        Item { x: 1 }\n    }\n}\n",
         "Item {\n    TelamonLabel {\n        textFormat: Text.PlainText\n    }\n}\n",
         // A word in a string or a comment is not a use.
         "Item {\n    // RichText is not wanted\n    property string s: \"RichText Image { eval(\"\n}\n",
@@ -380,6 +402,11 @@ fn checker_fails_bad_snippets() {
             "without",
         ),
         ("Item {\n    Text {\n        text: x\n    }\n}\n", "without"),
+        // A nested block's format does not make the outer text plain.
+        (
+            "Item {\n    QQC2.Label {\n        text: x\n        Item {\n            textFormat: Text.PlainText\n        }\n    }\n}\n",
+            "without",
+        ),
         (
             "Item {\n    delegate: QQC2.Label {\n        text: modelData\n    }\n}\n",
             "without",

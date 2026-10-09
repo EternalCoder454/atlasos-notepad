@@ -104,6 +104,29 @@ build hook hook.c "${good[@]}"
 expect_pass hook
 expect_fail hook "KIO hook" --cxx
 
+# Stripped, the hook cannot be seen: said, not silently passed.
+cat >"$dir/hook2.c" <<'C'
+#include <stdio.h>
+#include <string.h>
+int _ZN6Remote12setForceKioEb(int on) { return on; }
+int main(int argc, char **argv) {
+    char buf[64];
+    strncpy(buf, argc > 1 ? argv[1] : "hello", sizeof buf - 1);
+    buf[sizeof buf - 1] = 0;
+    puts(buf);
+    return _ZN6Remote12setForceKioEb(0);
+}
+C
+build hookstripped hook2.c "${good[@]}"
+expect_fail hookstripped "KIO hook" --cxx
+strip -s "$dir/hookstripped"
+expect_pass hookstripped --cxx
+out=$("$check" --cxx "$dir/hookstripped" 2>&1 || true)
+if ! grep -q "is stripped" <<<"$out"; then
+    echo "FAIL hookstripped: no note that the hook cannot be told" >&2
+    failures=$((failures + 1))
+fi
+
 # Not an ELF file, or not there at all.
 printf 'not a program\n' >"$dir/text"
 expect_fail text "not an ELF file"

@@ -2273,9 +2273,7 @@ private Q_SLOTS:
         QVERIFY(doc);
         attach(doc);
         QTRY_VERIFY(!doc->isLoading()); // a big text goes into the editor in pieces
-        if (doc->isReadOnly()) {
-            QSKIP("opened read-only: saving cannot change it");
-        }
+        QVERIFY(!doc->isReadOnly()); // every row is meant to be editable
         insert(doc, 0, QStringLiteral("Z"));
         QMetaObject::invokeMethod(doc->textEdit(), "remove", Q_ARG(int, 0), Q_ARG(int, 1));
         QVERIFY2(saveAndWait(doc), qPrintable(doc->bannerText()));
@@ -2307,6 +2305,8 @@ private Q_SLOTS:
                 }
             }
         }
+        // And a link with a space in it still opens, as one encoded URL.
+        QCOMPARE(m_app->linkUrl(QStringLiteral("https://example.com/a b")), QStringLiteral("https://example.com/a%20b"));
         // The target shown beside a link is the host that will be asked.
         QCOMPARE(m_app->linkTarget(QStringLiteral("https://google.com@evil.example/")), QStringLiteral("evil.example"));
         QCOMPARE(m_app->linkTarget(QStringLiteral("https://evil.example:8443/x")), QStringLiteral("evil.example"));
@@ -2365,10 +2365,11 @@ private Q_SLOTS:
         rc.endGroup();
         rc.sync();
         restart();
-        QVERIFY(m_app->recentFiles().size() <= 10);
+        QCOMPARE(m_app->recentFiles().size(), 10);
+        QVERIFY(m_app->recentFiles().first().startsWith(QStringLiteral("sftp://host/dir/0")));
         // Adding one keeps the cap and puts it first.
         m_app->addRecentFile(write(QStringLiteral("rec.txt"), "x"));
-        QVERIFY(m_app->recentFiles().size() <= 10);
+        QCOMPARE(m_app->recentFiles().size(), 10);
         QCOMPARE(m_app->recentFiles().first(), m_dir + QStringLiteral("/rec.txt"));
         // A hostile entry opened from the list goes through the same checks
         // as any URL: a scheme Notepad doesn't open makes a message, not a tab.

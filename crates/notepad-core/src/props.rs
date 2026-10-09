@@ -460,8 +460,6 @@ fn units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-/// Lines that have gone quadratic or deep in readers like this one: each must
-/// come back in a moment, at 100,000 units (the longest line the app edits).
 #[test]
 fn markdown_empty_destination_is_an_empty_range() {
     let text = units("[a]()");
@@ -469,6 +467,8 @@ fn markdown_empty_destination_is_an_empty_range() {
     assert!(a == b && b <= text.len());
 }
 
+/// Lines that have gone quadratic or deep in readers like this one: each must
+/// come back in a moment, at 100,000 units (the longest line the app edits).
 #[test]
 fn markdown_hostile_lines_stay_fast() {
     let n = 100_000;
@@ -688,9 +688,8 @@ fn files_size_limits_hold_for_sparse_and_growing_files() {
     assert!(dec.binary);
     assert_eq!(st.size, 10 << 20);
     // /proc files report size 0 and are regular: read to the limit, no hang.
-    if let Ok((dec, _)) = file::read(Path::new("/proc/self/status"), 10 << 20) {
-        assert!(!dec.text.is_empty());
-    }
+    let (dec, _) = file::read(Path::new("/proc/self/status"), 10 << 20).unwrap();
+    assert!(!dec.text.is_empty());
     // A file that grows while it is read stops at the limit + 1 byte.
     let grow = d.path().join("grow");
     fs::write(&grow, b"x").unwrap();

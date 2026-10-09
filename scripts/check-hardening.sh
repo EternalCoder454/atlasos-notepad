@@ -104,6 +104,8 @@ for f in "$@"; do
         # the program is not stripped, which is how %check sees it).
         if LC_ALL=C grep -aq 'setForceKio' "$f"; then
             bad "$f" "holds the tests' KIO hook (Remote::setForceKio)"
+        elif ! readelf -SW "$f" 2>/dev/null | grep -q ' \.symtab '; then
+            echo "check-hardening: note: $f is stripped, so the absence of the tests' KIO hook cannot be told" >&2
         fi
     fi
 done

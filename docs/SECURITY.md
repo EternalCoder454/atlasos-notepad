@@ -266,8 +266,10 @@ print dialog to run and has no automated test).
   names, paths, hosts, KIO's error text, the recent list and the languages are
   all drawn plain; nothing asks for rich, styled, Markdown or auto-detected
   text, except the About dialog's one project link (a literal `<a href>` around
-  the translated words "Project page"). `Qt.openUrlExternally` appears twice,
-  both on string literals. No QML runs text as code, loads a component by name,
+  the translated words "Project page"). `Qt.openUrlExternally` appears twice: on a string literal
+  (the settings page's project button), and on the link of that About label,
+  whose only link is the literal `href` (a translator could in theory write
+  markup into the words around it; translations are shipped with the package). No QML runs text as code, loads a component by name,
   fetches (`XMLHttpRequest`, `fetch`, web views) or draws an `Image`. Telamon.Ui's
   banners, tabs, dialogs, menus and tooltips are plain by the framework's own
   rules (its `qml_text` lint, `docs/SECURITY.md` there). *Tests:*
@@ -280,12 +282,17 @@ print dialog to run and has no automated test).
   shapes, a line of 100,000 characters took **19 s** (`<<` in TSX), **18 s**
   (`%` in Crystal), 7 s (`<` in TypeScript/PHP/Twig, `[` in Fish) on the
   window's own thread, with the unsaved text unsaved until it returned. A line
-  over **10,000 characters** (`Limits::highlightedLineLength`) is now left
-  unhighlighted; at that length the worst combination measured stayed under
-  0.3 s. Lines up to 100,000 characters are still editable, plain. The Markdown
-  reader is not affected (linear, above). *Tests:*
-  `EditorTest::codeHighlighterHostileLinesAreBounded` (fails at 31.6 s without
-  the cap), `codeHighlighterKeepsLinesUnderTheCap`, `codeHighlighterSkipsHugeLines`.
+  over **4,000 characters** (`Limits::highlightedLineLength`) is now left
+  unhighlighted: at 10,000 the worst combination measured took 0.2 s, so one
+  line at the cap costs about 0.04 s, and the highlighter's time slices read the
+  clock after every line over 1,000 characters (a slice stops within one line of
+  its 8 ms budget, instead of after up to 16 lines). Lines up to 100,000
+  characters are still editable, plain; a document of many lines just under the
+  cap is highlighted in slices from the event loop, as any large file is. The
+  Markdown reader is not affected (linear, above). *Tests:*
+  `EditorTest::codeHighlighterHostileLinesAreBounded` (fails at 31.6 s with no
+  cap), `codeHighlighterLinesNearTheCapStayInSlices`,
+  `codeHighlighterKeepsLinesUnderTheCap`, `codeHighlighterSkipsHugeLines`.
 - **Spell check** asks the system's Hunspell dictionaries through Sonnet, in
   the dictionaries' own search path; nothing is downloaded. A word of 100,000
   letters costs no time (measured: 0 ms, as does a 20,000-letter word asked for
@@ -422,7 +429,8 @@ A non-local URL (`sftp://`, `smb://`, ...) is read and written through KIO
 | Hardening of the built program, and the check's own test | `scripts/check-hardening.sh` (the spec's `%check`), `scripts/test-check-hardening.sh` | `scripts/test-check-hardening.sh` |
 
 Every property test is in a module named `props`, so one `-- props` runs them
-all; each takes under a minute at 20,000 cases (about 15 s together). A failure
+all; each takes under a minute at 20,000 cases (about 15 s together; the three that
+write files in a temp folder stop at 400 cases, hundreds of saves and reads). A failure
 prints the smallest input that broke the rule, and proptest keeps it in
 `proptest-regressions/` to be run again first.
 
