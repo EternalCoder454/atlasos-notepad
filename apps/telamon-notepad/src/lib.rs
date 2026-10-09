@@ -589,3 +589,7 @@ mod tests {
         }
     }
 }
+
+/// Property tests of the C ABI: `cargo test -- props`.
+#[cfg(test)]
+mod props;

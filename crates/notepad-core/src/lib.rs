@@ -3,3 +3,7 @@
 
 pub mod file;
 pub mod markdown;
+
+/// Property tests: `cargo test -- props` (CI runs them with 20,000 cases).
+#[cfg(test)]
+mod props;

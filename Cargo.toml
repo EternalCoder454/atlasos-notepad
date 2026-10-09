@@ -17,6 +17,9 @@ rust-version = "1.89"
 telamon-framework-core = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "8e6a53569363aec3d7e42920875d03ca113ef3eb" }
 telamon-framework-system = { git = "https://github.com/EternalCoder454/atlas-framework", rev = "8e6a53569363aec3d7e42920875d03ca113ef3eb" }
 
+# Property tests (docs/SECURITY.md, "Tests"): a dev-dependency only.
+proptest = { version = "1", default-features = false, features = ["std"] }
+
 [profile.release]
 lto = "thin"
 codegen-units = 4

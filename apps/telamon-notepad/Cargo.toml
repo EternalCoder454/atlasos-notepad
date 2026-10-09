@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# An app of Telamon OS, never published to crates.io.
+publish = false
 
 # CMake (Corrosion) links the static library into the C++ executable.
 # `rlib` is there so `cargo test` and `cargo clippy` work as usual.
@@ -17,3 +19,7 @@ crate-type = ["staticlib", "rlib"]
 telamon-framework-core.workspace = true
 telamon-framework-system.workspace = true
 notepad-core = { path = "../../crates/notepad-core" }
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile = "3"
