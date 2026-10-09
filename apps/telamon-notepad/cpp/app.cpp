@@ -644,6 +644,9 @@ QUrl App::urlFromArgument(const QString &arg, const QString &workingDirectory)
         if (!url.isValid()) {
             return {};
         }
+        if (url.toLocalFile().contains(QChar(0))) {
+            return {}; // "%00" would cut the name short in the C calls
+        }
         return url.isLocalFile() ? QUrl::fromLocalFile(QFileInfo(url.toLocalFile()).absoluteFilePath()) : url;
     }
     if (!QDir::isAbsolutePath(arg) && !QDir::isAbsolutePath(workingDirectory)) {

@@ -275,7 +275,10 @@ line; if the state after it changed (typing `/*`) it carries on for 2 ms,
 then the slices go on until a line starts in the state it had. The layout is
 told at most once in ten times what telling it costs (it walks the rest of
 the document each time), and not at all for a line that stays plain. A line
-over `Limits::lineLength` is not highlighted.
+over `Limits::highlightedLineLength` (4,000 characters) is not highlighted:
+the syntax definitions' regular expressions are quadratic on some long lines
+(19 s for 100,000 characters of `<<` in TSX), and the highlighter runs on the
+window's thread (docs/SECURITY.md).
 
 | 1 MB `.cpp` (30k lines) | Before | After |
 | --- | --- | --- |
@@ -327,6 +330,9 @@ another way: 80 MB empty, 102 MB with 50 KB Markdown.
 
 ## Security
 
+The full threat model, the rule at each entry point and the test that keeps it
+true: [SECURITY.md](SECURITY.md). A summary:
+
 Threat model: Notepad runs as the user and opens files from anywhere
 (downloads, archives, shared folders, other users' files in `/tmp`). Their
 contents, names and the folders they sit in may be hostile. Another process
@@ -371,12 +377,18 @@ on the session bus can send it files to open.
   joiner follows each `<` in a path.
 - **Second launches.** `--` ends the options. At most 100 files are taken,
   and a relative path is used only with an absolute working directory.
+- **Highlighting.** Code lines over 4,000 characters are left plain, so no
+  line the editor accepts can hold the window for seconds.
 - **Other.**
   - Telamon Updater is started from `/usr/bin` rather than found on `$PATH`.
   - The C ABI refuses null pointers, and no panic crosses into C++.
-  - The locked crates have no known advisories (OSV, October 2026).
-  - The RPM's binary is PIE, full RELRO, NX, FORTIFY, stack protector and
-    CET shadow stack.
+  - `cargo-deny` and `cargo-audit` run in CI on every change and every week.
+  - The RPM's binary is built with Fedora's hardening flags (FORTIFY, stack
+    protector, CET shadow stack, PIE, full RELRO), and the package build fails
+    if it is not PIE, fully RELRO, non-executable-stack, free of RPATH and
+    text relocations, without stack protectors, or has the tests' KIO hook
+    (`scripts/check-hardening.sh`). FORTIFY and CET are not read back by that
+    check; `annocheck` agrees with them (docs/SECURITY.md).
 
 ## Renamed from Atlas Notepad (0.2.0)
 

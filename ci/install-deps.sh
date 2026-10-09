@@ -5,7 +5,7 @@
 # available yet, directly by the workflow's jobs. The package list mirrors
 # scripts/dev.sh, minus the GUI test tools CI doesn't use (Xvfb, ImageMagick,
 # xdotool), plus what the workflow runs: ccache, qmllint (qt6-qtdeclarative-devel),
-# rpmlint and git/tar/zstd for the actions.
+# rpmlint, ShellCheck and git/tar/zstd for the actions.
 set -euo pipefail
 
 main() {
@@ -31,7 +31,7 @@ main() {
     dnf -y install --setopt=install_weak_deps=False \
         dnf5-plugins rpm-build clippy rustfmt dbus-daemon \
         qt6-qtbase-gui kf6-qqc2-desktop-style breeze-icon-theme default-fonts-core-sans \
-        ccache qt6-qtdeclarative-devel rpmlint git tar zstd
+        ccache qt6-qtdeclarative-devel rpmlint ShellCheck git tar zstd
     # dnf brings their dependencies; rpm then puts these exact files in place,
     # also when this version or a newer one is installed.
     dnf -y install "${files[@]}"

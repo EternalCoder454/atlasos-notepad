@@ -203,9 +203,18 @@ void Session::beginRestore(int deaths)
     const QString path = dir + QStringLiteral("/restoring");
     // No fsync: it only has to outlive the process, not the machine, and
     // this is on the way to the first frame.
-    QFile file(path);
-    if (!QDir().mkpath(dir) || !makePrivate(dir) || !file.open(QIODevice::WriteOnly | QIODevice::Truncate)
-        || file.write(QByteArray::number(deaths + 1)) <= 0) {
+    // 0600 like the rest of the session, whatever the umask or an older file's
+    // mode, and never through a link.
+    bool written = false;
+    if (QDir().mkpath(dir) && makePrivate(dir)) {
+        const int fd = ::open(QFile::encodeName(path).constData(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (fd >= 0) {
+            const QByteArray text = QByteArray::number(deaths + 1);
+            written = ::fchmod(fd, 0600) == 0 && ::write(fd, text.constData(), size_t(text.size())) == ssize_t(text.size());
+            ::close(fd);
+        }
+    }
+    if (!written) {
         qWarning("telamon-notepad: can't write %s; a crash while restoring won't be noticed", qPrintable(path));
     }
 }

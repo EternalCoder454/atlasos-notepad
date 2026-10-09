@@ -240,6 +240,12 @@ void DocumentList::open(const QList<QUrl> &urls)
         if (given.isEmpty()) {
             continue;
         }
+        // A NUL ("file:///tmp/a.txt%00.png") would cut the name short in the C
+        // calls below and open another file than the one shown.
+        if (given.contains(QChar(0))) {
+            Q_EMIT openFailed(tr("That isn't a valid file name."));
+            continue;
+        }
         const QString path = QFileInfo(given).absoluteFilePath();
         if (Document *existing = d->find(path)) {
             last = existing;

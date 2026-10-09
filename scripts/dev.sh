@@ -51,7 +51,7 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
         # refreshes don't stack layers on the old image.
         # No relabelling, as for /src below. The RPMs are copied in, not
         # mounted, so only the files named are read.
-        ctr=$(podman run -d --security-opt label=disable -v "$repo/packaging":/packaging:ro \
+        ctr=$(podman run -d --ulimit core=0 --security-opt label=disable -v "$repo/packaging":/packaging:ro \
             -v atlas-dnf:/var/cache/libdnf5 \
             registry.fedoraproject.org/fedora:44 sleep infinity)
         trap 'podman rm -f -t 0 "$ctr" >/dev/null' EXIT
@@ -64,7 +64,7 @@ if [ -n "${ATLAS_LOCAL_RPMS:-}" ]; then
             echo keepcache=True >>/etc/dnf/dnf.conf
             dnf -y install dnf5-plugins rpm-build clippy rustfmt xorg-x11-server-Xvfb \
                 dbus-daemon qt6-qtbase-gui kf6-qqc2-desktop-style breeze-icon-theme \
-                ImageMagick xdotool ccache
+                ImageMagick xdotool ccache ShellCheck
             cd /rpms
             dnf -y install "$@"
             # The exact files, also when this version or a newer one is installed.
@@ -82,7 +82,7 @@ fi
 # A changed spec (new BuildRequires) installs its build dependencies into the
 # image, keeping its Telamon.Ui.
 if [ "$(podman image inspect --format '{{index .Labels "spec"}}' "$image")" != "$spec_sum" ]; then
-    ctr=$(podman run -d --security-opt label=disable -v "$repo/packaging":/packaging:ro \
+    ctr=$(podman run -d --ulimit core=0 --security-opt label=disable -v "$repo/packaging":/packaging:ro \
         -v atlas-dnf:/var/cache/libdnf5 "$image" sleep infinity)
     trap 'podman rm -f -t 0 "$ctr" >/dev/null' EXIT
     podman exec "$ctr" bash -c 'dnf -y install ccache && dnf -y builddep /packaging/telamon-notepad.spec' >&2
@@ -97,7 +97,11 @@ tty=()
 # relabelling the mounts with :z or :Z, which would change the labels of the
 # repo on the host. --init: a real init as PID 1, which reaps and forwards
 # signals; GNU timeout, for one, exits 125 at once when it is PID 1.
-exec podman run --rm --init "${tty[@]}" --security-opt label=disable \
+# --ulimit core=0: a crashing build or test must not leave a core dump (the
+# owner's rule for every container). no-new-privileges: nothing in the
+# container can gain privileges through a setuid binary.
+exec podman run --rm --init "${tty[@]}" --ulimit core=0 \
+    --security-opt label=disable --security-opt no-new-privileges \
     -v "$repo":/src -w /src \
     -v atlas-cargo:/root/.cargo/registry \
     -v atlas-cargo-git:/root/.cargo/git \

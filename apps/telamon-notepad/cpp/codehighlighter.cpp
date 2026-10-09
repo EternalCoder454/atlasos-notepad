@@ -177,9 +177,10 @@ State CodeHighlighter::highlightOne(QTextBlock block, const State &in, bool *cha
     }
     m_ranges.clear();
     State end = in;
-    // A line this long is left unhighlighted: reading it costs a stall, and
-    // the file is read-only anyway (Limits::lineLength).
-    if (block.length() - 1 <= Limits::lineLength) {
+    // A line this long is left unhighlighted: the definitions' regular
+    // expressions can take seconds on it (Limits::highlightedLineLength), and
+    // from Limits::lineLength the file is read-only anyway.
+    if (block.length() - 1 <= Limits::highlightedLineLength) {
         end = highlightLine(block.text(), in);
     }
     data->in = in;
@@ -249,6 +250,7 @@ QTextBlock CodeHighlighter::run(QTextBlock block, bool all, int through, qint64 
             }
             *end = block.position() + block.length();
         }
+        const int lineLength = block.length();
         block = block.next();
         if (!all && block.isValid() && block.position() > through) {
             const auto *data = dataOf(block);
@@ -256,7 +258,9 @@ QTextBlock CodeHighlighter::run(QTextBlock block, bool all, int through, qint64 
                 return QTextBlock();
             }
         }
-        if (budgetNs > 0 && n % 16 == 0 && clock.nsecsElapsed() > budgetNs) {
+        // The clock is read every 16 lines, and after every long one: 16 lines
+        // at the cap would otherwise run on for seconds in a slice.
+        if (budgetNs > 0 && (n % 16 == 0 || lineLength > 1000) && clock.nsecsElapsed() > budgetNs) {
             break;
         }
     }

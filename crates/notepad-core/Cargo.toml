@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# An app of Telamon OS, never published to crates.io.
+publish = false
 
 [dependencies]
 encoding_rs = "0.8"
@@ -13,3 +15,4 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+proptest.workspace = true

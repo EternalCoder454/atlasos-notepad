@@ -1461,6 +1461,7 @@ TelamonWindow {
                                 Layout.column: index % 2
                                 Layout.fillWidth: index % 2 === 0
                                 text: modelData
+                                textFormat: Text.PlainText
                                 opacity: index % 2 === 1 ? 0.7 : 1
                                 Layout.alignment: index % 2 === 1 ? Qt.AlignRight : Qt.AlignLeft
                             }
