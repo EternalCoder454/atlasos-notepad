@@ -3,7 +3,8 @@
 Telamon OS's text editor: Rust + Qt 6.11 Quick + Kirigami, CMake + Corrosion.
 Design and S1 figures: `docs/DESIGN.md`. Plan and roadmap: Atlas Notes,
 `AtlasOS/Atlas Text Editor/Plan` and `/Roadmap` (tick a box only after it was
-built and tested).
+built and tested). Security model and rules: `docs/SECURITY.md` (change it
+together with the code it describes; some tests read the QML).
 
 ## Rules
 
@@ -35,6 +36,11 @@ scripts/dev.sh bash -c 'cmake -S apps/telamon-notepad -B build/s1 -G Ninja -DCMA
 scripts/dev.sh ctest --test-dir build/s1 -j10 --output-on-failure
 scripts/dev.sh ctest --test-dir build/s1 -R editor_test   # one suite while working
 scripts/dev.sh scripts/bench-s1.sh build/s1
+# Security (docs/SECURITY.md): property tests (CI runs 20,000 cases), the
+# hardening check's own test, shell scripts
+scripts/dev.sh env PROPTEST_CASES=20000 cargo test --workspace --locked -- props
+scripts/dev.sh scripts/test-check-hardening.sh
+scripts/dev.sh bash -c 'dnf -y install ShellCheck && shellcheck scripts/*.sh ci/*.sh packaging/*.sh apps/telamon-notepad/tests/shard.sh'
 ```
 
 `build/`, `target/` and `out/` (screenshots, scratch) are gitignored.

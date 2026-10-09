@@ -21,6 +21,7 @@ scripts/dev.sh env ATLAS_LOCAL_RPMS=/src/out/fw-rpms packaging/build-rpm.sh /src
 ```
 
 Design notes, including the performance targets: [docs/DESIGN.md](docs/DESIGN.md).
+Threat model, rules and the tests that hold them: [docs/SECURITY.md](docs/SECURITY.md).
 
 ## License
 
