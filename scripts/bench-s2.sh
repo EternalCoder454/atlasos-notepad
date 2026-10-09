@@ -8,6 +8,7 @@ shift || true
 files=("${@:-out/s2/md-1m.md out/s2/md-10m.md out/s2/line-5m.txt}")
 run=$(mktemp -d)
 export XDG_CONFIG_HOME=$run/config XDG_DATA_HOME=$run/data XDG_CACHE_HOME=$run/cache XDG_STATE_HOME=$run/state
+# shellcheck disable=SC2068 # the default is one string of three names, split on purpose
 for f in ${files[@]}; do
     for plain in 0 1; do
         echo "== $f$([ $plain = 1 ] && echo ', plain TextEdit')"
