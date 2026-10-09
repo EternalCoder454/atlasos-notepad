@@ -65,7 +65,9 @@ QByteArray utf16(const QString &s, bool big, bool bom = true)
 }
 
 // What an atlas-notepad that is still running offers a second launch
-// (KDBusService::Unique's org.kde.KDBusService on /MainApplication).
+// (KDBusService::Unique's org.kde.KDBusService, at the path of its name:
+// /net/eterneon/atlas/notepad; tests/bus-surface.sh does it with a real
+// KDBusService).
 class FakeOldNotepad : public QObject
 {
     Q_OBJECT
@@ -2098,7 +2100,7 @@ private Q_SLOTS:
             &fake,
             [&] {
                 QDBusConnection bus = QDBusConnection::connectToBus(QDBusConnection::SessionBus, name);
-                registered = bus.registerObject(QStringLiteral("/MainApplication"), &fake, QDBusConnection::ExportAllSlots) && bus.registerService(Legacy::appId());
+                registered = bus.registerObject(QStringLiteral("/net/eterneon/atlas/notepad"), &fake, QDBusConnection::ExportAllSlots) && bus.registerService(Legacy::appId());
             },
             Qt::BlockingQueuedConnection);
         auto cleanup = qScopeGuard([&] {

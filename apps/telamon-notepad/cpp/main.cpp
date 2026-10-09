@@ -10,6 +10,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDBusConnection>
 #include <QElapsedTimer>
 #include <QIcon>
 #include <QQmlApplicationEngine>
@@ -143,6 +144,12 @@ int main(int argc, char *argv[])
     std::optional<KDBusService> service;
     if (!bench) {
         service.emplace(KDBusService::Unique);
+        // KDBusService also exports the whole application object at
+        // /MainApplication, with its slots and properties: any process on the
+        // bus could call quit() and closeAllWindows() or set the style sheet.
+        // Nothing needs that path: a second launch (CommandLine) and
+        // org.freedesktop.Application are served at the application's own path.
+        QDBusConnection::sessionBus().unregisterObject(QStringLiteral("/MainApplication"));
     }
 
     QQmlApplicationEngine engine;

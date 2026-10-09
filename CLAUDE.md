@@ -40,7 +40,7 @@ scripts/dev.sh scripts/bench-s1.sh build/s1
 # hardening check's own test, shell scripts
 scripts/dev.sh env PROPTEST_CASES=20000 cargo test --workspace --locked -- props
 scripts/dev.sh scripts/test-check-hardening.sh
-scripts/dev.sh bash -c 'dnf -y install ShellCheck && shellcheck scripts/*.sh ci/*.sh packaging/*.sh apps/telamon-notepad/tests/shard.sh'
+scripts/dev.sh bash -c 'dnf -y install ShellCheck && shellcheck scripts/*.sh ci/*.sh packaging/*.sh apps/telamon-notepad/tests/*.sh'
 ```
 
 `build/`, `target/` and `out/` (screenshots, scratch) are gitignored.

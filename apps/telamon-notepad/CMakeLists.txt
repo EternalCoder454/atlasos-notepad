@@ -128,6 +128,17 @@ if(BUILD_TESTING)
     # big-file tests over cores.
     set(APP_TEST_SHARDS 8)
     math(EXPR last "${APP_TEST_SHARDS} - 1")
+    # The session bus as the real program shows it (tests/bus-surface.sh): a
+    # launch handed to a running atlas-notepad, and no /MainApplication.
+    find_program(NP_BUSCTL busctl)
+    if(DBUS_RUN_SESSION AND NP_BUSCTL)
+        add_executable(legacy_peer tests/legacy_peer.cpp)
+        target_link_libraries(legacy_peer PRIVATE Qt6::Core Qt6::DBus KF6::DBusAddons)
+        add_test(NAME bus_surface COMMAND ${DBUS_RUN_SESSION}
+            --config-file=${CMAKE_CURRENT_SOURCE_DIR}/tests/dbus-session.conf --
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/bus-surface.sh $<TARGET_FILE:telamon-notepad-app> $<TARGET_FILE:legacy_peer>)
+        set_tests_properties(bus_surface PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
     foreach(shard RANGE ${last})
         if(DBUS_RUN_SESSION)
             add_test(NAME app_test_${shard} COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/shard.sh
