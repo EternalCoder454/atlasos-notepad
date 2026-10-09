@@ -698,6 +698,31 @@ private Q_SLOTS:
         QCOMPARE(ro->banner(), Document::ReadOnlyFile);
     }
 
+    // The mode of a file stays what it was when it is saved over sftp: the
+    // local save keeps it, and a remote one that took the server's default
+    // (0644 for most) would widen a file the user had locked down. KIO's sftp
+    // worker gives the new file the old one's mode; this keeps it that way.
+    // The server's user is not the test's, so the file is 0606: the group bits,
+    // which a default would add, are the ones to watch.
+    void sftpSaveKeepsTheFilesMode()
+    {
+        if (qEnvironmentVariableIsEmpty("NP_KIO_TEST_BASE")) {
+            QSKIP("needs a sftp server: scripts/kio-sftp-test.sh");
+        }
+        const QString local = sftpLocal(QStringLiteral("mode.txt"));
+        putFile(local, "private\n");
+        QCOMPARE(chmod(QFile::encodeName(local).constData(), 0606), 0);
+        Document *doc = openSftp(newList(), QStringLiteral("mode.txt"));
+        QVERIFY(doc);
+        attach(doc);
+        insert(doc, 0, QStringLiteral("edited "));
+        QVERIFY(saveAndWait(doc));
+        QCOMPARE(read(local), QByteArray("edited private\n"));
+        struct stat st = {};
+        QCOMPARE(stat(QFile::encodeName(local).constData(), &st), 0);
+        QCOMPARE(int(st.st_mode & 07777), 0606);
+    }
+
     // ---- KDirNotify and KDE integration. These need a session bus
     // (ctest makes one with dbus-run-session); without it they skip.
     bool haveBus()

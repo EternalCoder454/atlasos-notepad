@@ -388,6 +388,11 @@ A non-local URL (`sftp://`, `smb://`, ...) is read and written through KIO
   10 MiB the transfer is killed, since "a server can lie about the size".
   *Tests:* `AppTest::kioRoundTrip`, `kioConflictAndFailure`,
   `kioCancelFirstOpenLeavesNoClosedTab`.
+- **A save keeps the file's mode.** Over sftp, KIO writes `<name>.part` and
+  renames it; the worker gives the new file the old one's permission bits, so a
+  private file does not come out world-readable (the server's default). *Test:*
+  `AppTest::sftpSaveKeepsTheFilesMode`, which needs a real sshd and runs from
+  `scripts/kio-sftp-test.sh` (skipped by `ctest`, and not in CI).
 - **No password is kept.** The tab, the session, the recent list, KDE's recent
   documents, "Copy location" and what "Open With" is given show the URL with the
   user name and **without the password**; KIO's own prompts ask for it, with the

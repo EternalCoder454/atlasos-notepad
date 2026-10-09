@@ -129,7 +129,7 @@ status=0
 echo "== app_test over sftp"
 # umask 000 for the test process only: the files it makes are writable for
 # the server's user too.
-(umask 000; dbus-run-session --config-file="$here/../apps/telamon-notepad/tests/dbus-session.conf" -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab kioSaveRaisesNoBanner relocateDuringRemoteSave renameDuringRemoteLoad) > "$work/app_test.log" 2>&1
+(umask 000; dbus-run-session --config-file="$here/../apps/telamon-notepad/tests/dbus-session.conf" -- timeout -s KILL 200 "$build/app_test" kioRoundTrip sftpRoundTrip sftpConflictMissingAndReadOnly sftpSaveKeepsTheFilesMode kioRefusals kioConflictAndFailure kioCancelFirstOpenLeavesNoClosedTab kioSaveRaisesNoBanner relocateDuringRemoteSave renameDuringRemoteLoad) > "$work/app_test.log" 2>&1
 test_rc=$?
 grep -E "^(PASS|FAIL|SKIP|Totals|   Loc|   Actual|   Expected)" "$work/app_test.log"
 [ "$test_rc" = 0 ] || { status=1; echo "app_test exit $test_rc"; tail -15 "$work/app_test.log"; tail -15 "$work/sshd.log"; }
