@@ -87,8 +87,13 @@ bool forwardLaunch(const QStringList &arguments)
     if (!startupId.isEmpty()) {
         platformData.insert(QStringLiteral("desktop-startup-id"), QString::fromLocal8Bit(startupId));
     }
-    QDBusMessage call = QDBusMessage::createMethodCall(appId(), QStringLiteral("/MainApplication"), QStringLiteral("org.kde.KDBusService"),
-                                                       QStringLiteral("CommandLine"));
+    // KDBusService serves org.kde.KDBusService at the path of its name
+    // (net.eterneon.atlas.notepad -> /net/eterneon/atlas/notepad); the
+    // /MainApplication it also exports is the Qt application object, which
+    // has no CommandLine.
+    QString path = appId();
+    path.replace(QLatin1Char('.'), QLatin1Char('/')).prepend(QLatin1Char('/'));
+    QDBusMessage call = QDBusMessage::createMethodCall(appId(), path, QStringLiteral("org.kde.KDBusService"), QStringLiteral("CommandLine"));
     call << arguments << QDir::currentPath() << platformData;
     return bus.call(call, QDBus::Block, 10000).type() == QDBusMessage::ReplyMessage;
 }

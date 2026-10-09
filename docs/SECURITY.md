@@ -343,7 +343,7 @@ service (`KDBusService::Unique`): a second launch is forwarded to the first.
 |---|---|---|
 | The command line | the user's own processes | open files and URLs, `--new-window`, `--bench FILE` (a developer's typing benchmark of its own window; it opens one file, takes no session) |
 | `net.eterneon.telamon.notepad` at `/net/eterneon/telamon/notepad`: `org.kde.KDBusService.CommandLine(args, dir, platform)`, `org.freedesktop.Application.Open(uris)` and `Activate` | any process on the session bus (and a sandboxed app only if its sandbox lets it talk to the name) | open files and URLs, a new window, raise the window |
-| `/MainApplication`: Qt's `QCoreApplication`/`QGuiApplication`/`QApplication` exported by `KDBusService` | any process on the session bus | `quit()`, `exit()`, `closeAllWindows()`, `setStyleSheet(...)`, some properties. *Accepted*, see below |
+| `/MainApplication`: Qt's application object, which `KDBusService` exports | nobody: *not exported* (see below) | `quit()`, `exit()`, `closeAllWindows()` and `setStyleSheet(...)` are not reachable from the bus |
 
 Rules:
 
@@ -360,18 +360,22 @@ Rules:
   it does not run anything, write anything or change settings; it opens tabs
   (read-only access to files the user can read) and focuses the window. An
   `http(s)` URL sent this way makes KIO fetch it (7), as a typed one does.
-- **`/MainApplication` is KDE's standard export** of the application object
-  (every KDE app has it). A process on the session bus could close Notepad with
-  it: quitting saves the session first (`aboutToQuit`), and `closeAllWindows`
-  goes through the windows' own close confirmation. A process that can already
-  reach the user's session bus can do the same with `kill`, and Flatpak's bus
-  filter is what keeps a sandboxed app from the name at all. Unexporting it would
-  also break scripts that quit Notepad cleanly, so it is left as it is.
+- **`/MainApplication` is not exported.** `KDBusService` exports the Qt
+  application object there (every KDE app has it), and a process on the session
+  bus could close Notepad with it or set its style sheet. Nothing needs the
+  path: `org.freedesktop.Application` and `org.kde.KDBusService.CommandLine` are
+  served at `/net/eterneon/telamon/notepad`, so `main()` unregisters it right
+  after the service is up. A script that quit Notepad through it sends SIGTERM
+  instead (Notepad saves its session on it). *Test:* `tests/bus-surface.sh`
+  (ctest `bus_surface`).
 - **The activation token** (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`) of a
   forwarded launch goes only to the window system.
 - **The old name** (`net.eterneon.atlas.notepad`): a new Notepad hands its launch
-  to a still-running old one with the same call a second launch would use, at
-  most the arguments it got.
+  to a still-running old one with the same call a second launch would use
+  (`org.kde.KDBusService.CommandLine` at `/net/eterneon/atlas/notepad`, where
+  KDBusService serves it), at most the arguments it got. *Tests:*
+  `AppTest::launchIsHandedToRunningAtlasNotepad`, and `tests/bus-surface.sh`
+  with a real KDBusService under the old name.
 - **Other programs Notepad starts**: only Telamon Updater, by the **absolute
   path** `/usr/bin/telamon-updater` (never found on `$PATH`; `atlas-updater` in
   this release), with no arguments. "Open With..." and "Open containing folder"
@@ -529,8 +533,8 @@ prints the smallest input that broke the rule, and proptest keeps it in
   `/tmp/x.txt`, which is a link to a file the user can write, changes that file.
   The tab shows the link's name. Refusing would break dotfile setups; showing the
   target (a banner "this is a link to ...") is a product decision.
-- **Same-user processes can use the bus name** (`/MainApplication` and the file
-  forwarding). Only a sandbox stops that.
+- **Same-user processes can use the bus name** (the file forwarding). Only a
+  sandbox stops that.
 - **Unsaved text is plain on disk** (in the 0700 session folder), like the swap
   file of any editor; encrypting it needs a key the session does not have.
   Full-disk encryption is the answer.

@@ -371,7 +371,7 @@ jobs:
 
       # The scripts the build and CI run (docs/SECURITY.md, "Build hardening").
       - name: shellcheck
-        run: shellcheck scripts/*.sh ci/*.sh packaging/*.sh apps/telamon-notepad/tests/shard.sh
+        run: shellcheck scripts/*.sh ci/*.sh packaging/*.sh apps/telamon-notepad/tests/*.sh
 
       # Not verified offline: whether qmllint resolves Telamon.Ui and Kirigami from
       # the installed modules and passes on the current QML. Reported but not
