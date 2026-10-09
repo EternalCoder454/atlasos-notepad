@@ -4,6 +4,7 @@
 #include "codehighlighter.h"
 #include "linetools.h"
 #include "markdown.h"
+#include "sizelimits.h"
 
 #include <QClipboard>
 #include <QElapsedTimer>
@@ -1366,6 +1367,59 @@ private Q_SLOTS:
         QVERIFY(!doc.findBlockByNumber(0).layout()->formats().isEmpty());
         QVERIFY(doc.findBlockByNumber(1).layout()->formats().isEmpty());
         QVERIFY(!doc.findBlockByNumber(2).layout()->formats().isEmpty());
+    }
+
+    // The definitions' regular expressions are quadratic on some lines: a line
+    // of "<<" in TSX took 19 s at 100,000 characters, with the window's
+    // thread held. A line over Limits::highlightedLineLength is left plain, so
+    // the worst a line the editor accepts can cost is bounded.
+    void codeHighlighterHostileLinesAreBounded()
+    {
+        const struct {
+            const char *language;
+            const char *unit;
+        } cases[] = {{"TypeScript React (TSX)", "<<"}, {"TypeScript React (TSX)", "<"}, {"Crystal", "%"},   {"Fish", "a,"},
+                     {"TypeScript/PHP", "<a "},        {"Makefile", "0x"},            {"C", "0"},         {"Julia", "<!--"}};
+        for (const auto &c : cases) {
+            const KSyntaxHighlighting::Definition def = codeRepository().definitionForName(QString::fromLatin1(c.language));
+            if (!def.isValid()) {
+                continue; // not installed here
+            }
+            QString line;
+            while (line.size() < Limits::lineLength - 10) {
+                line += QString::fromLatin1(c.unit);
+            }
+            QTextDocument doc;
+            (void)doc.documentLayout();
+            doc.setPlainText(QStringLiteral("int a;\n") + line + QStringLiteral("\nint b;\n"));
+            CodeHighlighter highlighter(&doc);
+            highlighter.setTheme(themeFor(false));
+            QElapsedTimer clock;
+            clock.start();
+            highlighter.setDefinition(def);
+            highlighter.rehighlightAll(true);
+            const qint64 ms = clock.elapsed();
+            QVERIFY2(ms < 2000, qPrintable(QStringLiteral("%1 with %2 x %3 took %4 ms").arg(QString::fromLatin1(c.language), QString::fromLatin1(c.unit)).arg(line.size()).arg(ms)));
+            // The long line is left plain.
+            QVERIFY(doc.findBlockByNumber(1).layout()->formats().isEmpty());
+        }
+    }
+
+    // The cap leaves ordinary long lines alone (a minified line of 9,000 characters).
+    void codeHighlighterKeepsLinesUnderTheCap()
+    {
+        QString line;
+        while (line.size() < Limits::highlightedLineLength - 100) {
+            line += QStringLiteral("int a = 1; ");
+        }
+        QTextDocument doc;
+        (void)doc.documentLayout();
+        doc.setPlainText(line);
+        CodeHighlighter highlighter(&doc);
+        highlighter.setTheme(themeFor(false));
+        highlighter.setDefinition(codeRepository().definitionForName(QStringLiteral("C++")));
+        highlighter.rehighlightAll(true);
+        QVERIFY(!doc.firstBlock().layout()->formats().isEmpty());
     }
 
     // A big paste after a pass that stops where the state matches again (the

@@ -177,9 +177,10 @@ State CodeHighlighter::highlightOne(QTextBlock block, const State &in, bool *cha
     }
     m_ranges.clear();
     State end = in;
-    // A line this long is left unhighlighted: reading it costs a stall, and
-    // the file is read-only anyway (Limits::lineLength).
-    if (block.length() - 1 <= Limits::lineLength) {
+    // A line this long is left unhighlighted: the definitions' regular
+    // expressions can take seconds on it (Limits::highlightedLineLength), and
+    // from Limits::lineLength the file is read-only anyway.
+    if (block.length() - 1 <= Limits::highlightedLineLength) {
         end = highlightLine(block.text(), in);
     }
     data->in = in;
