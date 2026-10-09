@@ -121,6 +121,8 @@ build hookstripped hook2.c "${good[@]}"
 expect_fail hookstripped "KIO hook" --cxx
 strip -s "$dir/hookstripped"
 expect_pass hookstripped --cxx
+expect_fail hookstripped "--require-symbols" --cxx --require-symbols
+expect_pass good --cxx --require-symbols
 out=$("$check" --cxx "$dir/hookstripped" 2>&1 || true)
 if ! grep -q "is stripped" <<<"$out"; then
     echo "FAIL hookstripped: no note that the hook cannot be told" >&2

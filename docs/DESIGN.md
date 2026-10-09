@@ -383,9 +383,12 @@ on the session bus can send it files to open.
   - Telamon Updater is started from `/usr/bin` rather than found on `$PATH`.
   - The C ABI refuses null pointers, and no panic crosses into C++.
   - `cargo-deny` and `cargo-audit` run in CI on every change and every week.
-  - The RPM's binary is PIE, full RELRO, NX, FORTIFY, stack protector and
-    CET shadow stack, and the package build fails if it is not
-    (`scripts/check-hardening.sh`).
+  - The RPM's binary is built with Fedora's hardening flags (FORTIFY, stack
+    protector, CET shadow stack, PIE, full RELRO), and the package build fails
+    if it is not PIE, fully RELRO, non-executable-stack, free of RPATH and
+    text relocations, without stack protectors, or has the tests' KIO hook
+    (`scripts/check-hardening.sh`). FORTIFY and CET are not read back by that
+    check; `annocheck` agrees with them (docs/SECURITY.md).
 
 ## Renamed from Atlas Notepad (0.2.0)
 

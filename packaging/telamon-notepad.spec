@@ -108,7 +108,7 @@ install -Dpm0644 packaging/protected.d/telamon-notepad.conf \
 # The finished program is hardened as Fedora's flags make it: PIE, full RELRO,
 # no executable stack, no RPATH, stack protectors, and none of the tests' KIO
 # hook. Fails the build when a flag is lost (docs/SECURITY.md, "Build hardening").
-bash scripts/check-hardening.sh --cxx %{buildroot}%{_bindir}/telamon-notepad
+bash scripts/check-hardening.sh --cxx --require-symbols %{buildroot}%{_bindir}/telamon-notepad
 # No path into the build tree (checked as well as set: see %%build).
 # grep: 0 = found, 1 = not found, anything else (no binary) fails too.
 rc=0

@@ -1,4 +1,5 @@
-# Weekly pull requests for the dependencies Notepad builds with. Nothing is
+# Weekly pull requests for the dependencies Notepad builds with. (No docker
+# entry: Dependabot reads Dockerfiles, and ci/Containerfile is not one.) Nothing is
 # merged by itself: CI (and the security workflow) must pass, and a person
 # reads the change.
 version: 2
@@ -18,7 +19,3 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-  - package-ecosystem: docker
-    directory: /ci
-    schedule:
-      interval: weekly

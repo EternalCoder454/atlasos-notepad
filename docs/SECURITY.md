@@ -99,8 +99,16 @@ calls `np_file_read` (`crates/notepad-core/src/file.rs`, `read`).
   repeated byte, CR, NUL, a surrogate, an emoji or a UTF-16 BOM decodes in well
   under the 60 s the test allows (about a second in practice).
   *Test:* `files_ten_megabytes_of_everything_decode_in_time`.
-- **Names and folders.** A path goes to the system calls as bytes (a NUL
-  cannot get into a C string: `EINVAL`); a leading `-`, a newline, a tab, an
+- **Names and folders.** The Rust file layer takes a path
+  as bytes, and a NUL in it is `EINVAL` (Rust's `CString`). The C++ side hands
+  paths to C with `toUtf8().constData()`, which would **stop at a NUL**: a
+  `file:///tmp/q/safe.txt%00.png` would then open `safe.txt`. So a name with a
+  NUL is refused before any C call: in `DocumentList::open`, in Save As, and in
+  `App::urlFromArgument` (launch arguments). (Open was already refused by `QFileInfo`, which does not
+  find a name with a NUL; the explicit check is there so that stays true. Save As
+  and launch arguments were not, and wrote or opened `safe.txt`: the tests fail
+  without the checks there.) *Tests:* `AppTest::oddPathsOpenNothing`,
+  `argumentUrls`. A leading `-`, a newline, a tab, an
   escape, a bidi override or a 255-byte name are ordinary names to the file
   layer. They are shown safely (4). *Test:* `files_special_names_and_contents`.
 
@@ -160,7 +168,7 @@ What Notepad keeps, and where:
 
 | What | Where | Mode |
 |---|---|---|
-| Tabs, window geometry, **the text of unsaved and untitled tabs** | `$XDG_STATE_HOME/telamon-notepad/session/` (`session.json`, `texts/<uuid>.txt`), the crash counter `restoring`, `session.json.bak` | folders 0700, files 0600 |
+| Tabs, window geometry, **the text of unsaved and untitled tabs** | `$XDG_STATE_HOME/telamon-notepad/session/` (`session.json`, `texts/<uuid>.txt`), the crash counter `restoring` (opened `O_NOFOLLOW`, 0600; `restoreMarkerLivesWhileRestoring`), `session.json.bak` | folders 0700, files 0600 |
 | The lock that keeps two Notepads from sharing a session | `$XDG_STATE_HOME/telamon-notepad/session.lock` | 0600 |
 | Settings (font, switches, window size) and the **recent files** (ten paths or URLs) | `~/.config/telamon-notepadrc` | the umask's (it is in the user's own `~/.config`) |
 | KDE's recent documents (file manager, launcher) | `~/.local/share/RecentDocuments/` (`KRecentDocument`), written after the file is opened | KDE's |
@@ -286,7 +294,10 @@ print dialog to run and has no automated test).
   unhighlighted: at 10,000 the worst combination measured took 0.2 s, so one
   line at the cap costs about 0.04 s, and the highlighter's time slices read the
   clock after every line over 1,000 characters (a slice stops within one line of
-  its 8 ms budget, instead of after up to 16 lines). Lines up to 100,000
+  its 8 ms budget, instead of after up to 16 lines). A skipped line leaves the highlighter's state as it
+  came in, so a comment or string opened or closed inside such a line is not
+  seen, and the lines after it may be coloured as if it were not there (cosmetic).
+  Lines up to 100,000
   characters are still editable, plain; a document of many lines just under the
   cap is highlighted in slices from the event loop, as any large file is. The
   Markdown reader is not affected (linear, above). *Tests:*
@@ -475,15 +486,19 @@ prints the smallest input that broke the rule, and proptest keeps it in
   reads the ELF file back with `readelf` and fails the package build without
   PIE, `GNU_RELRO` with `BIND_NOW`, a non-executable stack, no RPATH, RUNPATH or
   TEXTREL, stack protectors (`__stack_chk_fail` is used), and the absence of the
-  tests' KIO hook (`Remote::setForceKio`). The build also fails if the build
+  tests' KIO hook (`Remote::setForceKio`; `%check` passes `--require-symbols`, so
+  a stripped program, whose names would hide the hook, fails instead of passing
+  unseen). `_FORTIFY_SOURCE=3`, `_GLIBCXX_ASSERTIONS`, stack clash protection and
+  `-fcf-protection` are build flags the check does **not** read back one by one;
+  `annocheck` is the independent look at them. The build also fails if the build
   tree's path is in the binary. CI tests the check itself
   (`scripts/test-check-hardening.sh`) against programs built with and without each
   protection, and `annocheck` agrees on the RPM ("Hardened: telamon-notepad:
   PASS"). *Not met:* Intel CET's IBT marking. The C++ is built with
   `-fcf-protection`, but rustc has no stable switch for it and the linker marks a
   program only if every object in it is marked, so the program carries the
-  shadow stack mark (`SHSTK`) and not `IBT`; the check reports it as a note
-  (`--require-cet` makes it an error).
+  shadow stack mark (`SHSTK`) and not `IBT`; the check reports CET as a note
+  (`--require-cet` makes it an error; the spec does not pass it).
 - **Locked and pinned.** Builds use `--locked`. The one git dependency,
   `atlas-framework`, is pinned by a 40-character commit in `Cargo.toml`;
   `ci/check-cargo.py` fails CI unless every `telamon-framework` package in

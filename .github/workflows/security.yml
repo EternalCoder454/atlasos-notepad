@@ -48,7 +48,9 @@ jobs:
           command: check advisories bans licenses sources
 
   # The same advisory database read by cargo-audit: a second opinion on the
-  # lock file, with the result as a check on the commit.
+  # lock file, with the result as a check on the commit. It may fail on
+  # Dependabot and fork pull requests, whose token is read-only (the action
+  # writes a check run); cargo-deny above covers the same advisories there.
   audit:
     name: cargo-audit
     runs-on: ubuntu-latest

@@ -5,7 +5,7 @@
 # from the finished ELF files with readelf, so a change of flags, a macro that
 # isn't expanded or a build that bypasses them fails the package build.
 #
-#   scripts/check-hardening.sh [--cxx] [--require-cet] <elf>...
+#   scripts/check-hardening.sh [--cxx] [--require-cet] [--require-symbols] <elf>...
 #
 # Every file must be
 #   - a position-independent executable (ET_DYN with an entry point), so ASLR
@@ -22,6 +22,9 @@
 # a program only when every object in it is marked, so a program with Rust code
 # in it has SHSTK (the shadow stack: Rust code is compatible) and no IBT.
 # `--require-cet` makes a missing mark an error (for a program without Rust).
+# --require-symbols (with --cxx): a program with no symbol table is an error, not
+# a note, since the check for the hook needs the names (the spec's %check uses
+# it: the program is not stripped there).
 # With --cxx (Notepad is C++ with a Rust library linked in) also
 #   - built with stack protectors (it calls __stack_chk_fail), and
 #   - without the tests' KIO hook (Remote::setForceKio, built only when
@@ -31,17 +34,19 @@ set -euo pipefail
 
 cxx=0
 require_cet=0
+require_symbols=0
 while [ $# -gt 0 ]; do
     case $1 in
         --cxx) cxx=1; shift ;;
         --require-cet) require_cet=1; shift ;;
+        --require-symbols) require_symbols=1; shift ;;
         --) shift; break ;;
-        -*) echo "usage: $0 [--cxx] [--require-cet] <elf>..." >&2; exit 2 ;;
+        -*) echo "usage: $0 [--cxx] [--require-cet] [--require-symbols] <elf>..." >&2; exit 2 ;;
         *) break ;;
     esac
 done
 if [ $# -eq 0 ]; then
-    echo "usage: $0 [--cxx] [--require-cet] <elf>..." >&2
+    echo "usage: $0 [--cxx] [--require-cet] [--require-symbols] <elf>..." >&2
     exit 2
 fi
 for tool in readelf grep; do
@@ -105,7 +110,12 @@ for f in "$@"; do
         if LC_ALL=C grep -aq 'setForceKio' "$f"; then
             bad "$f" "holds the tests' KIO hook (Remote::setForceKio)"
         elif ! readelf -SW "$f" 2>/dev/null | grep -q ' \.symtab '; then
-            echo "check-hardening: note: $f is stripped, so the absence of the tests' KIO hook cannot be told" >&2
+            # Stripped: the hook's name is gone, so its absence proves nothing.
+            if [ "$require_symbols" = 1 ]; then
+                bad "$f" "stripped, so the absence of the tests' KIO hook cannot be told (--require-symbols)"
+            else
+                echo "check-hardening: note: $f is stripped, so the absence of the tests' KIO hook cannot be told" >&2
+            fi
         fi
     fi
 done
