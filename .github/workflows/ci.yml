@@ -344,7 +344,7 @@ jobs:
       # A path in the workspace: runner.temp is the host's path, not the
       # container's. Removed after the install, so the RPM's source tarball
       # doesn't take it in.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         with:
           name: framework-rpms
@@ -415,7 +415,7 @@ jobs:
       # A path in the workspace: runner.temp is the host's path, not the
       # container's. Removed after the install, so the RPM's source tarball
       # doesn't take it in.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         with:
           name: framework-rpms
@@ -530,7 +530,7 @@ jobs:
       # A path in the workspace: runner.temp is the host's path, not the
       # container's. Removed after the install, so the RPM's source tarball
       # doesn't take it in.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ !(needs.publish.outputs.image || needs.plan.outputs.image) }}
         with:
           name: framework-rpms
